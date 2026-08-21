@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube-transcript opschonen</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: .25rem; }
+    p.intro { color: #555; }
+    a.terug { color: #555; font-size: .9rem; }
+    ol.uitleg { color: #444; font-size: .95rem; line-height: 1.5; background: #f6f6f6;
+      border: 1px solid #e2e2e2; border-radius: 6px; padding: .75rem 1rem .75rem 2.1rem; }
+    label { display: block; font-weight: 600; margin: 1.25rem 0 .35rem; }
+    textarea { width: 100%; box-sizing: border-box; min-height: 9rem; padding: .6rem;
+      font-size: 1rem; font-family: inherit; border: 1px solid #bbb; border-radius: 6px; resize: vertical; }
+    .knoppen { margin-top: 1rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+    button { font-size: 1rem; padding: .55rem 1rem; border: 0; border-radius: 6px; cursor: pointer; }
+    button.primair { background: #cc0000; color: #fff; }
+    button.kopieer { background: #eee; color: #222; }
+    #status { margin-top: 1rem; min-height: 1.2em; }
+    #status.fout { color: #b00020; }
+    #status.ok { color: #0a7d28; }
+    #preview { display: none; margin-top: 1rem; white-space: pre-wrap; word-break: break-word;
+      background: #f6f6f6; border: 1px solid #ddd; border-radius: 6px; padding: .75rem;
+      color: #333; font-size: .95rem; max-height: 16rem; overflow: auto; }
+  </style>
+</head>
+<body>
+  <a class="terug" href="index.html">&larr; Terug naar overzicht</a>
+  <h1>YouTube-transcript opschonen</h1>
+  <p class="intro">Plak hieronder het transcript van een YouTube-video. Deze tool haalt de tijdcodes eruit en maakt er doorlopende platte tekst van, klaar om te kopi&euml;ren en in Claude te plakken voor een samenvatting.</p>
+
+  <ol class="uitleg">
+    <li>Open de video op YouTube en klik onder de video op <strong>&hellip;meer</strong> of de knop <strong>&ldquo;Transcript weergeven&rdquo;</strong>.</li>
+    <li>Selecteer de transcripttekst in het paneel en kopieer die (Ctrl/Cmd + C).</li>
+    <li>Plak de tekst hieronder en klik op <strong>&ldquo;Maak platte tekst&rdquo;</strong>.</li>
+  </ol>
+
+  <label for="invoer">Geplakt transcript</label>
+  <textarea id="invoer" placeholder="0:00 We're no strangers to love&#10;0:03 You know the rules and so do I&#10;..."></textarea>
+
+  <div class="knoppen">
+    <button id="verwerk" class="primair" type="button">Maak platte tekst</button>
+    <button id="kopieer" class="kopieer" type="button" style="display:none">Kopieer transcript</button>
+  </div>
+
+  <div id="status" role="status" aria-live="polite"></div>
+  <div id="preview" aria-label="Voorbeeld van de opgeschoonde tekst"></div>
+
+  <script>
+  /*
+   * YouTube-transcript tooltje — plak-variant, volledig client-side (geen server,
+   * geen externe dienst, geen netwerkverkeer). Beslissing C (21-08-2026): YouTube
+   * blokkeert gratis client-side ophalen uit een URL, dus de gebruiker plakt het
+   * transcript zelf en deze tool schoont het alleen op.
+   *
+   * Opschonen: per regel wordt een tijdcode aan het begin weggehaald (vormen als
+   * 0:00, 1:23, 12:34 en 1:02:03). Regels die daarna leeg zijn (losse tijdcodes)
+   * vervallen; de overige tekst wordt tot doorlopende platte tekst samengevoegd.
+   * Zo werken zowel "tijdcode op eigen regel" als "tijdcode + tekst op één regel".
+   */
+
+  // Tijdcode aan het begin van een regel: mm:ss of h:mm:ss (1 of 2 cijfers voor de eerste groep).
+  const LEIDENDE_TIJDCODE = /^\s*\d{1,2}:\d{2}(?::\d{2})?\s*/;
+
+  function schoonOp(ruw) {
+    if (!ruw) return "";
+    const regels = ruw.replace(/\r\n?/g, "\n").split("\n");
+    const delen = [];
+    for (let regel of regels) {
+      let t = regel.replace(LEIDENDE_TIJDCODE, "").trim();
+      if (!t) continue;                 // lege regel of losse tijdcode
+      if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(t)) continue; // veiligheidsnet: puur tijdcode
+      delen.push(t);
+    }
+    return delen.join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  const $invoer = document.getElementById("invoer");
+  const $verwerk = document.getElementById("verwerk");
+  const $kopieer = document.getElementById("kopieer");
+  const $status = document.getElementById("status");
+  const $preview = document.getElementById("preview");
+
+  let schoneTekst = "";
+
+  function toonStatus(tekst, soort) {
+    $status.textContent = tekst;
+    $status.className = soort || "";
+  }
+
+  function verwerk() {
+    schoneTekst = "";
+    $preview.style.display = "none";
+    $kopieer.style.display = "none";
+
+    const ruw = $invoer.value;
+    if (!ruw || !ruw.trim()) {
+      toonStatus("Plak eerst het gekopieerde transcript in het veld hierboven.", "fout");
+      return;
+    }
+
+    const tekst = schoonOp(ruw);
+    if (!tekst) {
+      toonStatus("Geen bruikbare tekst gevonden. Controleer of je de transcripttekst (en niet alleen tijdcodes) hebt geplakt.", "fout");
+      return;
+    }
+
+    schoneTekst = tekst;
+    $preview.textContent = tekst.slice(0, 500) + (tekst.length > 500 ? "…" : "");
+    $preview.style.display = "block";
+    $kopieer.style.display = "";
+    toonStatus("Klaar — " + tekst.length + " tekens. Klik op “Kopieer transcript”.", "ok");
+  }
+
+  async function kopieer() {
+    if (!schoneTekst) return;
+    try {
+      await navigator.clipboard.writeText(schoneTekst);
+      toonStatus("Gekopieerd!", "ok");
+    } catch (e) {
+      // Terugvaloptie voor browsers zonder clipboard-API of zonder toestemming.
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = schoneTekst;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        toonStatus("Gekopieerd!", "ok");
+      } catch (e2) {
+        toonStatus("Kopiëren lukte niet. Selecteer de tekst in het voorbeeld en kopieer handmatig.", "fout");
+      }
+    }
+  }
+
+  $verwerk.addEventListener("click", verwerk);
+  $kopieer.addEventListener("click", kopieer);
+  </script>
+</body>
+</html>
