@@ -8,4 +8,4 @@ compatibility_date = "2026-08-21"
 [[d1_databases]]
 binding = "DB"
 database_name = "ai-ready-leads"
-database_id = "VUL-IN-NA-WRANGLER-D1-CREATE"
+database_id = "80dc5e32-a0cd-4354-ae0a-4b13ae48698e"
