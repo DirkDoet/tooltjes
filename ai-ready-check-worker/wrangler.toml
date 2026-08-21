@@ -1,0 +1,11 @@
+name = "ai-ready-check-worker"
+main = "src/index.js"
+compatibility_date = "2026-08-21"
+
+# D1-database voor het opslaan van leads (url + tijd + score).
+# Maak de database met:  wrangler d1 create ai-ready-leads
+# en plak het teruggegeven database_id hieronder in.
+[[d1_databases]]
+binding = "DB"
+database_name = "ai-ready-leads"
+database_id = "VUL-IN-NA-WRANGLER-D1-CREATE"
