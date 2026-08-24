@@ -106,6 +106,12 @@ export function parseRobots(txt) {
   return groups;
 }
 
+// llms.txt geldt als aanwezig zodra één van de opgehaalde locaties (root of
+// /.well-known/) 200 OK gaf met niet-lege tekst.
+export function llmsAanwezig(...resultaten) {
+  return resultaten.some((r) => r && r.ok && !!(r.text || "").trim());
+}
+
 export function botIsBlocked(groups, bot) {
   const b = bot.toLowerCase();
   const specific = groups.filter((g) => g.agents.includes(b));
@@ -160,7 +166,7 @@ export function analyze(html, ctx) {
         ? "AI-crawlers worden niet geblokkeerd."
         : `robots.txt blokkeert: ${blockedBots.join(", ")}. Haal de Disallow: / voor deze bots weg zodat AI-zoekmachines je site mogen lezen.`),
     chk("llms_txt", "llms.txt aanwezig", !!ctx.llmsPresent,
-      "Voeg een /llms.txt toe met een korte, platte-tekst samenvatting van je site voor AI-modellen."),
+      "Voeg een /llms.txt (of /.well-known/llms.txt) toe met een korte, platte-tekst samenvatting van je site voor AI-modellen."),
     chk("sitemap", "Sitemap aanwezig", !!ctx.sitemapPresent,
       "Publiceer een /sitemap.xml (of verwijs ernaar in robots.txt) zodat crawlers al je pagina's vinden."),
     chk("title", "Paginatitel gevuld", titleOk,
@@ -285,16 +291,18 @@ export default {
       origin = new URL(target).origin;
     }
 
-    // Aanvullende bestanden best-effort ophalen (afwezig ≠ fout).
-    const [robots, llms, sitemap] = await Promise.all([
+    // Aanvullende bestanden best-effort ophalen (afwezig ≠ fout). llms.txt mag
+    // op de root of op de erkende /.well-known/-locatie staan.
+    const [robots, llms, llmsWellKnown, sitemap] = await Promise.all([
       safeFetch(origin + "/robots.txt"),
       safeFetch(origin + "/llms.txt"),
+      safeFetch(origin + "/.well-known/llms.txt"),
       safeFetch(origin + "/sitemap.xml"),
     ]);
 
     const robotsTxt = robots.ok ? robots.text : "";
     const sitemapPresent = sitemap.ok || /(^|\n)\s*sitemap\s*:/i.test(robotsTxt);
-    const llmsPresent = llms.ok && !!llms.text.trim();
+    const llmsPresent = llmsAanwezig(llms, llmsWellKnown);
 
     const categories = analyze(main.text, {
       robotsTxt,
