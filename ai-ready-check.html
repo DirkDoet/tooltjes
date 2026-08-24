@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI-ready check</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 44rem; margin: 4rem auto; padding: 0 1rem; color: #222; }
+    a.terug { color: #555; font-size: .9rem; }
+    h1 { margin-bottom: .25rem; }
+    p.intro { color: #555; }
+    label { display: block; font-weight: 600; margin: 1.25rem 0 .35rem; }
+    .rij { display: flex; gap: .5rem; flex-wrap: wrap; }
+    input[type="url"] { flex: 1 1 16rem; box-sizing: border-box; padding: .55rem .6rem; font-size: 1rem;
+      border: 1px solid #bbb; border-radius: 6px; }
+    button { font-size: 1rem; padding: .55rem 1.1rem; border: 0; border-radius: 6px; cursor: pointer;
+      background: #cc0000; color: #fff; }
+    button:disabled { opacity: .5; cursor: default; }
+    #status { margin-top: 1rem; min-height: 1.2em; }
+    #status.laden { color: #555; }
+    #status.fout { color: #b00020; }
+
+    #rapport { display: none; margin-top: 1.5rem; }
+    .totaal { display: flex; align-items: center; gap: 1rem; padding: 1rem 1.25rem;
+      border: 1px solid #e2e2e2; border-radius: 10px; background: #fafafa; }
+    .totaal .cijfer { font-size: 2.6rem; font-weight: 700; line-height: 1; }
+    .totaal .op { color: #777; font-size: 1rem; font-weight: 400; }
+    .totaal .uitleg { color: #555; font-size: .95rem; }
+    .checked-url { word-break: break-all; font-size: .85rem; color: #777; margin: .5rem 0 0; }
+
+    .cat { margin-top: 1.25rem; border: 1px solid #e6e6e6; border-radius: 10px; overflow: hidden; }
+    .cat-kop { display: flex; justify-content: space-between; align-items: center; gap: .75rem;
+      padding: .7rem 1rem; background: #f4f4f4; }
+    .cat-kop h2 { font-size: 1.05rem; margin: 0; }
+    .cat-score { font-weight: 700; font-size: 1.1rem; white-space: nowrap; }
+    ul.checks { list-style: none; margin: 0; padding: .25rem 0; }
+    ul.checks li { padding: .55rem 1rem; border-top: 1px solid #f0f0f0; }
+    ul.checks li:first-child { border-top: 0; }
+    .check-titel { display: flex; align-items: baseline; gap: .5rem; }
+    .icoon { font-weight: 700; }
+    .ok .icoon { color: #0a7d28; }
+    .nee .icoon { color: #b00020; }
+    .tip { margin: .3rem 0 0 1.6rem; color: #555; font-size: .9rem; }
+
+    .balk { height: 8px; border-radius: 4px; background: #e5e5e5; overflow: hidden; margin-top: .6rem; }
+    .balk > span { display: block; height: 100%; }
+  </style>
+</head>
+<body>
+  <a class="terug" href="index.html">&larr; Terug naar overzicht</a>
+  <h1>AI-ready check</h1>
+  <p class="intro">Hoe goed is jouw website voorbereid op AI-zoekmachines en -assistenten? Vul je adres in en je krijgt een score met concrete verbeterpunten.</p>
+
+  <label for="url">Website-URL</label>
+  <div class="rij">
+    <input id="url" type="url" placeholder="https://jouwwebsite.nl" autocomplete="off" spellcheck="false">
+    <button id="check" type="button">Check mijn website</button>
+  </div>
+
+  <div id="status" role="status" aria-live="polite"></div>
+
+  <div id="rapport">
+    <div class="totaal">
+      <div><span id="totaalCijfer" class="cijfer">0</span><span class="op"> / 100</span></div>
+      <div class="uitleg" id="totaalUitleg"></div>
+    </div>
+    <p class="checked-url" id="checkedUrl"></p>
+    <div id="categorieen"></div>
+  </div>
+
+  <script>
+  /*
+   * Frontend voor de AI-ready check (DIR-10). Roept de Worker uit DIR-9 aan en
+   * toont het rapport. Geen eigen site-fetch en geen scoreberekening hier — dat
+   * doet de Worker; deze pagina toont alleen wat er uit de JSON komt.
+   *
+   * Worker-URL: pas hieronder één regel aan als de Worker verhuist.
+   */
+  const WORKER_URL = "https://ai-ready-check-worker.antonenmonique.workers.dev";
+
+  // Nette NL-labels + volgorde voor de vier categorieën uit het JSON-contract.
+  const CATEGORIEEN = [
+    ["vindbaarheid", "Vindbaarheid"],
+    ["data", "Gestructureerde data"],
+    ["agent", "Agent-bruikbaarheid"],
+    ["techniek", "Snelheid & techniek"],
+  ];
+
+  const $url = document.getElementById("url");
+  const $check = document.getElementById("check");
+  const $status = document.getElementById("status");
+  const $rapport = document.getElementById("rapport");
+  const $totaalCijfer = document.getElementById("totaalCijfer");
+  const $totaalUitleg = document.getElementById("totaalUitleg");
+  const $checkedUrl = document.getElementById("checkedUrl");
+  const $categorieen = document.getElementById("categorieen");
+
+  function kleurVoor(score) {
+    if (score >= 80) return "#0a7d28";   // groen
+    if (score >= 50) return "#c77700";   // oranje
+    return "#b00020";                    // rood
+  }
+
+  function totaalTekst(score) {
+    if (score >= 80) return "Sterk — je site is goed vindbaar en bruikbaar voor AI.";
+    if (score >= 50) return "Redelijk — er is nog winst te halen. Bekijk de tips hieronder.";
+    return "Zwak — AI-zoekmachines hebben moeite met je site. Begin met de tips hieronder.";
+  }
+
+  function escape(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
+
+  function toonStatus(tekst, soort) {
+    $status.textContent = tekst;
+    $status.className = soort || "";
+  }
+
+  function renderRapport(data) {
+    $totaalCijfer.textContent = data.totalScore;
+    $totaalCijfer.style.color = kleurVoor(data.totalScore);
+    $totaalUitleg.textContent = totaalTekst(data.totalScore);
+    $checkedUrl.textContent = "Gecheckt: " + data.url;
+
+    $categorieen.innerHTML = "";
+    for (const [sleutel, label] of CATEGORIEEN) {
+      const cat = data.categories && data.categories[sleutel];
+      if (!cat) continue;
+      const kleur = kleurVoor(cat.score);
+
+      const checksHtml = (cat.checks || []).map((c) => {
+        const klasse = c.passed ? "ok" : "nee";
+        const icoon = c.passed ? "✓" : "✗";
+        const tip = (!c.passed && c.tip) ? `<div class="tip">${escape(c.tip)}</div>` : "";
+        return `<li class="${klasse}"><div class="check-titel"><span class="icoon">${icoon}</span><span>${escape(c.label)}</span></div>${tip}</li>`;
+      }).join("");
+
+      const el = document.createElement("div");
+      el.className = "cat";
+      el.innerHTML =
+        `<div class="cat-kop"><h2>${escape(label)}</h2><span class="cat-score" style="color:${kleur}">${cat.score}/100</span></div>` +
+        `<div class="balk"><span style="width:${cat.score}%;background:${kleur}"></span></div>` +
+        `<ul class="checks">${checksHtml}</ul>`;
+      $categorieen.appendChild(el);
+    }
+
+    $rapport.style.display = "block";
+  }
+
+  async function check() {
+    $rapport.style.display = "none";
+    const url = $url.value.trim();
+    if (!url) {
+      toonStatus("Vul eerst je website-URL in.", "fout");
+      return;
+    }
+
+    $check.disabled = true;
+    toonStatus("Bezig met controleren… dit kan even duren.", "laden");
+
+    try {
+      const resp = await fetch(WORKER_URL + "/?url=" + encodeURIComponent(url));
+      let data;
+      try {
+        data = await resp.json();
+      } catch (e) {
+        toonStatus("Er ging iets mis bij het lezen van het resultaat. Probeer het later opnieuw.", "fout");
+        return;
+      }
+
+      if (data && data.error) {
+        toonStatus(data.error, "fout");
+        return;
+      }
+      if (!data || typeof data.totalScore !== "number" || !data.categories) {
+        toonStatus("Onverwacht antwoord van de server. Probeer het later opnieuw.", "fout");
+        return;
+      }
+
+      toonStatus("", "");
+      renderRapport(data);
+    } catch (e) {
+      toonStatus("Kon de check-service niet bereiken. Controleer je internetverbinding en probeer het opnieuw.", "fout");
+    } finally {
+      $check.disabled = false;
+    }
+  }
+
+  $check.addEventListener("click", check);
+  $url.addEventListener("keydown", (e) => { if (e.key === "Enter") check(); });
+  </script>
+</body>
+</html>
