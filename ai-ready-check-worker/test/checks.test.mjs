@@ -5,6 +5,7 @@ import {
   parseRobots,
   botIsBlocked,
   checkFormLabels,
+  llmsAanwezig,
   analyze,
 } from "../src/index.js";
 
@@ -35,6 +36,29 @@ test("robots: specifieke Allow-groep wint van wildcard", () => {
   const g = parseRobots("User-agent: *\nDisallow: /\n\nUser-agent: GPTBot\nDisallow:");
   assert.equal(botIsBlocked(g, "GPTBot"), false); // eigen groep, geen Disallow: /
   assert.equal(botIsBlocked(g, "CCBot"), true);   // valt onder wildcard
+});
+
+test("llmsAanwezig: root of well-known telt, leeg/afwezig niet", () => {
+  const root = { ok: true, text: "# Mijn site" };
+  const wk = { ok: true, text: "# Via well-known" };
+  const leeg = { ok: true, text: "   " };
+  const afwezig = { ok: false, text: "" };
+  assert.equal(llmsAanwezig(root, afwezig), true);   // alleen root
+  assert.equal(llmsAanwezig(afwezig, wk), true);      // alleen well-known (nieuw)
+  assert.equal(llmsAanwezig(root, wk), true);         // beide
+  assert.equal(llmsAanwezig(afwezig, afwezig), false); // geen van beide
+  assert.equal(llmsAanwezig(leeg, afwezig), false);   // aanwezig maar leeg telt niet
+});
+
+test("llms_txt fix-tip noemt beide locaties", () => {
+  const cats = analyze("<html><head></head><body>x</body></html>", {
+    robotsTxt: "", llmsPresent: false, sitemapPresent: false,
+    isHttps: true, responseMs: 100, contentEncoding: "",
+  });
+  const c = cats.vindbaarheid.checks.find((x) => x.id === "llms_txt");
+  assert.equal(c.passed, false);
+  assert.match(c.tip, /\/llms\.txt/);
+  assert.match(c.tip, /\.well-known\/llms\.txt/);
 });
 
 test("checkFormLabels: geen velden = geslaagd", () => {
