@@ -1,4 +1,4 @@
-name = "dirk-digitaal"
+name = "dirkdigitaal"
 main = "src/index.js"
 compatibility_date = "2026-08-25"
 
@@ -9,7 +9,7 @@ class_name = "SessionDO"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["SessionDO"]
+new_sqlite_classes = ["SessionDO"]
 
 # Secrets (NIET hier invullen — via `wrangler secret put`):
 #   wrangler secret put GOOGLE_CLIENT_ID
