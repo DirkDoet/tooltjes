@@ -390,93 +390,45 @@ const OFFICE_HTML = `<!doctype html>
 <html lang="nl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dirk Digitaal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
 <style>
   :root{ --navy:#2b2b33; --panel:#3E3E3E; --teal:#015092; --teal2:#2f7fbf;
     --cream:#f4f0e6; --ink:#171717; --accent:#F18E02; --shadow:#000;
     --baksteen:#8a3b2e; --voeg:#5f2a20; --mosterd:#d9a441; --plant:#3c7d3c;
     --hond:#e0b566; --honddonker:#b98a3e; }
   *{ box-sizing:border-box; }
-  body{ margin:0; background:var(--navy); color:var(--cream);
-    font-family:"Courier New",ui-monospace,monospace; image-rendering:pixelated;
-    -webkit-font-smoothing:none; }
-  .wrap{ max-width:60rem; margin:0 auto; padding:1rem; }
-  h1.titel{ text-align:center; letter-spacing:2px; margin:.6rem 0 1rem;
-    font-size:2rem; text-transform:uppercase; color:var(--cream);
-    text-shadow:3px 3px 0 var(--accent); }
-  .titel small{ display:block; font-size:.7rem; letter-spacing:1px; color:#c9c6bd; margin-top:.3rem; text-shadow:none; }
-  /* ---- isometrisch kantoor (schuin van boven) ---- */
-  .stage{ display:flex; justify-content:center; overflow:hidden; padding:.3rem 0 0; }
-  .kamer{ position:relative; width:520px; height:400px; }
-  .iso{ position:absolute; left:70px; top:24px; width:340px; height:340px;
-    transform-style:preserve-3d; transform:rotateX(55deg) rotateZ(-45deg); }
-  .vloer{ position:absolute; inset:0; background:#7a7a7a; border:3px solid var(--ink);
-    background-image:repeating-linear-gradient(0deg,#00000016 0 2px,#0000 2px 46px),
-      repeating-linear-gradient(90deg,#00000016 0 2px,#0000 2px 46px); }
-  .wand{ position:absolute; box-sizing:border-box; border:3px solid var(--ink); color:var(--cream);
-    background:var(--baksteen);
-    background-image:repeating-linear-gradient(0deg,var(--voeg) 0 2px,#0000 2px 24px),
-      repeating-linear-gradient(90deg,var(--voeg) 0 2px,#0000 2px 52px); }
-  .wand-l{ left:0; top:0; width:340px; height:130px; transform-origin:top; transform:rotateX(-90deg); padding:.5rem; }
-  .wand-r{ left:0; top:0; width:130px; height:340px; transform-origin:left; transform:rotateY(-90deg); }
-  .lampen{ display:flex; justify-content:space-around; }
-  .lamp{ width:5px; height:15px; background:#111; position:relative; margin-top:-.4rem; }
-  .lamp::after{ content:""; position:absolute; left:-6px; top:13px; width:16px; height:12px;
-    background:var(--mosterd); border:2px solid #111; }
-  .graffiti{ font-weight:bold; letter-spacing:1px; font-size:.6rem; line-height:1.4;
-    color:var(--mosterd); text-shadow:1px 1px 0 #000; text-align:center; margin-top:.2rem; }
-  .graffiti .b{ color:var(--teal2); } .graffiti .o{ color:var(--accent); }
-  .hexwand{ display:flex; gap:3px; justify-content:center; margin-top:.25rem; }
-  .hex{ width:15px; height:17px; background:var(--panel);
-    clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%); }
-  .hex.o{ background:var(--accent); } .hex.b{ background:var(--teal); }
-  .plant-muur{ position:absolute; right:6px; bottom:6px; font-size:1.1rem; }
-
-  /* objecten staan rechtop op de iso-vloer (billboards die de camera in kijken) */
-  .op{ position:absolute; transform:rotateZ(45deg) rotateX(-55deg); transform-origin:bottom center; }
-  .desk{ width:94px; background:#1c1c1c; border:3px solid var(--ink); box-shadow:3px 3px 0 var(--shadow);
-    padding:.5rem; text-align:center; position:relative; display:flex; flex-direction:column; align-items:center; }
-  .monitor{ width:52px; height:40px; background:#0b0b0b; border:3px solid #000; border-radius:3px;
-    display:flex; align-items:center; justify-content:center; margin-bottom:.35rem; }
-  .screen{ width:36px; height:24px; background:#0a2f52; box-shadow:inset 0 0 0 2px #04203a; }
-  .desk.leeg{ opacity:.72; }
-  .desk.agent{ cursor:pointer; }
-  .desk.agent .screen{ background:var(--accent); animation:blink 1.6s steps(2,end) infinite; }
-  @keyframes blink{ 50%{ background:#a86400; } }
-  .desk.agent:hover, .desk.agent:focus{ outline:none; box-shadow:5px 5px 0 var(--accent); }
-  .sprite{ font-size:1.3rem; line-height:1; margin-bottom:.25rem; }
-  .plate{ background:var(--ink); color:var(--cream); font-size:.6rem; letter-spacing:1px;
-    padding:.2rem .4rem; border:2px solid #000; width:100%; }
-  .badge{ position:absolute; top:.25rem; right:.25rem; font-size:.5rem; background:var(--accent);
-    color:#111; padding:.05rem .3rem; border:2px solid var(--ink); }
-  .bank2{ width:70px; height:22px; background:var(--mosterd); border:2px solid var(--ink);
-    box-shadow:inset 0 6px 0 #00000022; }
-  .prop{ font-size:1.5rem; }
-
-  /* hondenmand plat op de vloer + de kantoorhond als billboard */
-  .mand{ position:absolute; width:46px; height:30px; background:var(--honddonker);
-    border:2px solid var(--ink); border-radius:4px; }
-  .hond{ position:absolute; width:34px; height:22px; z-index:5;
-    transform:rotateZ(45deg) rotateX(-55deg); transform-origin:bottom center;
-    transition:left 2.6s linear, top 2.6s linear; }
-  .hond.links{ transform:rotateZ(45deg) rotateX(-55deg) scaleX(-1); }
-  .hond .lijf{ position:absolute; bottom:4px; left:4px; width:24px; height:11px; background:var(--hond); border:2px solid var(--ink); }
-  .hond .kop{ position:absolute; bottom:6px; left:24px; width:11px; height:11px; background:var(--hond); border:2px solid var(--ink); }
-  .hond .oor{ position:absolute; bottom:13px; left:26px; width:5px; height:6px; background:var(--honddonker); border:2px solid var(--ink); }
-  .hond .staart{ position:absolute; bottom:9px; left:0; width:7px; height:4px; background:var(--hond); border:2px solid var(--ink); }
-  .hond .poot{ position:absolute; bottom:0; width:4px; height:6px; background:var(--honddonker); border:2px solid var(--ink); }
-  .hond .p1{ left:6px; } .hond .p2{ left:20px; }
-  .hond.loopt .lijf{ animation:hondbob .4s steps(2,end) infinite; }
-  @keyframes hondbob{ 50%{ transform:translateY(-2px); } }
-  .hond.ligt .poot, .hond.ligt .staart{ display:none; }
-  .hond.ligt .lijf{ height:8px; }
-  @media (prefers-reduced-motion: reduce){
-    .hond{ transition:none; }
-    .hond.loopt .lijf{ animation:none; }
-    .desk.agent .screen{ animation:none; }
-  }
-  .ondertitel{ text-align:center; font-size:.7rem; letter-spacing:2px; color:var(--mosterd);
-    padding:.4rem; background:var(--ink); text-transform:uppercase; }
-  .hint{ text-align:center; font-size:.75rem; color:#c9c6bd; margin-top:.6rem; }
+  body{ margin:0; background:#0e1116; color:#e8e2d8; image-rendering:pixelated;
+    font-family:'VT323',monospace; -webkit-font-smoothing:none; }
+  .scene-host{ min-height:100vh; display:flex; align-items:center; justify-content:center;
+    overflow:hidden; background:radial-gradient(120% 90% at 50% 20%,#1a2129 0%,#0e1116 70%); }
+  /* ---- kantoor-scène (blauwdruk DIR-21, front-cutaway) ---- */
+  @keyframes dd-blink{0%,60%{opacity:1}61%,100%{opacity:.25}}
+  @keyframes dd-bulb{0%,100%{opacity:.9}50%{opacity:.6}}
+  @keyframes dd-cta{0%,100%{opacity:1}50%{opacity:.55}}
+  @keyframes dd-legA{0%,49%{transform:translateY(0)}50%,100%{transform:translateY(-2px)}}
+  @keyframes dd-legB{0%,49%{transform:translateY(-2px)}50%,100%{transform:translateY(0)}}
+  @keyframes dd-tail{0%,100%{transform:rotate(-8deg)}50%{transform:rotate(10deg)}}
+  @keyframes dd-dogwalk{0%{left:6%;transform:scaleX(1)}34%{left:64%;transform:scaleX(1)}40%{left:66%;transform:scaleX(1)}46%{left:66%;transform:scaleX(-1)}52%{left:66%;transform:scaleX(-1)}86%{left:6%;transform:scaleX(-1)}92%{left:6%;transform:scaleX(1)}100%{left:6%;transform:scaleX(1)}}
+  @keyframes dd-modal-in{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
+  .scene-wrap{ position:relative; width:min(100vw,177.78vh); aspect-ratio:16/9; max-height:100vh; }
+  #agent-desk{ cursor:pointer; transition:filter .12s; }
+  #agent-desk:hover, #agent-desk:focus{ outline:none;
+    filter:drop-shadow(0 0 6px #F18E02) drop-shadow(0 0 14px rgba(241,142,2,.6)); }
+  .dog{ position:absolute; bottom:6%; left:6%; width:9%; pointer-events:none;
+    animation:dd-dogwalk 26s ease-in-out infinite; }
+  /* chat-portret naast de chat (AC-2) */
+  .chatrow{ display:flex; flex:1; min-height:0; }
+  .chatmain{ flex:1; display:flex; flex-direction:column; min-width:0; }
+  .portret{ flex:0 0 84px; display:flex; flex-direction:column; align-items:center; padding:.6rem;
+    background:#14202b; border-right:3px solid var(--ink); }
+  .portret .avatar{ width:72px; height:72px; background:#0b1219; border:2px solid var(--accent);
+    display:flex; align-items:center; justify-content:center; font-size:2.2rem; }
+  .portret .pnaam{ margin-top:.4rem; font-size:.85rem; letter-spacing:1px; color:#3fd06a; }
+  @media (prefers-reduced-motion: reduce){ .scene-wrap *{ animation:none !important; } }
+  @media (max-width:640px){ .portret{ flex-basis:60px; }
+    .portret .avatar{ width:48px; height:48px; font-size:1.5rem; } }
 
   /* chat */
   .overlay{ display:none; position:fixed; inset:0; background:#0a0b1299;
@@ -521,55 +473,218 @@ const OFFICE_HTML = `<!doctype html>
     .stage{ height:280px; } h1.titel{ font-size:1.5rem; } }
 </style>
 </head><body>
-<div class="wrap">
-  <h1 class="titel">Dirk Digitaal<small>Verwarrend duidelijk</small></h1>
-  <div class="office" role="group" aria-label="Kantoor">
-    <div class="stage">
-      <div class="kamer">
-        <div class="iso">
-          <div class="vloer"></div>
-          <div class="wand wand-l">
-            <div class="lampen" aria-hidden="true"><span class="lamp"></span><span class="lamp"></span><span class="lamp"></span></div>
-            <div class="graffiti"><span class="o">CREATIVITY NEVER DIES</span><br><span class="b">DREAM BIG</span> &middot; <span class="o">NO PAIN NO GAIN</span></div>
-            <div class="hexwand" aria-hidden="true"><span class="hex o"></span><span class="hex"></span><span class="hex b"></span><span class="hex"></span><span class="hex o"></span></div>
-          </div>
-          <div class="wand wand-r"><div class="plant-muur" aria-hidden="true">&#127807;</div></div>
-          <div class="mand" style="left:246px;top:250px" aria-hidden="true"></div>
-          <div class="op prop" style="left:250px;top:40px" aria-hidden="true">&#127793;</div>
-          <div class="op" style="left:40px;top:250px" aria-hidden="true"><div class="bank2"></div></div>
-          <div class="op desk agent" id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent" style="left:18px;top:20px">
-            <span class="badge">online</span>
-            <div class="sprite">&#129302;</div>
-            <div class="monitor"><div class="screen"></div></div>
-            <div class="plate">GSC-agent</div>
-          </div>
-          <div class="op desk leeg" style="left:196px;top:14px"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
-          <div class="op desk leeg" style="left:16px;top:150px"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
-          <div class="op desk leeg" style="left:196px;top:150px"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
-          <div class="hond" id="hond" style="left:120px;top:150px"><span class="staart"></span><span class="lijf"></span><span class="poot p1"></span><span class="poot p2"></span><span class="kop"></span><span class="oor"></span></div>
-        </div>
-      </div>
+<div class="scene-host">
+  <div class="scene-wrap">
+    <svg viewBox="0 0 640 360" width="100%" height="100%" shape-rendering="crispEdges" style="display:block;position:absolute;inset:0;image-rendering:pixelated;">
+      <defs>
+        <pattern id="brick" width="32" height="16" patternUnits="userSpaceOnUse">
+          <rect width="32" height="16" fill="#6d271c"/>
+          <rect width="32" height="1" y="0" fill="#3f130d"/>
+          <rect width="1" height="8" x="0" y="0" fill="#3f130d"/>
+          <rect width="1" height="8" x="16" y="8" fill="#3f130d"/>
+          <rect width="32" height="1" y="8" fill="#3f130d"/>
+          <rect width="30" height="6" x="1" y="1" fill="#7d3125"/>
+          <rect width="14" height="6" x="1" y="9" fill="#7d3125"/>
+          <rect width="14" height="6" x="17" y="9" fill="#7d3125"/>
+        </pattern>
+        <symbol id="deskEmpty" viewBox="0 0 100 80">
+          <rect x="46" y="30" width="8" height="12" fill="#0c0c0c"/>
+          <rect x="40" y="42" width="20" height="4" fill="#0c0c0c"/>
+          <rect x="30" y="6" width="40" height="26" fill="#0a0a0a"/>
+          <rect x="34" y="10" width="32" height="18" fill="#14202b"/>
+          <rect x="37" y="13" width="12" height="2" fill="#22384a"/>
+          <rect x="37" y="18" width="20" height="2" fill="#1d2f3e"/>
+          <rect x="37" y="23" width="8" height="2" fill="#1d2f3e"/>
+          <rect x="8" y="46" width="84" height="8" fill="#2b2b2b"/>
+          <rect x="8" y="54" width="84" height="22" fill="#141414"/>
+          <rect x="14" y="54" width="4" height="22" fill="#0c0c0c"/>
+          <rect x="82" y="54" width="4" height="22" fill="#0c0c0c"/>
+          <rect x="36" y="48" width="28" height="4" fill="#333"/>
+        </symbol>
+        <symbol id="plant" viewBox="0 0 40 60">
+          <rect x="10" y="40" width="20" height="18" fill="#8a4a2b"/>
+          <rect x="10" y="40" width="20" height="4" fill="#a85c37"/>
+          <rect x="12" y="18" width="6" height="24" fill="#2f7d3a"/>
+          <rect x="22" y="14" width="6" height="28" fill="#2f7d3a"/>
+          <rect x="17" y="10" width="6" height="32" fill="#3c9c49"/>
+          <rect x="6" y="24" width="6" height="16" fill="#256b30"/>
+          <rect x="28" y="22" width="6" height="18" fill="#256b30"/>
+          <rect x="14" y="6" width="4" height="10" fill="#3c9c49"/>
+          <rect x="24" y="4" width="4" height="12" fill="#3c9c49"/>
+        </symbol>
+        <symbol id="hex" viewBox="0 0 40 36">
+          <polygon points="10,2 30,2 38,18 30,34 10,34 2,18" fill="#1c242c" stroke="#F18E02" stroke-width="1"/>
+        </symbol>
+      </defs>
+      <polygon points="0,0 640,0 544,48 96,48" fill="#171b20"/>
+      <polygon points="0,0 96,48 96,50 0,4" fill="#0f1216"/>
+      <polygon points="0,4 96,48 96,240 0,360" fill="#3a2a22"/>
+      <polygon points="0,4 96,48 96,60 0,20" fill="#241812"/>
+      <polygon points="640,4 544,48 544,240 640,360" fill="#33241d"/>
+      <polygon points="640,4 544,48 544,60 640,20" fill="#241812"/>
+      <polygon points="96,240 544,240 640,360 0,360" fill="#4b4f55"/>
+      <polygon points="96,240 544,240 544,246 96,246" fill="#3c4045"/>
+      <rect x="0" y="352" width="640" height="8" fill="#3a3e43"/>
+      <polygon points="230,240 210,360 214,360 234,240" fill="#454951"/>
+      <polygon points="410,240 430,360 426,360 406,240" fill="#454951"/>
+      <rect x="96" y="48" width="448" height="192" fill="url(#brick)"/>
+      <rect x="96" y="48" width="448" height="192" fill="#000" opacity="0.12"/>
+      <rect x="96" y="234" width="448" height="6" fill="#20130e"/>
+      <g>
+        <use href="#hex" x="112" y="70" width="40" height="36"/>
+        <use href="#hex" x="150" y="70" width="40" height="36"/>
+        <use href="#hex" x="131" y="100" width="40" height="36"/>
+        <use href="#hex" x="169" y="100" width="40" height="36"/>
+        <use href="#hex" x="112" y="130" width="40" height="36"/>
+        <use href="#hex" x="150" y="130" width="40" height="36"/>
+        <rect x="120" y="76" width="24" height="24" fill="#c98a5a"/>
+        <rect x="158" y="76" width="24" height="24" fill="#8aa0b5"/>
+        <rect x="139" y="106" width="24" height="24" fill="#b56a4a"/>
+        <rect x="177" y="106" width="24" height="24" fill="#7d9c6a"/>
+        <rect x="120" y="136" width="24" height="24" fill="#9a8fb5"/>
+        <rect x="158" y="136" width="24" height="24" fill="#c9a05a"/>
+      </g>
+      <rect x="300" y="56" width="236" height="176" fill="#20262c"/>
+      <rect x="300" y="56" width="236" height="4" fill="#2b333a"/>
+      <text x="316" y="120" font-family="'Press Start 2P'" font-size="12" fill="#F18E02" transform="rotate(-3 316 120)">CREATIVITY</text>
+      <text x="330" y="140" font-family="'Press Start 2P'" font-size="12" fill="#F18E02" transform="rotate(-3 330 140)">NEVER DIES</text>
+      <text x="340" y="176" font-family="'Press Start 2P'" font-size="14" fill="#3285D1" transform="rotate(2 340 176)">DREAM BIG</text>
+      <text x="322" y="210" font-family="'Press Start 2P'" font-size="10" fill="#e8e2d8" transform="rotate(-2 322 210)">NO PAIN</text>
+      <text x="360" y="226" font-family="'Press Start 2P'" font-size="10" fill="#e8e2d8" transform="rotate(-2 360 226)">NO GAIN</text>
+      <g>
+        <rect x="174" y="48" width="2" height="58" fill="#0a0a0a"/>
+        <rect x="168" y="106" width="14" height="12" fill="#3a2f18"/>
+        <rect x="170" y="112" width="10" height="10" fill="#ffb733" style="animation:dd-bulb 3.2s ease-in-out infinite"/>
+        <rect x="330" y="48" width="2" height="48" fill="#0a0a0a"/>
+        <rect x="324" y="96" width="14" height="12" fill="#3a2f18"/>
+        <rect x="326" y="102" width="10" height="10" fill="#ffb733" style="animation:dd-bulb 2.6s ease-in-out infinite"/>
+        <rect x="464" y="48" width="2" height="58" fill="#0a0a0a"/>
+        <rect x="458" y="106" width="14" height="12" fill="#3a2f18"/>
+        <rect x="460" y="112" width="10" height="10" fill="#ffb733" style="animation:dd-bulb 3.6s ease-in-out infinite"/>
+      </g>
+      <g>
+        <rect x="470" y="222" width="86" height="20" fill="#c99a1e"/>
+        <rect x="470" y="216" width="86" height="10" fill="#d9ab2c"/>
+        <rect x="470" y="200" width="10" height="24" fill="#b8891a"/>
+        <rect x="546" y="200" width="10" height="24" fill="#b8891a"/>
+        <rect x="482" y="206" width="28" height="14" fill="#e4b83e"/>
+        <rect x="514" y="206" width="28" height="14" fill="#e4b83e"/>
+        <rect x="470" y="240" width="86" height="6" fill="#7d5c10"/>
+      </g>
+      <use href="#plant" x="500" y="176" width="34" height="52"/>
+      <use href="#plant" x="104" y="182" width="30" height="46"/>
+      <use href="#deskEmpty" x="130" y="158" width="96" height="77"/>
+      <text x="160" y="226" font-family="'Press Start 2P'" font-size="6" fill="#7a828a">SOON</text>
+      <use href="#deskEmpty" x="416" y="158" width="96" height="77"/>
+      <text x="446" y="226" font-family="'Press Start 2P'" font-size="6" fill="#7a828a">SOON</text>
+      <use href="#deskEmpty" x="384" y="244" width="132" height="106"/>
+      <text x="428" y="336" font-family="'Press Start 2P'" font-size="7" fill="#7a828a">SOON</text>
+      <g id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent">
+        <rect x="146" y="220" width="150" height="126" fill="#000" opacity="0"/>
+        <rect x="196" y="256" width="42" height="46" fill="#111"/>
+        <rect x="200" y="260" width="34" height="30" fill="#1c1c1c"/>
+        <rect x="192" y="274" width="50" height="38" fill="#015092"/>
+        <rect x="192" y="274" width="50" height="6" fill="#0a6bbf"/>
+        <rect x="210" y="280" width="14" height="24" fill="#0a6bbf"/>
+        <rect x="208" y="270" width="18" height="8" fill="#d99a63"/>
+        <rect x="203" y="244" width="28" height="28" fill="#e8b98a"/>
+        <rect x="203" y="244" width="28" height="4" fill="#f0c79a"/>
+        <rect x="201" y="240" width="32" height="10" fill="#4a3320"/>
+        <rect x="201" y="244" width="4" height="12" fill="#4a3320"/>
+        <rect x="229" y="244" width="4" height="12" fill="#4a3320"/>
+        <rect x="206" y="254" width="10" height="8" fill="#1a1a1a"/>
+        <rect x="218" y="254" width="10" height="8" fill="#1a1a1a"/>
+        <rect x="208" y="256" width="6" height="4" fill="#3285D1"/>
+        <rect x="220" y="256" width="6" height="4" fill="#3285D1"/>
+        <rect x="216" y="256" width="2" height="2" fill="#1a1a1a"/>
+        <rect x="199" y="236" width="36" height="6" fill="#222"/>
+        <rect x="197" y="252" width="8" height="16" fill="#222"/>
+        <rect x="229" y="252" width="8" height="16" fill="#222"/>
+        <rect x="199" y="256" width="4" height="8" fill="#F18E02"/>
+        <rect x="231" y="256" width="4" height="8" fill="#F18E02"/>
+        <rect x="150" y="304" width="132" height="10" fill="#2b2b2b"/>
+        <rect x="150" y="314" width="132" height="34" fill="#141414"/>
+        <rect x="156" y="314" width="5" height="34" fill="#0c0c0c"/>
+        <rect x="271" y="314" width="5" height="34" fill="#0c0c0c"/>
+        <rect x="252" y="298" width="8" height="8" fill="#0c0c0c"/>
+        <rect x="246" y="278" width="36" height="24" fill="#0a0a0a"/>
+        <rect x="250" y="282" width="28" height="16" fill="#3a2400"/>
+        <rect x="252" y="284" width="14" height="2" fill="#F18E02"/>
+        <rect x="252" y="288" width="20" height="2" fill="#c97400"/>
+        <rect x="252" y="292" width="10" height="2" fill="#F18E02"/>
+        <rect x="176" y="306" width="46" height="5" fill="#333"/>
+        <rect x="150" y="216" width="96" height="18" fill="#0b1219"/>
+        <rect x="150" y="216" width="96" height="18" fill="none" stroke="#F18E02" stroke-width="1"/>
+        <circle cx="161" cy="225" r="4" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
+        <text x="170" y="229" font-family="'Press Start 2P'" font-size="6" fill="#e8e2d8">GSC-AGENT</text>
+      </g>
+      <ellipse cx="86" cy="336" rx="46" ry="12" fill="#2a2f34"/>
+      <ellipse cx="86" cy="334" rx="38" ry="9" fill="#6d3b8f" opacity="0.55"/>
+      <ellipse cx="86" cy="333" rx="30" ry="6" fill="#824aa8" opacity="0.5"/>
+      <polygon points="0,300 640,300 640,360 0,360" fill="#000" opacity="0.10"/>
+    </svg>
+
+    <div class="dog" aria-hidden="true">
+      <svg viewBox="0 0 60 40" width="100%" shape-rendering="crispEdges" style="image-rendering:pixelated;display:block;">
+        <g style="transform-origin:8px 16px;animation:dd-tail .5s ease-in-out infinite">
+          <rect x="2" y="14" width="8" height="4" fill="#c99a4e"/>
+        </g>
+        <rect x="8" y="12" width="34" height="14" fill="#d9a441"/>
+        <rect x="8" y="12" width="34" height="4" fill="#e6b755"/>
+        <rect x="38" y="8" width="16" height="16" fill="#d9a441"/>
+        <rect x="38" y="8" width="16" height="4" fill="#e6b755"/>
+        <rect x="38" y="8" width="5" height="12" fill="#b8842f"/>
+        <rect x="52" y="16" width="6" height="6" fill="#e6b755"/>
+        <rect x="56" y="17" width="3" height="3" fill="#1a1a1a"/>
+        <rect x="47" y="13" width="3" height="3" fill="#2a1c0c"/>
+        <rect x="40" y="20" width="4" height="6" fill="#F18E02"/>
+        <g style="animation:dd-legA .34s steps(1) infinite">
+          <rect x="12" y="26" width="5" height="9" fill="#b8842f"/>
+          <rect x="34" y="26" width="5" height="9" fill="#b8842f"/>
+        </g>
+        <g style="animation:dd-legB .34s steps(1) infinite">
+          <rect x="20" y="26" width="5" height="9" fill="#c99a4e"/>
+          <rect x="42" y="26" width="5" height="9" fill="#c99a4e"/>
+        </g>
+      </svg>
     </div>
-    <div class="ondertitel">Dirk Doet &mdash; Verwarrend duidelijk</div>
+
+    <div style="position:absolute;top:0;left:0;right:0;height:30%;background:linear-gradient(to bottom, rgba(8,11,15,.82) 0%, rgba(8,11,15,.5) 55%, rgba(8,11,15,0) 100%);pointer-events:none;"></div>
+    <div style="position:absolute;top:5%;left:0;right:0;text-align:center;pointer-events:none;">
+      <div style="font-family:'Press Start 2P',monospace;color:#F18E02;font-size:clamp(18px,4.4vw,52px);letter-spacing:2px;text-shadow:4px 4px 0 #015092,8px 8px 0 rgba(0,0,0,.35);">DIRK DIGITAAL</div>
+      <div style="margin-top:14px;font-family:'VT323',monospace;color:#e8e2d8;font-size:clamp(16px,2.4vw,30px);letter-spacing:3px;text-shadow:2px 2px 0 #000;">Verwarrend duidelijk</div>
+    </div>
+    <div style="position:absolute;bottom:4%;left:0;right:0;text-align:center;pointer-events:none;">
+      <span style="display:inline-block;font-family:'VT323',monospace;font-size:clamp(15px,2.1vw,26px);letter-spacing:1px;color:#e8e2d8;background:rgba(11,18,25,.72);border:1px solid #F18E02;padding:6px 16px;text-shadow:1px 1px 0 #000;animation:dd-cta 2.4s ease-in-out infinite;">
+        <span style="color:#F18E02">&#9656;</span> Klik op de GSC-agent om een gesprek te starten
+      </span>
+    </div>
   </div>
-  <p class="hint">Klik op de GSC-agent aan het eerste bureau om je Search Console te koppelen en je cijfers te bespreken.</p>
 </div>
 
 <div class="overlay" id="chat-overlay" role="dialog" aria-label="GSC-agent chat">
   <div class="chat">
     <header><b>GSC-agent</b><button class="x" id="chat-close" aria-label="Sluiten">X</button></header>
-    <div class="msgs" id="chat-msgs">
-      <div class="bubble agent">Hoi! Ik ben je GSC-agent. Koppel je Google Search Console, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.</div>
-    </div>
-    <div class="notice" id="privacy-notice">Privacy: je koppeling en dit gesprek leven alleen in deze sessie. Ze wissen zichzelf als je weggaat of na 30 minuten. Er wordt niets blijvend opgeslagen.</div>
-    <div class="bar">
-      <button class="knop" id="chat-connect">Koppel Google</button>
-      <button class="knop" id="chat-switch" style="display:none">Andere site</button>
-      <button class="knop rood" id="chat-disconnect">Verbreek &amp; wis</button>
-    </div>
-    <div class="composer" id="chat-composer">
-      <input id="chat-input" type="text" placeholder="Stel een vraag over je cijfers..." autocomplete="off">
-      <button class="knop" id="chat-send">Stuur</button>
+    <div class="chatrow">
+      <div class="portret" aria-hidden="true">
+        <div class="avatar">&#129302;</div>
+        <div class="pnaam">&#9679; online</div>
+      </div>
+      <div class="chatmain">
+        <div class="msgs" id="chat-msgs">
+          <div class="bubble agent">Hoi! Ik ben je GSC-agent. Koppel je Google Search Console, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.</div>
+        </div>
+        <div class="notice" id="privacy-notice">Privacy: je koppeling en dit gesprek leven alleen in deze sessie. Ze wissen zichzelf als je weggaat of na 30 minuten. Er wordt niets blijvend opgeslagen. Klik hieronder op "Koppel Google" om te beginnen.</div>
+        <div class="bar">
+          <button class="knop" id="chat-connect">Koppel Google</button>
+          <button class="knop" id="chat-switch" style="display:none">Andere site</button>
+          <button class="knop rood" id="chat-disconnect">Verbreek &amp; wis</button>
+        </div>
+        <div class="composer" id="chat-composer">
+          <input id="chat-input" type="text" placeholder="Stel een vraag over je cijfers..." autocomplete="off">
+          <button class="knop" id="chat-send">Stuur</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -589,7 +704,8 @@ const OFFICE_HTML = `<!doctype html>
 
   function openChat(){ overlay.style.display='flex'; }
   function closeChat(){ overlay.style.display='none'; }
-  function setConnected(v){ connected=v; connectBtn.style.display=v?'none':'inline-block'; }
+  function setConnected(v){ connected=v; connectBtn.style.display=v?'none':'inline-block';
+    if(notice) notice.style.display=v?'none':'block'; }
   function setActive(v){ composer.style.display=v?'flex':'none'; switchBtn.style.display=v?'inline-block':'none'; }
   function addBubble(who,text){ var b=document.createElement('div'); b.className='bubble '+who;
     b.textContent=text; msgs.appendChild(b); msgs.scrollTop=msgs.scrollHeight; return b; }
