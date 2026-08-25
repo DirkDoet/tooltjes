@@ -12,6 +12,8 @@ import {
   firstAnalysisPrompt,
   previousDateRange,
   computeTrend,
+  parseDocMarker,
+  docFilename,
 } from "../src/index.js";
 
 test("buildGoogleAuthUrl: read-only scope + online (geen refresh-token)", () => {
@@ -109,6 +111,22 @@ test("extractTextFromSSE: plakt content_block_delta tekst aan elkaar", () => {
   ].join("\n");
   assert.equal(extractTextFromSSE(sse), "Hallo Dirk");
   assert.equal(extractTextFromSSE(""), "");
+});
+
+test("parseDocMarker: haalt slug + markdown uit een documentblok", () => {
+  const t = "%%DOC gsc-actiepunten\n# Actiepunten\n- Doe X\n- Doe Y\n%%ENDDOC";
+  const d = parseDocMarker(t);
+  assert.equal(d.slug, "gsc-actiepunten");
+  assert.match(d.markdown, /# Actiepunten/);
+  assert.match(d.markdown, /- Doe X/);
+  assert.equal(parseDocMarker("gewoon antwoord zonder blok"), null);
+  assert.equal(parseDocMarker("%%DOC leeg\n\n%%ENDDOC"), null); // lege inhoud
+});
+
+test("docFilename: veilige, beschrijvende .md-naam met datum", () => {
+  assert.equal(docFilename("GSC Actiepunten!", "2026-08-25"), "gsc-actiepunten-20260825.md");
+  assert.equal(docFilename("blog/beste pagina", "20260825"), "blog-beste-pagina-20260825.md");
+  assert.equal(docFilename("", ""), "document.md");
 });
 
 test("dateRange: dagen terug, geclampt", () => {
