@@ -81,24 +81,53 @@ export function dateRange(days, now) {
   return { startDate: iso(start), endDate: iso(end) };
 }
 
+// De periode van `days` dagen die direct vóór de huidige periode ligt (voor de trend).
+export function previousDateRange(days, now) {
+  const d = Math.max(1, Math.min(Number(days) || 28, 400));
+  const dagMs = 24 * 60 * 60 * 1000;
+  const end = new Date(now - d * dagMs);       // begin van de huidige periode
+  const start = new Date(now - 2 * d * dagMs);
+  const iso = (x) => x.toISOString().slice(0, 10);
+  return { startDate: iso(start), endDate: iso(end) };
+}
+
+// Procentuele verandering huidig vs. vorig (afgerond op hele procenten).
+export function computeTrend(current, previous) {
+  const pct = (nu, was) => {
+    if (!was) return nu > 0 ? 100 : 0;
+    return Math.round(((nu - was) / was) * 100);
+  };
+  const c = current || {};
+  const p = previous || {};
+  return {
+    clicksPct: pct(c.clicks || 0, p.clicks || 0),
+    impressionsPct: pct(c.impressions || 0, p.impressions || 0),
+  };
+}
+
 // ------------------------------------------------------------------ agent ---
 
 const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_MODEL = "claude-opus-5";
+const ANTHROPIC_MODEL = "claude-sonnet-5";
 const ANTHROPIC_VERSION = "2023-06-01";
 const CHAT_MAX_TOKENS = 4096;
 
-// Vraag die de allereerste, automatische analyse uitlokt (AC-3).
+// De vraag die de SEO-analyse uitlokt. Vraagt om een dashboard met vaste secties
+// (## koppen), zodat de frontend het als kaarten kan renderen (AC-4/AC-5).
 // NB: een Cloudflare Worker-entrymodule mag alleen functies / handlers / Durable
 // Objects als named export hebben — een kale string-export wordt door de runtime
 // geweigerd. Daarom als functie geëxporteerd voor de tests.
-const FIRST_ANALYSIS_PROMPT =
-  "Geef mij een eerste analyse van mijn Search Console-data: noem de opvallendste " +
-  "zoekwoorden en pagina's, de grootste kansen en de aandachtspunten. Sluit af met " +
-  "de vraag waar ik op wil inzoomen.";
+const ANALYSIS_PROMPT =
+  "Maak een SEO-analyse van de gekozen site op basis van de data. Gebruik EXACT deze " +
+  "vier secties, elk met een '## '-kop, en '- ' voor opsommingen:\n" +
+  "## Samenvatting\nKort (2-3 zinnen) hoe de site het doet.\n" +
+  "## Sterke pagina's\nDe best presterende pagina's/zoekwoorden (clicks + positie), met cijfers.\n" +
+  "## Kansen\nConcrete kansen: hoge impressies + lage CTR, of posities ~5-15 (bijna pagina 1). Noem de pagina/zoekwoord + wat te doen.\n" +
+  "## Trend\nVergelijk deze 28 dagen met de vorige 28 dagen (clicks en impressies omhoog/omlaag, met percentages uit de data).\n" +
+  "Sluit af met een korte vraag waar ik op wil inzoomen. Schrijf in het Nederlands, jij-vorm.";
 
 export function firstAnalysisPrompt() {
-  return FIRST_ANALYSIS_PROMPT;
+  return ANALYSIS_PROMPT;
 }
 
 // Systeemprompt: GSC-analist, Nederlands, jij-vorm, gegrond in de sessie-data
@@ -215,6 +244,15 @@ export class SessionDO {
       return json({ ok: true });
     }
 
+    // Site kiezen/wisselen: nieuwe data cachen én de chat-historie wissen, zodat
+    // de nieuwe analyse schoon op de gekozen site gegrond is (AC-3).
+    if (url.pathname === "/chat/select") {
+      const { gsc } = await request.json();
+      await this.state.storage.put({ gsc, messages: [], lastActive: now });
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ ok: true });
+    }
+
     if (url.pathname === "/chat/append") {
       const { messages } = await request.json();
       const bestaand = (await this.state.storage.get("messages")) || [];
@@ -277,6 +315,43 @@ async function fetchGscPerformance(token, site, days) {
   const qData = await qResp.json();
   const pData = await pResp.json();
   return { site, startDate, endDate, ...shapePerformance(qData.rows, pData.rows) };
+}
+
+// Totalen (clicks + impressies) voor een periode, zonder dimensies.
+async function fetchGscTotals(token, site, startDate, endDate) {
+  const endpoint = GSC_BASE + "/sites/" + encodeURIComponent(site) + "/searchAnalytics/query";
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ startDate, endDate }),
+  });
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  const row = (data.rows && data.rows[0]) || {};
+  return { clicks: Math.round(row.clicks || 0), impressions: Math.round(row.impressions || 0) };
+}
+
+// Volledige analyse-data voor één site: top zoekwoorden/pagina's van de huidige
+// 28 dagen + totalen van deze én de vorige 28 dagen, met de berekende trend (AC-4).
+async function fetchGscPerformanceWithTrend(token, site) {
+  const now = Date.now();
+  const cur = dateRange("28", now);
+  const prev = previousDateRange("28", now);
+  const [perf, curTot, prevTot] = await Promise.all([
+    fetchGscPerformance(token, site, "28"),
+    fetchGscTotals(token, site, cur.startDate, cur.endDate),
+    fetchGscTotals(token, site, prev.startDate, prev.endDate),
+  ]);
+  if (!perf || !curTot || !prevTot) return null;
+  return {
+    periode: { van: cur.startDate, tot: cur.endDate },
+    vorige_periode: { van: prev.startDate, tot: prev.endDate },
+    queries: perf.queries,
+    pages: perf.pages,
+    totalen: curTot,
+    vorige_totalen: prevTot,
+    trend: computeTrend(curTot, prevTot),
+  };
 }
 
 const OFFICE_HTML = `<!doctype html>
@@ -347,6 +422,16 @@ const OFFICE_HTML = `<!doctype html>
   button.knop:disabled{ opacity:.5; cursor:default; }
   .bar{ display:flex; gap:.5rem; padding:.6rem; border-top:2px solid var(--ink); background:var(--cream); flex-wrap:wrap; }
   button.rood{ background:var(--accent); }
+  /* site-keuze + dashboard */
+  .sitekeuze{ align-self:flex-start; background:#fff; border:2px solid var(--ink); padding:.6rem; max-width:100%; }
+  .sitekeuze p{ margin:0 0 .5rem; font-size:.9rem; }
+  .sitekeuze .sitebtn{ display:block; width:100%; text-align:left; margin:.25rem 0; }
+  .dash{ align-self:stretch; display:flex; flex-direction:column; gap:.6rem; }
+  .card{ background:#fff; border:2px solid var(--ink); box-shadow:3px 3px 0 var(--shadow); }
+  .card h3{ margin:0; background:var(--teal); color:var(--cream); font-size:.85rem; letter-spacing:1px;
+    padding:.35rem .6rem; border-bottom:2px solid var(--ink); }
+  .card .body{ padding:.5rem .7rem; font-size:.88rem; line-height:1.4; white-space:pre-wrap; word-break:break-word; }
+  .card .body ul{ margin:.2rem 0; padding-left:1.1rem; }
   @media (max-width:640px){ .floor{ grid-template-columns:1fr; } h1.titel{ font-size:1.5rem; } }
 </style>
 </head><body>
@@ -377,6 +462,7 @@ const OFFICE_HTML = `<!doctype html>
     <div class="notice" id="privacy-notice">Privacy: je koppeling en dit gesprek leven alleen in deze sessie. Ze wissen zichzelf als je weggaat of na 30 minuten. Er wordt niets blijvend opgeslagen.</div>
     <div class="bar">
       <button class="knop" id="chat-connect">Koppel Google</button>
+      <button class="knop" id="chat-switch" style="display:none">Andere site</button>
       <button class="knop rood" id="chat-disconnect">Verbreek &amp; wis</button>
     </div>
     <div class="composer" id="chat-composer">
@@ -393,6 +479,7 @@ const OFFICE_HTML = `<!doctype html>
   var input=document.getElementById('chat-input');
   var sendBtn=document.getElementById('chat-send');
   var connectBtn=document.getElementById('chat-connect');
+  var switchBtn=document.getElementById('chat-switch');
   var composer=document.getElementById('chat-composer');
   var agent=document.getElementById('agent-desk');
   var notice=document.getElementById('privacy-notice');
@@ -400,29 +487,54 @@ const OFFICE_HTML = `<!doctype html>
 
   function openChat(){ overlay.style.display='flex'; }
   function closeChat(){ overlay.style.display='none'; }
-  function setConnected(v){ connected=v; connectBtn.style.display=v?'none':'inline-block';
-    composer.style.display=v?'flex':'none'; }
+  function setConnected(v){ connected=v; connectBtn.style.display=v?'none':'inline-block'; }
+  function setActive(v){ composer.style.display=v?'flex':'none'; switchBtn.style.display=v?'inline-block':'none'; }
   function addBubble(who,text){ var b=document.createElement('div'); b.className='bubble '+who;
     b.textContent=text; msgs.appendChild(b); msgs.scrollTop=msgs.scrollHeight; return b; }
+  function esc(s){ return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
 
   function connect(){ window.location.href='/oauth/start'; }
 
-  async function startAnalysis(){ if(started) return; started=true; await stream(null,'Ik analyseer je Search Console-data...'); }
+  // Zet de gestreamde analyse-tekst met '## '-koppen om naar kaarten (AC-5).
+  function renderDashboard(text){
+    var wrap=document.createElement('div'); wrap.className='dash';
+    var lines=text.split('\\n'); var titel=null, body=[];
+    function flush(){ if(titel===null) return;
+      var card=document.createElement('div'); card.className='card';
+      var h=document.createElement('h3'); h.textContent=titel; card.appendChild(h);
+      var bd=document.createElement('div'); bd.className='body';
+      bd.innerHTML=body.join('\\n'); card.appendChild(bd); wrap.appendChild(card); titel=null; body=[]; }
+    for(var i=0;i<lines.length;i++){ var ln=lines[i]; var m=ln.match(/^##\\s+(.*)/);
+      if(m){ flush(); titel=m[1].trim(); continue; }
+      if(titel!==null){ var t=ln.replace(/^\\s*-\\s+/,'\\u2022 ');
+        body.push(esc(t).replace(/\\*\\*(.+?)\\*\\*/g,'<b>$1</b>')); } }
+    flush();
+    if(!wrap.children.length){ var c=document.createElement('div'); c.className='card';
+      var b2=document.createElement('div'); b2.className='body'; b2.textContent=text; c.appendChild(b2); wrap.appendChild(c); }
+    return wrap;
+  }
 
-  async function send(){ var t=(input.value||'').trim(); if(!t||busy) return; input.value='';
-    addBubble('user',t); await stream(t,null); }
+  function renderSitePicker(sites){
+    var box=document.createElement('div'); box.className='sitekeuze';
+    var p=document.createElement('p'); p.textContent='Welke website wil je analyseren?'; box.appendChild(p);
+    (sites||[]).forEach(function(s){ var b=document.createElement('button'); b.className='knop sitebtn';
+      b.textContent=s; b.addEventListener('click',function(){ box.remove(); addBubble('user','Analyseer '+s);
+        streamChat({site:s}, true); }); box.appendChild(b); });
+    msgs.appendChild(box); msgs.scrollTop=msgs.scrollHeight;
+  }
 
-  async function stream(message,placeholder){
+  async function streamChat(payload, dashboard){
     if(busy) return; busy=true; sendBtn.disabled=true;
-    var bubble=addBubble('agent',placeholder||'...'); var got='';
+    var bubble=addBubble('agent', dashboard?'Ik maak je analyse...':'...'); var got='';
     try{
       var r=await fetch('/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(message?{message:message}:{}) });
+        body:JSON.stringify(payload||{}) });
       var ct=r.headers.get('Content-Type')||'';
       if(!r.ok||ct.indexOf('application/json')!==-1){
         var j={}; try{ j=await r.json(); }catch(e){}
-        bubble.textContent=j.error||'Er ging iets mis. Probeer het opnieuw.';
-        if(r.status===401){ setConnected(false); started=false; }
+        if(j&&j.needSite){ bubble.remove(); renderSitePicker(j.sites); busy=false; sendBtn.disabled=false; return; }
+        bubble.textContent=(j&&j.error)||'Er ging iets mis. Probeer het opnieuw.';
+        if(r.status===401){ setConnected(false); setActive(false); started=false; }
         busy=false; sendBtn.disabled=false; return;
       }
       var reader=r.body.getReader(); var dec=new TextDecoder(); var buf='';
@@ -434,40 +546,48 @@ const OFFICE_HTML = `<!doctype html>
           try{ var evt=JSON.parse(p);
             if(evt.type==='content_block_delta'&&evt.delta&&typeof evt.delta.text==='string'){
               got+=evt.delta.text; bubble.textContent=got; msgs.scrollTop=msgs.scrollHeight; } }catch(e){} } }
-      if(!got) bubble.textContent='De agent gaf geen antwoord. Probeer het opnieuw.';
+      if(!got){ bubble.textContent='De agent gaf geen antwoord. Probeer het opnieuw.'; }
+      else if(dashboard){ msgs.replaceChild(renderDashboard(got), bubble); msgs.scrollTop=msgs.scrollHeight; setActive(true); }
+      else { setActive(true); }
     }catch(e){ bubble.textContent='Kon de agent niet bereiken. Probeer het opnieuw.'; }
     busy=false; sendBtn.disabled=false;
   }
 
+  // Startpunt na koppelen: backend beslist tussen site-keuze (meerdere) of directe analyse (één).
+  async function startFlow(){ if(started) return; started=true; await streamChat({}, true); }
+
+  async function send(){ var t=(input.value||'').trim(); if(!t||busy) return; input.value='';
+    addBubble('user',t); await streamChat({message:t}, false); }
+
+  async function switchSite(){ if(busy) return;
+    try{ var r=await fetch('/api/gsc/sites'); if(!r.ok) return; var j=await r.json(); renderSitePicker(j.sites||[]); }catch(e){} }
+
   async function disconnect(){ try{ await fetch('/api/disconnect'); }catch(e){}
-    setConnected(false); started=false; msgs.innerHTML='';
+    setConnected(false); setActive(false); started=false; msgs.innerHTML='';
     notice.textContent='Je sessie is gewist. Er is niets bewaard.'; notice.classList.add('flash'); }
 
-  agent.addEventListener('click',function(){ openChat(); if(connected&&!started) startAnalysis(); });
-  agent.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openChat(); if(connected&&!started) startAnalysis(); } });
+  agent.addEventListener('click',function(){ openChat(); if(connected&&!started) startFlow(); });
+  agent.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openChat(); if(connected&&!started) startFlow(); } });
   document.getElementById('chat-close').addEventListener('click',closeChat);
   connectBtn.addEventListener('click',connect);
+  switchBtn.addEventListener('click',switchSite);
   document.getElementById('chat-disconnect').addEventListener('click',disconnect);
   sendBtn.addEventListener('click',send);
   input.addEventListener('keydown',function(e){ if(e.key==='Enter') send(); });
 
-  // Bij (her)laden: al gekoppeld? Dan chat openen en direct analyseren (na terugkeer van Google).
-  fetch('/api/gsc/sites').then(function(r){ if(r.ok){ setConnected(true); openChat(); startAnalysis(); }
+  // Bij (her)laden: al gekoppeld? Dan chat openen en de flow starten (na terugkeer van Google).
+  fetch('/api/gsc/sites').then(function(r){ if(r.ok){ setConnected(true); openChat(); startFlow(); }
     else{ setConnected(false); } }).catch(function(){ setConnected(false); });
 })();
 </script>
 </body></html>`;
 
-// GSC-data laden en cachen in de sessie (één keer per sessie), zodat elke
-// vervolgvraag op dezelfde data leunt (AC-4). Kiest de eerste beschikbare site.
-async function ensureGscData(stub, token, cached) {
-  if (cached) return cached;
-  const sites = await fetchGscSites(token);
-  if (!sites || !sites.length) return null;
-  const perf = await fetchGscPerformance(token, sites[0].siteUrl, "28");
+// Data voor één gekozen site laden + in de sessie zetten (historie schoon).
+async function selectSite(stub, token, siteUrl, alleSites) {
+  const perf = await fetchGscPerformanceWithTrend(token, siteUrl);
   if (!perf) return null;
-  const gsc = { sites: sites.map((s) => s.siteUrl), actief: sites[0].siteUrl, prestaties: perf };
-  await stub.fetch("https://do/chat/set-gsc", { method: "POST", body: JSON.stringify({ gsc }) });
+  const gsc = { sites: alleSites, actief: siteUrl, ...perf };
+  await stub.fetch("https://do/chat/select", { method: "POST", body: JSON.stringify({ gsc }) });
   return gsc;
 }
 
@@ -483,21 +603,46 @@ async function handleChat(request, env, ctx) {
   const stub = sessionStub(env, id);
   const stateResp = await stub.fetch("https://do/chat/state");
   if (!stateResp.ok) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console." }, 401);
-  const { token, messages: history, gsc: cachedGsc } = await stateResp.json();
+  let { token, messages: history, gsc } = await stateResp.json();
 
-  // Inkomende vraag (optioneel). Zonder vraag + lege historie → eerste analyse.
-  let userText = "";
-  try {
-    const body = await request.json();
-    userText = (body && typeof body.message === "string") ? body.message.trim() : "";
-  } catch (e) { /* geen/lege body → eerste analyse */ }
-  if (!userText && (!history || history.length === 0)) userText = FIRST_ANALYSIS_PROMPT;
-  if (!userText) return json({ error: "Stel een vraag over je Search Console-data." }, 400);
+  // Body: optioneel { message } (vervolgvraag) en/of { site } (kiezen/wisselen).
+  let body = {};
+  try { body = await request.json(); } catch (e) { /* lege body toegestaan */ }
+  const wantSite = (body && typeof body.site === "string") ? body.site.trim() : "";
+  let userText = (body && typeof body.message === "string") ? body.message.trim() : "";
 
-  const gsc = await ensureGscData(stub, token, cachedGsc);
-  if (!gsc) return json({ error: "Kon je Search Console-data niet laden. Is je site gekoppeld in Google?" }, 502);
+  let promptText;              // wat naar het model gaat
+  let storedUser = userText;   // wat in de historie komt
 
-  const messages = buildAnthropicMessages(history, userText);
+  if (wantSite) {
+    // AC-2/AC-3: site kiezen of wisselen → nieuwe analyse.
+    const sites = await fetchGscSites(token);
+    if (!sites || !sites.length) return json({ error: "Geen Search Console-sites gevonden in je account." }, 502);
+    if (!sites.some((s) => s.siteUrl === wantSite)) return json({ error: "Die site staat niet in je account." }, 400);
+    gsc = await selectSite(stub, token, wantSite, sites.map((s) => s.siteUrl));
+    if (!gsc) return json({ error: "Kon de prestaties van die site niet laden." }, 502);
+    history = [];
+    promptText = ANALYSIS_PROMPT;
+    storedUser = "[Analyse van " + wantSite + "]";
+  } else if (!gsc) {
+    // Nog geen site gekozen: 1 site → automatisch analyseren; meerdere → vraag welke.
+    const sites = await fetchGscSites(token);
+    if (!sites || !sites.length) return json({ error: "Geen Search Console-sites gevonden in je account." }, 502);
+    if (sites.length > 1) {
+      return json({ needSite: true, sites: sites.map((s) => s.siteUrl) });
+    }
+    gsc = await selectSite(stub, token, sites[0].siteUrl, sites.map((s) => s.siteUrl));
+    if (!gsc) return json({ error: "Kon de prestaties van je site niet laden." }, 502);
+    history = [];
+    promptText = ANALYSIS_PROMPT;
+    storedUser = "[Analyse van " + sites[0].siteUrl + "]";
+  } else {
+    // Site al gekozen → vervolgvraag.
+    if (!userText) return json({ error: "Stel een vraag over je cijfers." }, 400);
+    promptText = userText;
+  }
+
+  const messages = buildAnthropicMessages(history, promptText);
 
   let upstream;
   try {
@@ -529,7 +674,7 @@ async function handleChat(request, env, ctx) {
     try {
       const sse = await new Response(meelezen).text();
       const antwoord = extractTextFromSSE(sse);
-      const toevoegen = [{ role: "user", content: userText }];
+      const toevoegen = [{ role: "user", content: storedUser }];
       if (antwoord) toevoegen.push({ role: "assistant", content: antwoord });
       await stub.fetch("https://do/chat/append", { method: "POST", body: JSON.stringify({ messages: toevoegen }) });
     } catch (e) { /* historie-bewaren is best-effort */ }

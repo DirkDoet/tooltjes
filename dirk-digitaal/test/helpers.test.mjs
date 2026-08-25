@@ -10,6 +10,8 @@ import {
   buildAnthropicMessages,
   extractTextFromSSE,
   firstAnalysisPrompt,
+  previousDateRange,
+  computeTrend,
 } from "../src/index.js";
 
 test("buildGoogleAuthUrl: read-only scope + online (geen refresh-token)", () => {
@@ -70,9 +72,29 @@ test("buildAnthropicMessages: historie + nieuwe vraag", () => {
   assert.equal(buildAnthropicMessages(null, "x").length, 1);
 });
 
-test("firstAnalysisPrompt vraagt om eerste analyse + inzoom-vraag", () => {
-  assert.match(firstAnalysisPrompt(), /eerste analyse/i);
-  assert.match(firstAnalysisPrompt(), /inzoomen/i);
+test("firstAnalysisPrompt: dashboard-secties + inzoom-vraag", () => {
+  const p = firstAnalysisPrompt();
+  assert.match(p, /## Samenvatting/);
+  assert.match(p, /## Sterke pagina's/);
+  assert.match(p, /## Kansen/);
+  assert.match(p, /## Trend/);
+  assert.match(p, /inzoomen/i);
+});
+
+test("previousDateRange: 28 dagen direct vóór de huidige periode", () => {
+  const now = Date.parse("2026-08-25T12:00:00Z");
+  const cur = dateRange(28, now);
+  const prev = previousDateRange(28, now);
+  assert.equal(cur.startDate, "2026-07-28");
+  assert.equal(prev.endDate, "2026-07-28");   // vorige periode eindigt waar de huidige begint
+  assert.equal(prev.startDate, "2026-06-30");
+});
+
+test("computeTrend: procentuele verandering, met nul-vorige", () => {
+  assert.deepEqual(computeTrend({ clicks: 120, impressions: 2000 }, { clicks: 100, impressions: 2500 }),
+    { clicksPct: 20, impressionsPct: -20 });
+  assert.deepEqual(computeTrend({ clicks: 10, impressions: 0 }, { clicks: 0, impressions: 0 }),
+    { clicksPct: 100, impressionsPct: 0 });
 });
 
 test("extractTextFromSSE: plakt content_block_delta tekst aan elkaar", () => {
