@@ -359,8 +359,10 @@ const OFFICE_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dirk Digitaal</title>
 <style>
-  :root{ --navy:#1a1c2c; --panel:#3b3f5c; --teal:#257179; --teal2:#2a9d8f;
-    --cream:#f4f0e6; --ink:#12131f; --accent:#b13e53; --shadow:#000; }
+  :root{ --navy:#2b2b33; --panel:#3E3E3E; --teal:#015092; --teal2:#2f7fbf;
+    --cream:#f4f0e6; --ink:#171717; --accent:#F18E02; --shadow:#000;
+    --baksteen:#8a3b2e; --voeg:#5f2a20; --mosterd:#d9a441; --plant:#3c7d3c;
+    --hond:#e0b566; --honddonker:#b98a3e; }
   *{ box-sizing:border-box; }
   body{ margin:0; background:var(--navy); color:var(--cream);
     font-family:"Courier New",ui-monospace,monospace; image-rendering:pixelated;
@@ -370,28 +372,88 @@ const OFFICE_HTML = `<!doctype html>
     font-size:2rem; text-transform:uppercase; color:var(--cream);
     text-shadow:3px 3px 0 var(--accent); }
   .titel small{ display:block; font-size:.7rem; letter-spacing:1px; color:#c9c6bd; margin-top:.3rem; text-shadow:none; }
-  .office{ background:var(--panel);
+  .office{ border:4px solid var(--ink); box-shadow:6px 6px 0 var(--shadow); overflow:hidden; }
+  /* Bakstenen accentmuur bovenin */
+  .muur{ position:relative; padding:1rem 1.2rem 1.4rem; color:var(--cream);
+    background:var(--baksteen);
+    background-image:
+      repeating-linear-gradient(0deg, var(--voeg) 0 2px, #0000 2px 26px),
+      repeating-linear-gradient(90deg, var(--voeg) 0 2px, #0000 2px 62px); }
+  .lampen{ display:flex; justify-content:space-around; margin-bottom:.4rem; }
+  .lamp{ width:6px; height:26px; background:#111; position:relative; }
+  .lamp::after{ content:""; position:absolute; left:-8px; top:24px; width:22px; height:18px;
+    background:var(--mosterd); border:2px solid #111; box-shadow:0 0 10px 2px #d9a44166; }
+  .graffiti{ font-weight:bold; letter-spacing:1px; font-size:.8rem; line-height:1.5;
+    color:var(--mosterd); text-shadow:2px 2px 0 #000, 0 0 2px var(--accent); text-align:center; }
+  .graffiti .b{ color:var(--teal2); } .graffiti .o{ color:var(--accent); }
+  .hexwand{ display:flex; gap:3px; justify-content:center; margin-top:.5rem; }
+  .hex{ width:20px; height:22px; background:var(--grijs,#555);
+    clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%);
+    background:var(--panel); border:0; }
+  .hex.o{ background:var(--accent); } .hex.b{ background:var(--teal); }
+  .plant-muur{ position:absolute; bottom:.3rem; right:.6rem; font-size:1.3rem; }
+
+  /* Vloer met bureaus (betonlook) */
+  .office .binnen{ background:var(--panel);
     background-image:repeating-linear-gradient(0deg,#0000 0 22px,#00000022 22px 24px);
-    border:4px solid var(--ink); box-shadow:6px 6px 0 var(--shadow);
     padding:1.2rem; }
   .floor{ display:grid; grid-template-columns:repeat(2,1fr); gap:1rem; }
-  .desk{ background:#4a4e6d; border:3px solid var(--ink); box-shadow:4px 4px 0 var(--shadow);
+  .desk{ background:#1c1c1c; border:3px solid var(--ink); box-shadow:4px 4px 0 var(--shadow);
     padding:.9rem; text-align:center; position:relative; min-height:9rem;
     display:flex; flex-direction:column; align-items:center; justify-content:flex-end; }
-  .monitor{ width:66px; height:52px; background:var(--ink); border:3px solid #0a0b12;
+  .monitor{ width:66px; height:52px; background:#0b0b0b; border:3px solid #000;
     border-radius:4px; display:flex; align-items:center; justify-content:center; margin-bottom:.5rem; }
-  .screen{ width:46px; height:32px; background:#0d3b3f; box-shadow:inset 0 0 0 2px #062023; }
+  .screen{ width:46px; height:32px; background:#0a2f52; box-shadow:inset 0 0 0 2px #04203a; }
   .desk.leeg{ opacity:.6; }
   .desk.agent{ cursor:pointer; }
-  .desk.agent .screen{ background:var(--teal2); animation:blink 1.6s steps(2,end) infinite; }
-  @keyframes blink{ 50%{ background:#1c5c56; } }
+  .desk.agent .screen{ background:var(--accent); animation:blink 1.6s steps(2,end) infinite; }
+  @keyframes blink{ 50%{ background:#a86400; } }
   .desk.agent:hover, .desk.agent:focus{ outline:none; box-shadow:6px 6px 0 var(--accent);
     transform:translate(-1px,-1px); }
   .sprite{ font-size:1.6rem; line-height:1; margin-bottom:.35rem; }
   .plate{ background:var(--ink); color:var(--cream); font-size:.7rem; letter-spacing:1px;
-    padding:.25rem .5rem; border:2px solid #0a0b12; width:100%; }
+    padding:.25rem .5rem; border:2px solid #000; width:100%; }
   .badge{ position:absolute; top:.4rem; right:.4rem; font-size:.6rem; background:var(--accent);
-    color:#fff; padding:.1rem .35rem; border:2px solid var(--ink); }
+    color:#111; padding:.1rem .35rem; border:2px solid var(--ink); }
+
+  /* Betonvloer-strip met bank, plant, hondenmand en de kantoorhond */
+  .vloerstrip{ position:relative; height:70px; background:#6f6f6f;
+    background-image:repeating-linear-gradient(90deg,#00000018 0 2px,#0000 2px 40px);
+    border-top:3px solid var(--ink); }
+  .bank{ position:absolute; bottom:8px; left:14px; width:74px; height:26px;
+    background:var(--mosterd); border:2px solid var(--ink); box-shadow:inset 0 6px 0 #00000022; }
+  .plant-vloer{ position:absolute; bottom:8px; right:96px; font-size:1.4rem; }
+  .mand{ position:absolute; bottom:6px; right:16px; width:52px; height:16px;
+    background:var(--honddonker); border:2px solid var(--ink); border-radius:3px; }
+  .hond{ position:absolute; bottom:16px; left:20px; width:34px; height:22px;
+    transition:left 3s linear; z-index:2; }
+  .hond .lijf{ position:absolute; bottom:4px; left:4px; width:24px; height:11px;
+    background:var(--hond); border:2px solid var(--ink); }
+  .hond .kop{ position:absolute; bottom:6px; left:24px; width:11px; height:11px;
+    background:var(--hond); border:2px solid var(--ink); }
+  .hond .oor{ position:absolute; bottom:13px; left:26px; width:5px; height:6px;
+    background:var(--honddonker); border:2px solid var(--ink); }
+  .hond .staart{ position:absolute; bottom:9px; left:0; width:7px; height:4px;
+    background:var(--hond); border:2px solid var(--ink); }
+  .hond .poot{ position:absolute; bottom:0; width:4px; height:6px; background:var(--honddonker);
+    border:2px solid var(--ink); }
+  .hond .p1{ left:6px; } .hond .p2{ left:20px; }
+  .hond.links{ transform:scaleX(-1); }
+  .hond.loopt{ animation:hondbob .4s steps(2,end) infinite; }
+  @keyframes hondbob{ 50%{ transform:translateY(-2px); } }
+  .hond.links.loopt{ animation:hondbobL .4s steps(2,end) infinite; }
+  @keyframes hondbobL{ 50%{ transform:scaleX(-1) translateY(-2px); } }
+  .hond.ligt{ bottom:8px; }
+  .hond.ligt .poot, .hond.ligt .staart{ display:none; }
+  .hond.ligt .kop{ bottom:2px; } .hond.ligt .oor{ bottom:9px; }
+  .hond.ligt .lijf{ height:8px; width:26px; }
+  @media (prefers-reduced-motion: reduce){
+    .hond{ transition:none; animation:none !important; }
+    .desk.agent .screen{ animation:none; }
+  }
+
+  .ondertitel{ text-align:center; font-size:.7rem; letter-spacing:2px; color:var(--mosterd);
+    padding:.5rem; background:var(--ink); text-transform:uppercase; }
   .hint{ text-align:center; font-size:.75rem; color:#c9c6bd; margin-top:1rem; }
 
   /* chat */
@@ -436,19 +498,34 @@ const OFFICE_HTML = `<!doctype html>
 </style>
 </head><body>
 <div class="wrap">
-  <h1 class="titel">Dirk Digitaal<small>jouw digitale marketingbureau &mdash; klik een agent aan</small></h1>
+  <h1 class="titel">Dirk Digitaal<small>Verwarrend duidelijk</small></h1>
   <div class="office" role="group" aria-label="Kantoor">
-    <div class="floor">
-      <div class="desk agent" id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent">
-        <span class="badge">online</span>
-        <div class="sprite">&#129302;</div>
-        <div class="monitor"><div class="screen"></div></div>
-        <div class="plate">GSC-agent</div>
-      </div>
-      <div class="desk leeg"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
-      <div class="desk leeg"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
-      <div class="desk leeg"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
+    <div class="muur">
+      <div class="lampen" aria-hidden="true"><span class="lamp"></span><span class="lamp"></span><span class="lamp"></span></div>
+      <div class="graffiti"><span class="o">CREATIVITY NEVER DIES</span> &middot; <span class="b">DREAM BIG</span> &middot; <span class="o">NO PAIN NO GAIN</span></div>
+      <div class="hexwand" aria-hidden="true"><span class="hex o"></span><span class="hex"></span><span class="hex b"></span><span class="hex"></span><span class="hex o"></span></div>
+      <div class="plant-muur" aria-hidden="true">&#127807;</div>
     </div>
+    <div class="binnen">
+      <div class="floor">
+        <div class="desk agent" id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent">
+          <span class="badge">online</span>
+          <div class="sprite">&#129302;</div>
+          <div class="monitor"><div class="screen"></div></div>
+          <div class="plate">GSC-agent</div>
+        </div>
+        <div class="desk leeg"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
+        <div class="desk leeg"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
+        <div class="desk leeg"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
+      </div>
+    </div>
+    <div class="vloerstrip" aria-hidden="true">
+      <div class="bank"></div>
+      <div class="plant-vloer">&#127793;</div>
+      <div class="mand"></div>
+      <div class="hond" id="hond"><span class="staart"></span><span class="lijf"></span><span class="poot p1"></span><span class="poot p2"></span><span class="kop"></span><span class="oor"></span></div>
+    </div>
+    <div class="ondertitel">Dirk Doet &mdash; Verwarrend duidelijk</div>
   </div>
   <p class="hint">Klik op de GSC-agent aan het eerste bureau om je Search Console te koppelen en je cijfers te bespreken.</p>
 </div>
@@ -578,6 +655,27 @@ const OFFICE_HTML = `<!doctype html>
   // Bij (her)laden: al gekoppeld? Dan chat openen en de flow starten (na terugkeer van Google).
   fetch('/api/gsc/sites').then(function(r){ if(r.ok){ setConnected(true); openChat(); startFlow(); }
     else{ setConnected(false); } }).catch(function(){ setConnected(false); });
+})();
+
+// Kantoorhond: loopt rond en gaat af en toe bij de mand liggen (AC-4).
+// Respecteert prefers-reduced-motion: dan ligt de hond stil in de mand (AC-5).
+(function(){
+  var hond=document.getElementById('hond'); if(!hond) return;
+  var strip=hond.parentElement;
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function w(){ return Math.max(120, (strip.clientWidth||300) - 50); }
+  function place(x){ hond.style.left = x + 'px'; }
+  function faceDir(from,to){ if(to<from) hond.classList.add('links'); else hond.classList.remove('links'); }
+  if(reduce){ hond.classList.add('ligt'); place(w()-10); return; }
+  var x=20; place(x);
+  function walkTo(tx, cb){ faceDir(x,tx); hond.classList.remove('ligt'); hond.classList.add('loopt');
+    x=tx; place(tx); setTimeout(function(){ hond.classList.remove('loopt'); if(cb) cb(); }, 3000); }
+  function lie(cb){ hond.classList.add('ligt'); setTimeout(function(){ hond.classList.remove('ligt'); if(cb) cb(); }, 4000); }
+  function loop(){
+    if(Math.random()<0.4){ walkTo(w()-10, function(){ lie(function(){ setTimeout(loop, 600); }); }); }
+    else { var tx=Math.floor(Math.random()*(w()-60))+20; walkTo(tx, function(){ setTimeout(loop, 1200+Math.random()*2200); }); }
+  }
+  setTimeout(loop, 1500);
 })();
 </script>
 </body></html>`;
