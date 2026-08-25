@@ -587,7 +587,7 @@ const OFFICE_HTML = `<!doctype html>
   /* chat */
   .overlay{ display:none; position:fixed; inset:0; background:#0a0b1299;
     align-items:center; justify-content:center; padding:1rem; z-index:10; }
-  .chat{ width:68vw; min-width:min(40rem,96vw); max-width:96vw; height:82vh; max-height:88vh;
+  .chat{ width:50vw; min-width:min(34rem,96vw); max-width:96vw; height:82vh; max-height:88vh;
     display:flex; flex-direction:column; font-family:var(--leesfont);
     background:var(--cream); color:var(--ink); border:4px solid var(--ink);
     box-shadow:8px 8px 0 var(--shadow); }
