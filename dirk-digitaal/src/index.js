@@ -639,6 +639,23 @@ const OFFICE_HTML = `<!doctype html>
         <symbol id="hex" viewBox="0 0 40 36">
           <polygon points="10,2 30,2 38,18 30,34 10,34 2,18" fill="#1c242c" stroke="#F18E02" stroke-width="1"/>
         </symbol>
+        <symbol id="robot" viewBox="0 0 40 40">
+          <rect x="19" y="1" width="2" height="5" fill="#8a9096"/>
+          <rect x="17" y="0" width="4" height="3" fill="#F18E02"/>
+          <rect x="8" y="10" width="2" height="7" fill="#F18E02"/>
+          <rect x="30" y="10" width="2" height="7" fill="#F18E02"/>
+          <rect x="10" y="6" width="20" height="15" fill="#8a9096"/>
+          <rect x="10" y="6" width="20" height="3" fill="#aab0b6"/>
+          <rect x="12" y="9" width="16" height="9" fill="#14202b"/>
+          <rect x="15" y="11" width="3" height="3" fill="#3fd0e6"/>
+          <rect x="22" y="11" width="3" height="3" fill="#3fd0e6"/>
+          <rect x="15" y="15" width="10" height="1" fill="#3285D1"/>
+          <rect x="12" y="20" width="16" height="14" fill="#015092"/>
+          <rect x="12" y="20" width="16" height="3" fill="#0a6bbf"/>
+          <rect x="18" y="24" width="4" height="4" fill="#F18E02"/>
+          <rect x="8" y="22" width="4" height="9" fill="#6a7076"/>
+          <rect x="28" y="22" width="4" height="9" fill="#6a7076"/>
+        </symbol>
       </defs>
       <polygon points="0,0 640,0 544,48 96,48" fill="#171b20"/>
       <polygon points="0,0 96,48 96,50 0,4" fill="#0f1216"/>
@@ -705,27 +722,10 @@ const OFFICE_HTML = `<!doctype html>
       <text x="428" y="336" font-family="'Press Start 2P'" font-size="7" fill="#7a828a">SOON</text>
       <g id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent">
         <rect x="146" y="220" width="150" height="126" fill="#000" opacity="0"/>
-        <rect x="196" y="256" width="42" height="46" fill="#111"/>
-        <rect x="200" y="260" width="34" height="30" fill="#1c1c1c"/>
-        <rect x="192" y="274" width="50" height="38" fill="#015092"/>
-        <rect x="192" y="274" width="50" height="6" fill="#0a6bbf"/>
-        <rect x="210" y="280" width="14" height="24" fill="#0a6bbf"/>
-        <rect x="208" y="270" width="18" height="8" fill="#d99a63"/>
-        <rect x="203" y="244" width="28" height="28" fill="#e8b98a"/>
-        <rect x="203" y="244" width="28" height="4" fill="#f0c79a"/>
-        <rect x="201" y="240" width="32" height="10" fill="#4a3320"/>
-        <rect x="201" y="244" width="4" height="12" fill="#4a3320"/>
-        <rect x="229" y="244" width="4" height="12" fill="#4a3320"/>
-        <rect x="206" y="254" width="10" height="8" fill="#1a1a1a"/>
-        <rect x="218" y="254" width="10" height="8" fill="#1a1a1a"/>
-        <rect x="208" y="256" width="6" height="4" fill="#3285D1"/>
-        <rect x="220" y="256" width="6" height="4" fill="#3285D1"/>
-        <rect x="216" y="256" width="2" height="2" fill="#1a1a1a"/>
-        <rect x="199" y="236" width="36" height="6" fill="#222"/>
-        <rect x="197" y="252" width="8" height="16" fill="#222"/>
-        <rect x="229" y="252" width="8" height="16" fill="#222"/>
-        <rect x="199" y="256" width="4" height="8" fill="#F18E02"/>
-        <rect x="231" y="256" width="4" height="8" fill="#F18E02"/>
+        <rect x="196" y="262" width="46" height="46" fill="#111"/>
+        <rect x="200" y="266" width="38" height="30" fill="#1c1c1c"/>
+        <!-- GSC-agent: de robot-mascotte (zelfde figuur als het chat-portret), iets groter -->
+        <use href="#robot" x="184" y="232" width="72" height="72"/>
         <rect x="150" y="304" width="132" height="10" fill="#2b2b2b"/>
         <rect x="150" y="314" width="132" height="34" fill="#141414"/>
         <rect x="156" y="314" width="5" height="34" fill="#0c0c0c"/>
@@ -791,7 +791,7 @@ const OFFICE_HTML = `<!doctype html>
     <header><b>GSC-agent</b><button class="x" id="chat-close" aria-label="Sluiten">X</button></header>
     <div class="chatrow">
       <div class="portret" aria-hidden="true">
-        <div class="avatar">&#129302;</div>
+        <div class="avatar"><svg viewBox="0 0 40 40" width="64" height="64" shape-rendering="crispEdges" style="image-rendering:pixelated"><use href="#robot"/></svg></div>
         <div class="pnaam">&#9679; online</div>
       </div>
       <div class="chatmain">
