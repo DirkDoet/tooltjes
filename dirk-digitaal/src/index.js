@@ -372,89 +372,79 @@ const OFFICE_HTML = `<!doctype html>
     font-size:2rem; text-transform:uppercase; color:var(--cream);
     text-shadow:3px 3px 0 var(--accent); }
   .titel small{ display:block; font-size:.7rem; letter-spacing:1px; color:#c9c6bd; margin-top:.3rem; text-shadow:none; }
-  .office{ border:4px solid var(--ink); box-shadow:6px 6px 0 var(--shadow); overflow:hidden; }
-  /* Bakstenen accentmuur bovenin */
-  .muur{ position:relative; padding:1rem 1.2rem 1.4rem; color:var(--cream);
+  /* ---- isometrisch kantoor (schuin van boven) ---- */
+  .stage{ display:flex; justify-content:center; overflow:hidden; padding:.3rem 0 0; }
+  .kamer{ position:relative; width:520px; height:400px; }
+  .iso{ position:absolute; left:70px; top:24px; width:340px; height:340px;
+    transform-style:preserve-3d; transform:rotateX(55deg) rotateZ(-45deg); }
+  .vloer{ position:absolute; inset:0; background:#7a7a7a; border:3px solid var(--ink);
+    background-image:repeating-linear-gradient(0deg,#00000016 0 2px,#0000 2px 46px),
+      repeating-linear-gradient(90deg,#00000016 0 2px,#0000 2px 46px); }
+  .wand{ position:absolute; box-sizing:border-box; border:3px solid var(--ink); color:var(--cream);
     background:var(--baksteen);
-    background-image:
-      repeating-linear-gradient(0deg, var(--voeg) 0 2px, #0000 2px 26px),
-      repeating-linear-gradient(90deg, var(--voeg) 0 2px, #0000 2px 62px); }
-  .lampen{ display:flex; justify-content:space-around; margin-bottom:.4rem; }
-  .lamp{ width:6px; height:26px; background:#111; position:relative; }
-  .lamp::after{ content:""; position:absolute; left:-8px; top:24px; width:22px; height:18px;
-    background:var(--mosterd); border:2px solid #111; box-shadow:0 0 10px 2px #d9a44166; }
-  .graffiti{ font-weight:bold; letter-spacing:1px; font-size:.8rem; line-height:1.5;
-    color:var(--mosterd); text-shadow:2px 2px 0 #000, 0 0 2px var(--accent); text-align:center; }
+    background-image:repeating-linear-gradient(0deg,var(--voeg) 0 2px,#0000 2px 24px),
+      repeating-linear-gradient(90deg,var(--voeg) 0 2px,#0000 2px 52px); }
+  .wand-l{ left:0; top:0; width:340px; height:130px; transform-origin:top; transform:rotateX(-90deg); padding:.5rem; }
+  .wand-r{ left:0; top:0; width:130px; height:340px; transform-origin:left; transform:rotateY(-90deg); }
+  .lampen{ display:flex; justify-content:space-around; }
+  .lamp{ width:5px; height:15px; background:#111; position:relative; margin-top:-.4rem; }
+  .lamp::after{ content:""; position:absolute; left:-6px; top:13px; width:16px; height:12px;
+    background:var(--mosterd); border:2px solid #111; }
+  .graffiti{ font-weight:bold; letter-spacing:1px; font-size:.6rem; line-height:1.4;
+    color:var(--mosterd); text-shadow:1px 1px 0 #000; text-align:center; margin-top:.2rem; }
   .graffiti .b{ color:var(--teal2); } .graffiti .o{ color:var(--accent); }
-  .hexwand{ display:flex; gap:3px; justify-content:center; margin-top:.5rem; }
-  .hex{ width:20px; height:22px; background:var(--grijs,#555);
-    clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%);
-    background:var(--panel); border:0; }
+  .hexwand{ display:flex; gap:3px; justify-content:center; margin-top:.25rem; }
+  .hex{ width:15px; height:17px; background:var(--panel);
+    clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%); }
   .hex.o{ background:var(--accent); } .hex.b{ background:var(--teal); }
-  .plant-muur{ position:absolute; bottom:.3rem; right:.6rem; font-size:1.3rem; }
+  .plant-muur{ position:absolute; right:6px; bottom:6px; font-size:1.1rem; }
 
-  /* Vloer met bureaus (betonlook) */
-  .office .binnen{ background:var(--panel);
-    background-image:repeating-linear-gradient(0deg,#0000 0 22px,#00000022 22px 24px);
-    padding:1.2rem; }
-  .floor{ display:grid; grid-template-columns:repeat(2,1fr); gap:1rem; }
-  .desk{ background:#1c1c1c; border:3px solid var(--ink); box-shadow:4px 4px 0 var(--shadow);
-    padding:.9rem; text-align:center; position:relative; min-height:9rem;
-    display:flex; flex-direction:column; align-items:center; justify-content:flex-end; }
-  .monitor{ width:66px; height:52px; background:#0b0b0b; border:3px solid #000;
-    border-radius:4px; display:flex; align-items:center; justify-content:center; margin-bottom:.5rem; }
-  .screen{ width:46px; height:32px; background:#0a2f52; box-shadow:inset 0 0 0 2px #04203a; }
-  .desk.leeg{ opacity:.6; }
+  /* objecten staan rechtop op de iso-vloer (billboards die de camera in kijken) */
+  .op{ position:absolute; transform:rotateZ(45deg) rotateX(-55deg); transform-origin:bottom center; }
+  .desk{ width:94px; background:#1c1c1c; border:3px solid var(--ink); box-shadow:3px 3px 0 var(--shadow);
+    padding:.5rem; text-align:center; position:relative; display:flex; flex-direction:column; align-items:center; }
+  .monitor{ width:52px; height:40px; background:#0b0b0b; border:3px solid #000; border-radius:3px;
+    display:flex; align-items:center; justify-content:center; margin-bottom:.35rem; }
+  .screen{ width:36px; height:24px; background:#0a2f52; box-shadow:inset 0 0 0 2px #04203a; }
+  .desk.leeg{ opacity:.72; }
   .desk.agent{ cursor:pointer; }
   .desk.agent .screen{ background:var(--accent); animation:blink 1.6s steps(2,end) infinite; }
   @keyframes blink{ 50%{ background:#a86400; } }
-  .desk.agent:hover, .desk.agent:focus{ outline:none; box-shadow:6px 6px 0 var(--accent);
-    transform:translate(-1px,-1px); }
-  .sprite{ font-size:1.6rem; line-height:1; margin-bottom:.35rem; }
-  .plate{ background:var(--ink); color:var(--cream); font-size:.7rem; letter-spacing:1px;
-    padding:.25rem .5rem; border:2px solid #000; width:100%; }
-  .badge{ position:absolute; top:.4rem; right:.4rem; font-size:.6rem; background:var(--accent);
-    color:#111; padding:.1rem .35rem; border:2px solid var(--ink); }
+  .desk.agent:hover, .desk.agent:focus{ outline:none; box-shadow:5px 5px 0 var(--accent); }
+  .sprite{ font-size:1.3rem; line-height:1; margin-bottom:.25rem; }
+  .plate{ background:var(--ink); color:var(--cream); font-size:.6rem; letter-spacing:1px;
+    padding:.2rem .4rem; border:2px solid #000; width:100%; }
+  .badge{ position:absolute; top:.25rem; right:.25rem; font-size:.5rem; background:var(--accent);
+    color:#111; padding:.05rem .3rem; border:2px solid var(--ink); }
+  .bank2{ width:70px; height:22px; background:var(--mosterd); border:2px solid var(--ink);
+    box-shadow:inset 0 6px 0 #00000022; }
+  .prop{ font-size:1.5rem; }
 
-  /* Betonvloer-strip met bank, plant, hondenmand en de kantoorhond */
-  .vloerstrip{ position:relative; height:70px; background:#6f6f6f;
-    background-image:repeating-linear-gradient(90deg,#00000018 0 2px,#0000 2px 40px);
-    border-top:3px solid var(--ink); }
-  .bank{ position:absolute; bottom:8px; left:14px; width:74px; height:26px;
-    background:var(--mosterd); border:2px solid var(--ink); box-shadow:inset 0 6px 0 #00000022; }
-  .plant-vloer{ position:absolute; bottom:8px; right:96px; font-size:1.4rem; }
-  .mand{ position:absolute; bottom:6px; right:16px; width:52px; height:16px;
-    background:var(--honddonker); border:2px solid var(--ink); border-radius:3px; }
-  .hond{ position:absolute; bottom:16px; left:20px; width:34px; height:22px;
-    transition:left 3s linear; z-index:2; }
-  .hond .lijf{ position:absolute; bottom:4px; left:4px; width:24px; height:11px;
-    background:var(--hond); border:2px solid var(--ink); }
-  .hond .kop{ position:absolute; bottom:6px; left:24px; width:11px; height:11px;
-    background:var(--hond); border:2px solid var(--ink); }
-  .hond .oor{ position:absolute; bottom:13px; left:26px; width:5px; height:6px;
-    background:var(--honddonker); border:2px solid var(--ink); }
-  .hond .staart{ position:absolute; bottom:9px; left:0; width:7px; height:4px;
-    background:var(--hond); border:2px solid var(--ink); }
-  .hond .poot{ position:absolute; bottom:0; width:4px; height:6px; background:var(--honddonker);
-    border:2px solid var(--ink); }
+  /* hondenmand plat op de vloer + de kantoorhond als billboard */
+  .mand{ position:absolute; width:46px; height:30px; background:var(--honddonker);
+    border:2px solid var(--ink); border-radius:4px; }
+  .hond{ position:absolute; width:34px; height:22px; z-index:5;
+    transform:rotateZ(45deg) rotateX(-55deg); transform-origin:bottom center;
+    transition:left 2.6s linear, top 2.6s linear; }
+  .hond.links{ transform:rotateZ(45deg) rotateX(-55deg) scaleX(-1); }
+  .hond .lijf{ position:absolute; bottom:4px; left:4px; width:24px; height:11px; background:var(--hond); border:2px solid var(--ink); }
+  .hond .kop{ position:absolute; bottom:6px; left:24px; width:11px; height:11px; background:var(--hond); border:2px solid var(--ink); }
+  .hond .oor{ position:absolute; bottom:13px; left:26px; width:5px; height:6px; background:var(--honddonker); border:2px solid var(--ink); }
+  .hond .staart{ position:absolute; bottom:9px; left:0; width:7px; height:4px; background:var(--hond); border:2px solid var(--ink); }
+  .hond .poot{ position:absolute; bottom:0; width:4px; height:6px; background:var(--honddonker); border:2px solid var(--ink); }
   .hond .p1{ left:6px; } .hond .p2{ left:20px; }
-  .hond.links{ transform:scaleX(-1); }
-  .hond.loopt{ animation:hondbob .4s steps(2,end) infinite; }
+  .hond.loopt .lijf{ animation:hondbob .4s steps(2,end) infinite; }
   @keyframes hondbob{ 50%{ transform:translateY(-2px); } }
-  .hond.links.loopt{ animation:hondbobL .4s steps(2,end) infinite; }
-  @keyframes hondbobL{ 50%{ transform:scaleX(-1) translateY(-2px); } }
-  .hond.ligt{ bottom:8px; }
   .hond.ligt .poot, .hond.ligt .staart{ display:none; }
-  .hond.ligt .kop{ bottom:2px; } .hond.ligt .oor{ bottom:9px; }
-  .hond.ligt .lijf{ height:8px; width:26px; }
+  .hond.ligt .lijf{ height:8px; }
   @media (prefers-reduced-motion: reduce){
-    .hond{ transition:none; animation:none !important; }
+    .hond{ transition:none; }
+    .hond.loopt .lijf{ animation:none; }
     .desk.agent .screen{ animation:none; }
   }
-
   .ondertitel{ text-align:center; font-size:.7rem; letter-spacing:2px; color:var(--mosterd);
-    padding:.5rem; background:var(--ink); text-transform:uppercase; }
-  .hint{ text-align:center; font-size:.75rem; color:#c9c6bd; margin-top:1rem; }
+    padding:.4rem; background:var(--ink); text-transform:uppercase; }
+  .hint{ text-align:center; font-size:.75rem; color:#c9c6bd; margin-top:.6rem; }
 
   /* chat */
   .overlay{ display:none; position:fixed; inset:0; background:#0a0b1299;
@@ -494,36 +484,38 @@ const OFFICE_HTML = `<!doctype html>
     padding:.35rem .6rem; border-bottom:2px solid var(--ink); }
   .card .body{ padding:.5rem .7rem; font-size:.88rem; line-height:1.4; white-space:pre-wrap; word-break:break-word; }
   .card .body ul{ margin:.2rem 0; padding-left:1.1rem; }
-  @media (max-width:640px){ .floor{ grid-template-columns:1fr; } h1.titel{ font-size:1.5rem; } }
+  @media (max-width:640px){ .kamer{ transform:scale(.66); transform-origin:top center; }
+    .stage{ height:280px; } h1.titel{ font-size:1.5rem; } }
 </style>
 </head><body>
 <div class="wrap">
   <h1 class="titel">Dirk Digitaal<small>Verwarrend duidelijk</small></h1>
   <div class="office" role="group" aria-label="Kantoor">
-    <div class="muur">
-      <div class="lampen" aria-hidden="true"><span class="lamp"></span><span class="lamp"></span><span class="lamp"></span></div>
-      <div class="graffiti"><span class="o">CREATIVITY NEVER DIES</span> &middot; <span class="b">DREAM BIG</span> &middot; <span class="o">NO PAIN NO GAIN</span></div>
-      <div class="hexwand" aria-hidden="true"><span class="hex o"></span><span class="hex"></span><span class="hex b"></span><span class="hex"></span><span class="hex o"></span></div>
-      <div class="plant-muur" aria-hidden="true">&#127807;</div>
-    </div>
-    <div class="binnen">
-      <div class="floor">
-        <div class="desk agent" id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent">
-          <span class="badge">online</span>
-          <div class="sprite">&#129302;</div>
-          <div class="monitor"><div class="screen"></div></div>
-          <div class="plate">GSC-agent</div>
+    <div class="stage">
+      <div class="kamer">
+        <div class="iso">
+          <div class="vloer"></div>
+          <div class="wand wand-l">
+            <div class="lampen" aria-hidden="true"><span class="lamp"></span><span class="lamp"></span><span class="lamp"></span></div>
+            <div class="graffiti"><span class="o">CREATIVITY NEVER DIES</span><br><span class="b">DREAM BIG</span> &middot; <span class="o">NO PAIN NO GAIN</span></div>
+            <div class="hexwand" aria-hidden="true"><span class="hex o"></span><span class="hex"></span><span class="hex b"></span><span class="hex"></span><span class="hex o"></span></div>
+          </div>
+          <div class="wand wand-r"><div class="plant-muur" aria-hidden="true">&#127807;</div></div>
+          <div class="mand" style="left:246px;top:250px" aria-hidden="true"></div>
+          <div class="op prop" style="left:250px;top:40px" aria-hidden="true">&#127793;</div>
+          <div class="op" style="left:40px;top:250px" aria-hidden="true"><div class="bank2"></div></div>
+          <div class="op desk agent" id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent" style="left:18px;top:20px">
+            <span class="badge">online</span>
+            <div class="sprite">&#129302;</div>
+            <div class="monitor"><div class="screen"></div></div>
+            <div class="plate">GSC-agent</div>
+          </div>
+          <div class="op desk leeg" style="left:196px;top:14px"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
+          <div class="op desk leeg" style="left:16px;top:150px"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
+          <div class="op desk leeg" style="left:196px;top:150px"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
+          <div class="hond" id="hond" style="left:120px;top:150px"><span class="staart"></span><span class="lijf"></span><span class="poot p1"></span><span class="poot p2"></span><span class="kop"></span><span class="oor"></span></div>
         </div>
-        <div class="desk leeg"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
-        <div class="desk leeg"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
-        <div class="desk leeg"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
       </div>
-    </div>
-    <div class="vloerstrip" aria-hidden="true">
-      <div class="bank"></div>
-      <div class="plant-vloer">&#127793;</div>
-      <div class="mand"></div>
-      <div class="hond" id="hond"><span class="staart"></span><span class="lijf"></span><span class="poot p1"></span><span class="poot p2"></span><span class="kop"></span><span class="oor"></span></div>
     </div>
     <div class="ondertitel">Dirk Doet &mdash; Verwarrend duidelijk</div>
   </div>
@@ -661,21 +653,23 @@ const OFFICE_HTML = `<!doctype html>
 // Respecteert prefers-reduced-motion: dan ligt de hond stil in de mand (AC-5).
 (function(){
   var hond=document.getElementById('hond'); if(!hond) return;
-  var strip=hond.parentElement;
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  function w(){ return Math.max(120, (strip.clientWidth||300) - 50); }
-  function place(x){ hond.style.left = x + 'px'; }
-  function faceDir(from,to){ if(to<from) hond.classList.add('links'); else hond.classList.remove('links'); }
-  if(reduce){ hond.classList.add('ligt'); place(w()-10); return; }
-  var x=20; place(x);
-  function walkTo(tx, cb){ faceDir(x,tx); hond.classList.remove('ligt'); hond.classList.add('loopt');
-    x=tx; place(tx); setTimeout(function(){ hond.classList.remove('loopt'); if(cb) cb(); }, 3000); }
+  // Vloercoördinaten (binnen de 340x340 iso-vloer). Mand ligt rechtsvoor.
+  var MIN=30, MAX=300, BED={x:246,y:250};
+  var x=120, y=150;
+  function place(px,py){ hond.style.left=px+'px'; hond.style.top=py+'px'; }
+  function faceDir(fx,tx){ if(tx<fx) hond.classList.add('links'); else hond.classList.remove('links'); }
+  place(x,y);
+  if(reduce){ hond.classList.add('ligt'); place(BED.x,BED.y); return; }
+  function walkTo(tx,ty,cb){ faceDir(x,tx); hond.classList.remove('ligt'); hond.classList.add('loopt');
+    x=tx; y=ty; place(tx,ty); setTimeout(function(){ hond.classList.remove('loopt'); if(cb) cb(); }, 2600); }
   function lie(cb){ hond.classList.add('ligt'); setTimeout(function(){ hond.classList.remove('ligt'); if(cb) cb(); }, 4000); }
+  function rnd(){ return Math.floor(Math.random()*(MAX-MIN))+MIN; }
   function loop(){
-    if(Math.random()<0.4){ walkTo(w()-10, function(){ lie(function(){ setTimeout(loop, 600); }); }); }
-    else { var tx=Math.floor(Math.random()*(w()-60))+20; walkTo(tx, function(){ setTimeout(loop, 1200+Math.random()*2200); }); }
+    if(Math.random()<0.4){ walkTo(BED.x,BED.y,function(){ lie(function(){ setTimeout(loop,600); }); }); }
+    else { walkTo(rnd(),rnd(),function(){ setTimeout(loop,1000+Math.random()*2200); }); }
   }
-  setTimeout(loop, 1500);
+  setTimeout(loop,1500);
 })();
 </script>
 </body></html>`;
