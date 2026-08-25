@@ -17,12 +17,12 @@ bouwen op deze endpoints.
 | `GET /oauth/callback` | Wisselt de code om voor een access token, maakt de sessie, zet een `httpOnly`-cookie. |
 | `GET /api/gsc/sites` | JSON met je GSC-sites. |
 | `GET /api/gsc/performance?site=<url>&days=<n>` | Top zoekwoorden + top pagina's met clicks/impressies/CTR/positie. |
-| `POST /api/chat` | GSC-analist-agent (Claude, streaming SSE). Lege/eerste call → automatische eerste analyse; daarna vervolgvragen. Body: `{ "message": "..." }`. |
+| `POST /api/chat` | GSC-analist-agent (Claude, streaming SSE). Body: `{ "site": "<url>" }` kiest/wisselt de site en levert de SEO-analyse; `{ "message": "..." }` is een vervolgvraag. Lege body: bij meerdere sites → `{ "needSite": true, "sites": [...] }`, bij één site → automatische analyse. |
 | `GET /api/disconnect` | Revoket het token bij Google én vernietigt de sessie. |
 
 Niet-gekoppeld → de `/api/gsc/*`- en `/api/chat`-routes geven een nette JSON-fout (HTTP 401).
 
-De agent (`/api/chat`) is Nederlands + jij-vorm, gegrond in de GSC-data van de sessie (Claude, model `claude-opus-5`). Chatgeschiedenis + geladen data leven in de Durable Object en zijn session-only (weg bij disconnect of na 30 min inactiviteit).
+De agent (`/api/chat`) is Nederlands + jij-vorm, gegrond in de GSC-data van de gekozen site (Claude, model `claude-sonnet-5`). De eerste analyse is een SEO-overzicht (samenvatting, sterke pagina's, kansen, trend t.o.v. de vorige 28 dagen) met vaste `## `-secties die de frontend als kaarten toont. Chatgeschiedenis + geladen data leven in de Durable Object en zijn session-only (weg bij disconnect of na 30 min inactiviteit).
 
 ## Ephemeer ontwerp
 
