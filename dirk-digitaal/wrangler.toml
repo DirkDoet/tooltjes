@@ -1,0 +1,16 @@
+name = "dirk-digitaal"
+main = "src/index.js"
+compatibility_date = "2026-08-25"
+
+# Durable Object voor de ephemere sessie (token + laatste-activiteit).
+[[durable_objects.bindings]]
+name = "SESSIONS"
+class_name = "SessionDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["SessionDO"]
+
+# Secrets (NIET hier invullen — via `wrangler secret put`):
+#   wrangler secret put GOOGLE_CLIENT_ID
+#   wrangler secret put GOOGLE_CLIENT_SECRET
