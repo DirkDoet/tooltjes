@@ -11,7 +11,13 @@
  * De pure helpers onderaan worden geëxporteerd voor unit-tests.
  */
 
-const SCOPE = "https://www.googleapis.com/auth/webmasters.readonly";
+// Eén Google-koppeling dekt zowel GSC (Albert) als GA4 (Gertjan): beide read-only
+// scopes worden samen aangevraagd (DIR-28, AC-1).
+const SCOPES = [
+  "https://www.googleapis.com/auth/webmasters.readonly",
+  "https://www.googleapis.com/auth/analytics.readonly",
+];
+const SCOPE = SCOPES.join(" ");
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 min inactiviteit
 const COOKIE = "dd_session";
 const STATE_COOKIE = "dd_oauth_state";
@@ -20,6 +26,8 @@ const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke";
 const GSC_BASE = "https://searchconsole.googleapis.com/webmasters/v3";
+const GA4_ADMIN_BASE = "https://analyticsadmin.googleapis.com/v1beta";
+const GA4_DATA_BASE = "https://analyticsdata.googleapis.com/v1beta";
 
 // ---------------------------------------------------------------- helpers ---
 
@@ -103,6 +111,120 @@ export function computeTrend(current, previous) {
     clicksPct: pct(c.clicks || 0, p.clicks || 0),
     impressionsPct: pct(c.impressions || 0, p.impressions || 0),
   };
+}
+
+// ---------------------------------------------------- GA4 (Gertjan, DIR-28) ---
+
+const GA4_METRICS = ["activeUsers", "sessions", "screenPageViews", "conversions"];
+const GA4_DIMENSIONS = ["pagePath", "sessionDefaultChannelGroup", "country", "deviceCategory", "date"];
+
+// Property-id normaliseren: "properties/123" of "123" → "123".
+export function ga4PropertyId(property) {
+  return String(property || "").replace(/^properties\//, "").trim();
+}
+
+// GA4 runReport-body uit tool-argumenten, met verstandige limieten (AC-3).
+export function buildGa4ReportBody(args, now) {
+  const a = args || {};
+  const days = clamp(a.days, 1, 365, 28);
+  const { startDate, endDate } = dateRange(days, now);
+  const dim = GA4_DIMENSIONS.includes(a.dimension) ? a.dimension : "pagePath";
+  const metric = GA4_METRICS.includes(a.metric) ? a.metric : "sessions";
+  const body = {
+    dateRanges: [{ startDate, endDate }],
+    dimensions: [{ name: dim }],
+    metrics: [{ name: metric }],
+    limit: clamp(a.row_limit, 1, 25, 10),
+  };
+  if (a.filter_value) {
+    body.dimensionFilter = {
+      filter: { fieldName: dim, stringFilter: { matchType: "CONTAINS", value: String(a.filter_value), caseSensitive: false } },
+    };
+  }
+  return body;
+}
+
+// Tool waarmee Gertjan tijdens het gesprek gericht GA4-cijfers ophaalt (AC-4).
+export function ga4Tool() {
+  return {
+    name: "ga4_report",
+    description:
+      "Haal live Google Analytics 4-cijfers op voor de gekozen property. Gebruik dit bij een " +
+      "vraag over specifiek verkeer (pagina's, kanalen, land, apparaat of over tijd) die niet in " +
+      "het beginoverzicht staat. Kies één metric en één dimensie; optioneel filteren (bevat-match).",
+    input_schema: {
+      type: "object",
+      properties: {
+        metric: { type: "string", enum: GA4_METRICS, description: "Maatstaf: gebruikers/sessies/paginaweergaven/conversies." },
+        dimension: { type: "string", enum: GA4_DIMENSIONS, description: "Groeperen op pagina, kanaal, land, apparaat of datum." },
+        days: { type: "integer", description: "Aantal dagen terug (default 28, max 365)." },
+        filter_value: { type: "string", description: "Optioneel: bevat-match op de dimensie." },
+        row_limit: { type: "integer", description: "Max rijen (default 10, max 25)." },
+      },
+      required: ["metric", "dimension"],
+    },
+  };
+}
+
+// runReport-rijen met één dimensie + één metric → compact formaat.
+export function shapeGa4Rows(rows, dimName) {
+  return (rows || []).map((r) => ({
+    [dimName]: (r.dimensionValues && r.dimensionValues[0] && r.dimensionValues[0].value) || "",
+    waarde: Number((r.metricValues && r.metricValues[0] && r.metricValues[0].value) || 0),
+  }));
+}
+
+// Totalen uit een runReport zonder dimensie (meerdere metrics) → { metricName: getal }.
+export function shapeGa4Totals(report) {
+  const row = (report && report.rows && report.rows[0]) || {};
+  const vals = row.metricValues || [];
+  const headers = (report && report.metricHeaders) || [];
+  const out = {};
+  headers.forEach((h, i) => { out[h.name] = Number((vals[i] && vals[i].value) || 0); });
+  return out;
+}
+
+// Procentuele trend voor GA4 (gebruikers + sessies).
+export function computeGa4Trend(current, previous) {
+  const pct = (nu, was) => (!was ? (nu > 0 ? 100 : 0) : Math.round(((nu - was) / was) * 100));
+  const c = current || {}, p = previous || {};
+  return {
+    activeUsersPct: pct(c.activeUsers || 0, p.activeUsers || 0),
+    sessionsPct: pct(c.sessions || 0, p.sessions || 0),
+  };
+}
+
+const GA4_ANALYSIS_PROMPT =
+  "Maak een GA4-verkeersanalyse van de gekozen property op basis van de data. Gebruik EXACT deze " +
+  "vijf secties, elk met een '## '-kop en '- ' voor opsommingen:\n" +
+  "## Samenvatting\nKort (2-3 zinnen) hoe het verkeer eruitziet.\n" +
+  "## Verkeer & trend\nGebruikers, sessies en paginaweergaven van deze periode vs. de vorige periode (met percentages uit de data).\n" +
+  "## Top pagina's\nDe best bezochte pagina's, met cijfers.\n" +
+  "## Kanalen\nWaar het verkeer vandaan komt (kanaalgroepen), met cijfers.\n" +
+  "## Opvallend\nWat springt eruit of verdient aandacht (sterke stijging/daling, opvallend kanaal).\n" +
+  "Sluit af met een korte vraag waar ik op wil inzoomen. Schrijf in het Nederlands, jij-vorm.";
+
+export function ga4FirstAnalysisPrompt() {
+  return GA4_ANALYSIS_PROMPT;
+}
+
+// Systeemprompt: Gertjan, GA4-data-specialist, NL jij-vorm, gegrond in de sessie-data (AC-4).
+export function buildGa4SystemPrompt(ga4) {
+  const data = ga4 ? JSON.stringify(ga4, null, 2) : "(nog geen data geladen)";
+  return [
+    "Je bent Gertjan, de GA4-data-specialist van Dirk Digitaal: scherp en behulpzaam.",
+    "Schrijf altijd in het Nederlands en in de jij-vorm. Antwoord HELDER: korte zinnen,",
+    "concrete cijfers, geen jargon-brei. Verwijs naar echte pagina's, kanalen en getallen.",
+    "Geef bruikbare, prioriteerbare inzichten; verzin geen data.",
+    "",
+    "Je hebt een tool `ga4_report` om LIVE specifieke Google Analytics 4-cijfers op te halen",
+    "(per pagina, kanaal, land, apparaat of datum, eventueel gefilterd). Gebruik die tool zodra de",
+    "vraag over data gaat die niet in het overzicht hieronder staat. Baseer je antwoord dan op de",
+    "opgehaalde cijfers, niet op een aanname. Lukt ophalen niet, zeg dat eerlijk.",
+    "",
+    "GA4-data van deze sessie (overzicht van de gekozen property):",
+    data,
+  ].join("\n");
 }
 
 // ------------------------------------------------------------------ agent ---
@@ -299,6 +421,37 @@ export class SessionDO {
       return json({ ok: true });
     }
 
+    // GA4/Gertjan-sessiestate (DIR-28): aparte keys (ga4, ga4messages) zodat de
+    // GSC/Albert-flow ongemoeid blijft. Elke aanraking vernieuwt activiteit + alarm.
+    if (url.pathname === "/chat/state-ga4") {
+      const data = await this.state.storage.get(["token", "lastActive", "ga4messages", "ga4"]);
+      const token = data.get("token");
+      if (!token || isExpired(data.get("lastActive"), now)) {
+        await this.state.storage.deleteAll();
+        await this.state.storage.deleteAlarm();
+        return json({ token: null }, 404);
+      }
+      await this.state.storage.put("lastActive", now);
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ token, messages: data.get("ga4messages") || [], ga4: data.get("ga4") || null });
+    }
+
+    if (url.pathname === "/chat/select-ga4") {
+      const { ga4 } = await request.json();
+      await this.state.storage.put({ ga4, ga4messages: [], lastActive: now });
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ ok: true });
+    }
+
+    if (url.pathname === "/chat/append-ga4") {
+      const { messages } = await request.json();
+      const bestaand = (await this.state.storage.get("ga4messages")) || [];
+      const nieuw = bestaand.concat(messages || []);
+      await this.state.storage.put({ ga4messages: nieuw, lastActive: now });
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ ok: true });
+    }
+
     if (url.pathname === "/destroy") {
       const token = await this.state.storage.get("token");
       await this.state.storage.deleteAll();
@@ -459,6 +612,94 @@ async function fetchGscQuery(token, site, args) {
   return { periode: { van: body.startDate, tot: body.endDate }, dimensie: sleutel, rijen: rows };
 }
 
+// ------------------------------------------------- GA4-fetchers (DIR-28) ---
+
+// GA4-properties van het account (Admin API accountSummaries) → [{property, displayName}].
+async function fetchGa4Properties(token) {
+  const resp = await fetch(GA4_ADMIN_BASE + "/accountSummaries?pageSize=200", {
+    headers: { Authorization: "Bearer " + token },
+  });
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  const uit = [];
+  for (const acc of data.accountSummaries || []) {
+    for (const ps of acc.propertySummaries || []) {
+      uit.push({ property: ps.property, displayName: ps.displayName || ps.property });
+    }
+  }
+  return uit;
+}
+
+// Eén runReport uitvoeren (Data API) voor een property + body → JSON of null.
+async function runGa4Report(token, property, body) {
+  const pid = ga4PropertyId(property);
+  if (!pid) return null;
+  const resp = await fetch(GA4_DATA_BASE + "/properties/" + pid + ":runReport", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+// Tool-call: één metric + één dimensie live ophalen voor de gekozen property.
+async function fetchGa4Query(token, property, args) {
+  if (!property) return { error: "Geen property gekozen." };
+  const body = buildGa4ReportBody(args, Date.now());
+  const report = await runGa4Report(token, property, body);
+  if (!report) return { error: "Kon deze GA4-data niet ophalen bij Google." };
+  const dim = body.dimensions[0].name;
+  return {
+    periode: { van: body.dateRanges[0].startDate, tot: body.dateRanges[0].endDate },
+    dimensie: dim,
+    metric: body.metrics[0].name,
+    rijen: shapeGa4Rows(report.rows, dim),
+  };
+}
+
+// Totalen (users/sessies/pageviews/conversies) voor een periode, zonder dimensie.
+async function fetchGa4Totals(token, property, startDate, endDate) {
+  const report = await runGa4Report(token, property, {
+    dateRanges: [{ startDate, endDate }],
+    metrics: GA4_METRICS.map((name) => ({ name })),
+  });
+  if (!report) return null;
+  return shapeGa4Totals(report);
+}
+
+// Volledige eerste-analyse-data voor één property: totalen deze + vorige 28 dagen
+// (met trend), top pagina's en top kanalen (AC-5).
+async function fetchGa4Overview(token, property) {
+  const now = Date.now();
+  const cur = dateRange("28", now);
+  const prev = previousDateRange("28", now);
+  const [curTot, prevTot, pagesRep, chanRep] = await Promise.all([
+    fetchGa4Totals(token, property, cur.startDate, cur.endDate),
+    fetchGa4Totals(token, property, prev.startDate, prev.endDate),
+    runGa4Report(token, property, {
+      dateRanges: [{ startDate: cur.startDate, endDate: cur.endDate }],
+      dimensions: [{ name: "pagePath" }], metrics: [{ name: "screenPageViews" }],
+      limit: 10, orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }],
+    }),
+    runGa4Report(token, property, {
+      dateRanges: [{ startDate: cur.startDate, endDate: cur.endDate }],
+      dimensions: [{ name: "sessionDefaultChannelGroup" }], metrics: [{ name: "sessions" }],
+      limit: 10, orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+    }),
+  ]);
+  if (!curTot || !prevTot) return null;
+  return {
+    periode: { van: cur.startDate, tot: cur.endDate },
+    vorige_periode: { van: prev.startDate, tot: prev.endDate },
+    totalen: curTot,
+    vorige_totalen: prevTot,
+    trend: computeGa4Trend(curTot, prevTot),
+    top_paginas: shapeGa4Rows(pagesRep && pagesRep.rows, "pagePath"),
+    kanalen: shapeGa4Rows(chanRep && chanRep.rows, "kanaal"),
+  };
+}
+
 // Splitst een assistant-response in tekst + tool_use-blokken.
 export function parseAssistant(content) {
   let text = "";
@@ -470,7 +711,7 @@ export function parseAssistant(content) {
   return { text: text.trim(), toolUses };
 }
 
-async function callAnthropic(env, system, messages) {
+async function callAnthropic(env, system, messages, tools) {
   const resp = await fetch(ANTHROPIC_ENDPOINT, {
     method: "POST",
     headers: {
@@ -483,7 +724,7 @@ async function callAnthropic(env, system, messages) {
       max_tokens: CHAT_MAX_TOKENS,
       system,
       messages,
-      tools: [gscTool()],
+      tools: tools || [gscTool()],
     }),
   });
   if (!resp.ok) return null;
@@ -1176,7 +1417,7 @@ async function handleChat(request, env, ctx) {
   let finalText = "";
   try {
     for (let i = 0; i < 5; i++) {
-      const resp = await callAnthropic(env, system, convo);
+      const resp = await callAnthropic(env, system, convo, [gscTool()]);
       if (!resp || !resp.content) {
         return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
       }
@@ -1203,6 +1444,102 @@ async function handleChat(request, env, ctx) {
 
   ctx.waitUntil(
     stub.fetch("https://do/chat/append", {
+      method: "POST",
+      body: JSON.stringify({ messages: [{ role: "user", content: storedUser }, { role: "assistant", content: finalText }] }),
+    }).catch(() => {})
+  );
+
+  return sseResponse(finalText);
+}
+
+// GA4-property kiezen: overzicht laden + in de sessie zetten (ga4-historie schoon).
+async function selectGa4Property(stub, token, property, alleProps) {
+  const overview = await fetchGa4Overview(token, property);
+  if (!overview) return null;
+  const ga4 = { properties: alleProps, actief: property, ...overview };
+  await stub.fetch("https://do/chat/select-ga4", { method: "POST", body: JSON.stringify({ ga4 }) });
+  return ga4;
+}
+
+// Gertjan-chat (GA4). Zelfde vorm als handleChat, maar met GA4-state/tool/persona.
+async function handleGa4Chat(request, env, ctx) {
+  if (!env.ANTHROPIC_API_KEY) {
+    return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
+  }
+  const cookies = parseCookies(request.headers.get("Cookie"));
+  const id = cookies[COOKIE];
+  if (!id) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account." }, 401);
+
+  const stub = sessionStub(env, id);
+  const stateResp = await stub.fetch("https://do/chat/state-ga4");
+  if (!stateResp.ok) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account." }, 401);
+  let { token, messages: history, ga4 } = await stateResp.json();
+
+  let body = {};
+  try { body = await request.json(); } catch (e) { /* lege body toegestaan */ }
+  const wantProp = (body && typeof body.property === "string") ? body.property.trim() : "";
+  let userText = (body && typeof body.message === "string") ? body.message.trim() : "";
+
+  let promptText;
+  let storedUser = userText;
+
+  if (wantProp) {
+    const props = await fetchGa4Properties(token);
+    if (!props || !props.length) return json({ error: "Geen GA4-properties gevonden in je account." }, 502);
+    if (!props.some((p) => p.property === wantProp)) return json({ error: "Die property staat niet in je account." }, 400);
+    ga4 = await selectGa4Property(stub, token, wantProp, props);
+    if (!ga4) return json({ error: "Kon de GA4-cijfers van die property niet laden." }, 502);
+    history = [];
+    promptText = GA4_ANALYSIS_PROMPT;
+    storedUser = "[Analyse van " + wantProp + "]";
+  } else if (!ga4) {
+    const props = await fetchGa4Properties(token);
+    if (!props || !props.length) return json({ error: "Geen GA4-properties gevonden in je account." }, 502);
+    if (props.length > 1) return json({ needProperty: true, properties: props });
+    ga4 = await selectGa4Property(stub, token, props[0].property, props);
+    if (!ga4) return json({ error: "Kon de GA4-cijfers van je property niet laden." }, 502);
+    history = [];
+    promptText = GA4_ANALYSIS_PROMPT;
+    storedUser = "[Analyse van " + props[0].property + "]";
+  } else {
+    if (!userText) return json({ error: "Stel een vraag over je GA4-cijfers." }, 400);
+    promptText = userText;
+  }
+
+  const system = buildGa4SystemPrompt(ga4);
+  const property = ga4 && ga4.actief;
+  const convo = buildAnthropicMessages(history, promptText);
+
+  let finalText = "";
+  try {
+    for (let i = 0; i < 5; i++) {
+      const resp = await callAnthropic(env, system, convo, [ga4Tool()]);
+      if (!resp || !resp.content) {
+        return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+      }
+      const parsed = parseAssistant(resp.content);
+      if (resp.stop_reason === "tool_use" && parsed.toolUses.length) {
+        convo.push({ role: "assistant", content: resp.content });
+        const resultaten = [];
+        for (const tu of parsed.toolUses) {
+          let out;
+          try { out = await fetchGa4Query(token, property, tu.input); }
+          catch (e) { out = { error: "kon deze data niet ophalen" }; }
+          resultaten.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out) });
+        }
+        convo.push({ role: "user", content: resultaten });
+        continue;
+      }
+      finalText = parsed.text;
+      break;
+    }
+  } catch (e) {
+    return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
+  }
+  if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
+
+  ctx.waitUntil(
+    stub.fetch("https://do/chat/append-ga4", {
       method: "POST",
       body: JSON.stringify({ messages: [{ role: "user", content: storedUser }, { role: "assistant", content: finalText }] }),
     }).catch(() => {})
@@ -1320,6 +1657,37 @@ export default {
     // AC-1..AC-6 — GSC-agent: streaming chat gegrond in de sessie-data.
     if (path === "/api/chat" && request.method === "POST") {
       return handleChat(request, env, ctx);
+    }
+
+    // DIR-28 — GA4/Gertjan: properties oplijsten (AC-2).
+    if (path === "/api/ga4/properties") {
+      const token = await huidigeToken(request, env);
+      if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
+      const props = await fetchGa4Properties(token);
+      if (!props) return json({ error: "Kon je GA4-properties niet ophalen bij Google." }, 502);
+      return json({ properties: props });
+    }
+
+    // DIR-28 — GA4-rapport draaien voor een property (AC-3).
+    if (path === "/api/ga4/report") {
+      const token = await huidigeToken(request, env);
+      if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
+      const property = url.searchParams.get("property");
+      if (!property) return json({ error: "Geef een property op via ?property=properties/<id>." }, 400);
+      const out = await fetchGa4Query(token, property, {
+        metric: url.searchParams.get("metric"),
+        dimension: url.searchParams.get("dimension"),
+        days: url.searchParams.get("days"),
+        filter_value: url.searchParams.get("filter_value"),
+        row_limit: url.searchParams.get("row_limit"),
+      });
+      if (out && out.error) return json(out, 502);
+      return json(out);
+    }
+
+    // DIR-28 — Gertjan-agent (GA4): streaming chat met live tool-use (AC-4/AC-5).
+    if (path === "/api/ga4/chat" && request.method === "POST") {
+      return handleGa4Chat(request, env, ctx);
     }
 
     return json({ error: "Onbekende route." }, 404);
