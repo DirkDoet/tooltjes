@@ -547,6 +547,10 @@ const OFFICE_HTML = `<!doctype html>
     93%{left:5%;bottom:6%;transform:scaleX(1)}
     100%{left:5%;bottom:6%;transform:scaleX(1)}}
   @keyframes dd-modal-in{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
+  /* Albert idle "aan het werk" (DIR-25) */
+  @keyframes dd-type-l{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+  @keyframes dd-type-r{0%,100%{transform:translateY(-2px)}50%{transform:translateY(0)}}
+  @keyframes dd-albert-idle{0%,58%,100%{transform:translateY(0)}28%{transform:translateY(-1px)}70%,82%{transform:translate(1.5px,0)}}
   .scene-wrap{ position:relative; width:min(100vw,177.78vh); aspect-ratio:16/9; max-height:100vh; }
   #agent-desk{ cursor:pointer; transition:filter .12s; }
   #agent-desk:hover, #agent-desk:focus{ outline:none;
@@ -743,7 +747,9 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="146" y="220" width="150" height="126" fill="#000" opacity="0"/>
         <rect x="196" y="256" width="42" height="46" fill="#111"/>
         <rect x="200" y="260" width="34" height="30" fill="#1c1c1c"/>
-        <use href="#albert" x="186" y="238" width="64" height="77"/>
+        <g style="transform-origin:218px 300px;animation:dd-albert-idle 5.5s ease-in-out infinite">
+          <use href="#albert" x="186" y="238" width="64" height="77"/>
+        </g>
         <rect x="150" y="304" width="132" height="10" fill="#2b2b2b"/>
         <rect x="150" y="314" width="132" height="34" fill="#141414"/>
         <rect x="156" y="314" width="5" height="34" fill="#0c0c0c"/>
@@ -755,6 +761,15 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="252" y="288" width="20" height="2" fill="#c97400"/>
         <rect x="252" y="292" width="10" height="2" fill="#F18E02"/>
         <rect x="176" y="306" width="46" height="5" fill="#333"/>
+        <!-- typende handen/armen (DIR-25) -->
+        <g style="transform-origin:210px 303px;animation:dd-type-l .5s steps(2) infinite">
+          <rect x="205" y="293" width="6" height="9" fill="#e58fa8"/>
+          <rect x="204" y="300" width="9" height="6" fill="#e8b98a"/>
+        </g>
+        <g style="transform-origin:227px 303px;animation:dd-type-r .5s steps(2) infinite">
+          <rect x="226" y="293" width="6" height="9" fill="#e58fa8"/>
+          <rect x="223" y="300" width="9" height="6" fill="#e8b98a"/>
+        </g>
         <rect x="146" y="204" width="122" height="32" fill="#0b1219"/>
         <rect x="146" y="204" width="122" height="32" fill="none" stroke="#F18E02" stroke-width="1.5"/>
         <circle cx="158" cy="216" r="4" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
