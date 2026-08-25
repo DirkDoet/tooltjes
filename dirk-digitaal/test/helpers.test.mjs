@@ -9,7 +9,7 @@ import {
   buildSystemPrompt,
   buildAnthropicMessages,
   extractTextFromSSE,
-  FIRST_ANALYSIS_PROMPT,
+  firstAnalysisPrompt,
 } from "../src/index.js";
 
 test("buildGoogleAuthUrl: read-only scope + online (geen refresh-token)", () => {
@@ -70,9 +70,9 @@ test("buildAnthropicMessages: historie + nieuwe vraag", () => {
   assert.equal(buildAnthropicMessages(null, "x").length, 1);
 });
 
-test("FIRST_ANALYSIS_PROMPT vraagt om eerste analyse + inzoom-vraag", () => {
-  assert.match(FIRST_ANALYSIS_PROMPT, /eerste analyse/i);
-  assert.match(FIRST_ANALYSIS_PROMPT, /inzoomen/i);
+test("firstAnalysisPrompt vraagt om eerste analyse + inzoom-vraag", () => {
+  assert.match(firstAnalysisPrompt(), /eerste analyse/i);
+  assert.match(firstAnalysisPrompt(), /inzoomen/i);
 });
 
 test("extractTextFromSSE: plakt content_block_delta tekst aan elkaar", () => {

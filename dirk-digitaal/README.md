@@ -12,7 +12,7 @@ bouwen op deze endpoints.
 
 | Route | Doel |
 |-------|------|
-| `GET /` | Placeholder-startpagina met "Koppel Search Console"-knop (vervangen in DIR-14). |
+| `GET /` | Het 2D retro-kantoor: 4 bureaus (1 = GSC-agent), klik → chat in het midden (koppelen, analyse, vrij chatten). |
 | `GET /oauth/start` | Stuurt door naar Google's toestemmingsscherm (scope `webmasters.readonly`). |
 | `GET /oauth/callback` | Wisselt de code om voor een access token, maakt de sessie, zet een `httpOnly`-cookie. |
 | `GET /api/gsc/sites` | JSON met je GSC-sites. |
