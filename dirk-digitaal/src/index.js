@@ -571,6 +571,14 @@ const OFFICE_HTML = `<!doctype html>
     word-break:break-word; font-size:.9rem; line-height:1.35; }
   .bubble.user{ align-self:flex-end; background:var(--teal2); color:#08211d; }
   .bubble.agent{ align-self:flex-start; background:#fff; }
+  /* typing-indicator (AC-1): pixel-puntjes die verschijnen/verdwijnen */
+  .typing{ display:inline-flex; gap:5px; align-items:center; padding:2px 1px; }
+  .typing i{ width:7px; height:7px; background:var(--accent); display:inline-block;
+    animation:dd-typing 1.3s ease-in-out infinite; }
+  .typing i:nth-child(2){ animation-delay:.2s; }
+  .typing i:nth-child(3){ animation-delay:.4s; }
+  @keyframes dd-typing{ 0%,80%,100%{ opacity:0; } 40%{ opacity:1; } }
+  @media (prefers-reduced-motion: reduce){ .typing i{ animation:none; opacity:1; } }
   .notice{ font-size:.72rem; color:#4a4e6d; padding:.4rem .7rem; background:#efe9db;
     border-top:2px solid var(--ink); }
   .notice.flash{ background:var(--teal2); color:#08211d; }
@@ -844,6 +852,7 @@ const OFFICE_HTML = `<!doctype html>
   function setActive(v){ composer.style.display=v?'flex':'none'; switchBtn.style.display=v?'inline-block':'none'; }
   function addBubble(who,text){ var b=document.createElement('div'); b.className='bubble '+who;
     b.textContent=text; msgs.appendChild(b); msgs.scrollTop=msgs.scrollHeight; return b; }
+  function setTyping(b){ b.innerHTML='<span class="typing" role="status" aria-label="Agent is aan het typen"><i></i><i></i><i></i></span>'; }
   function esc(s){ return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
 
   function connect(){ window.location.href='/oauth/start'; }
@@ -906,7 +915,7 @@ const OFFICE_HTML = `<!doctype html>
 
   async function streamChat(payload, dashboard){
     if(busy) return; busy=true; sendBtn.disabled=true;
-    var bubble=addBubble('agent', dashboard?'Ik maak je analyse...':'...'); var got='';
+    var bubble=addBubble('agent',''); setTyping(bubble); var got='';
     try{
       var r=await fetch('/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify(payload||{}) });
