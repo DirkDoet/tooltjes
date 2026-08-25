@@ -89,10 +89,17 @@ const ANTHROPIC_VERSION = "2023-06-01";
 const CHAT_MAX_TOKENS = 4096;
 
 // Vraag die de allereerste, automatische analyse uitlokt (AC-3).
-export const FIRST_ANALYSIS_PROMPT =
+// NB: een Cloudflare Worker-entrymodule mag alleen functies / handlers / Durable
+// Objects als named export hebben — een kale string-export wordt door de runtime
+// geweigerd. Daarom als functie geëxporteerd voor de tests.
+const FIRST_ANALYSIS_PROMPT =
   "Geef mij een eerste analyse van mijn Search Console-data: noem de opvallendste " +
   "zoekwoorden en pagina's, de grootste kansen en de aandachtspunten. Sluit af met " +
   "de vraag waar ik op wil inzoomen.";
+
+export function firstAnalysisPrompt() {
+  return FIRST_ANALYSIS_PROMPT;
+}
 
 // Systeemprompt: GSC-analist, Nederlands, jij-vorm, gegrond in de sessie-data
 // (aanpak uit de klant-analyse-skill: concreet, cijfermatig, actiegericht).
@@ -272,15 +279,183 @@ async function fetchGscPerformance(token, site, days) {
   return { site, startDate, endDate, ...shapePerformance(qData.rows, pData.rows) };
 }
 
-const PLACEHOLDER = `<!doctype html>
+const OFFICE_HTML = `<!doctype html>
 <html lang="nl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dirk Digitaal</title>
-<style>body{font-family:system-ui,sans-serif;max-width:34rem;margin:6rem auto;padding:0 1rem;color:#222}a.knop{display:inline-block;margin-top:1rem;background:#cc0000;color:#fff;padding:.6rem 1.1rem;border-radius:6px;text-decoration:none}</style>
+<style>
+  :root{ --navy:#1a1c2c; --panel:#3b3f5c; --teal:#257179; --teal2:#2a9d8f;
+    --cream:#f4f0e6; --ink:#12131f; --accent:#b13e53; --shadow:#000; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--navy); color:var(--cream);
+    font-family:"Courier New",ui-monospace,monospace; image-rendering:pixelated;
+    -webkit-font-smoothing:none; }
+  .wrap{ max-width:60rem; margin:0 auto; padding:1rem; }
+  h1.titel{ text-align:center; letter-spacing:2px; margin:.6rem 0 1rem;
+    font-size:2rem; text-transform:uppercase; color:var(--cream);
+    text-shadow:3px 3px 0 var(--accent); }
+  .titel small{ display:block; font-size:.7rem; letter-spacing:1px; color:#c9c6bd; margin-top:.3rem; text-shadow:none; }
+  .office{ background:var(--panel);
+    background-image:repeating-linear-gradient(0deg,#0000 0 22px,#00000022 22px 24px);
+    border:4px solid var(--ink); box-shadow:6px 6px 0 var(--shadow);
+    padding:1.2rem; }
+  .floor{ display:grid; grid-template-columns:repeat(2,1fr); gap:1rem; }
+  .desk{ background:#4a4e6d; border:3px solid var(--ink); box-shadow:4px 4px 0 var(--shadow);
+    padding:.9rem; text-align:center; position:relative; min-height:9rem;
+    display:flex; flex-direction:column; align-items:center; justify-content:flex-end; }
+  .monitor{ width:66px; height:52px; background:var(--ink); border:3px solid #0a0b12;
+    border-radius:4px; display:flex; align-items:center; justify-content:center; margin-bottom:.5rem; }
+  .screen{ width:46px; height:32px; background:#0d3b3f; box-shadow:inset 0 0 0 2px #062023; }
+  .desk.leeg{ opacity:.6; }
+  .desk.agent{ cursor:pointer; }
+  .desk.agent .screen{ background:var(--teal2); animation:blink 1.6s steps(2,end) infinite; }
+  @keyframes blink{ 50%{ background:#1c5c56; } }
+  .desk.agent:hover, .desk.agent:focus{ outline:none; box-shadow:6px 6px 0 var(--accent);
+    transform:translate(-1px,-1px); }
+  .sprite{ font-size:1.6rem; line-height:1; margin-bottom:.35rem; }
+  .plate{ background:var(--ink); color:var(--cream); font-size:.7rem; letter-spacing:1px;
+    padding:.25rem .5rem; border:2px solid #0a0b12; width:100%; }
+  .badge{ position:absolute; top:.4rem; right:.4rem; font-size:.6rem; background:var(--accent);
+    color:#fff; padding:.1rem .35rem; border:2px solid var(--ink); }
+  .hint{ text-align:center; font-size:.75rem; color:#c9c6bd; margin-top:1rem; }
+
+  /* chat */
+  .overlay{ display:none; position:fixed; inset:0; background:#0a0b1299;
+    align-items:center; justify-content:center; padding:1rem; z-index:10; }
+  .chat{ width:min(34rem,100%); max-height:90vh; display:flex; flex-direction:column;
+    background:var(--cream); color:var(--ink); border:4px solid var(--ink);
+    box-shadow:8px 8px 0 var(--shadow); }
+  .chat header{ background:var(--teal); color:var(--cream); padding:.5rem .7rem;
+    display:flex; align-items:center; justify-content:space-between; border-bottom:3px solid var(--ink); }
+  .chat header b{ letter-spacing:1px; font-size:.95rem; }
+  .x{ background:var(--accent); color:#fff; border:2px solid var(--ink); cursor:pointer;
+    font-family:inherit; font-weight:bold; padding:.1rem .5rem; }
+  .msgs{ flex:1; overflow:auto; padding:.7rem; display:flex; flex-direction:column; gap:.5rem;
+    background:#fbf9f3; min-height:8rem; }
+  .bubble{ padding:.5rem .6rem; border:2px solid var(--ink); max-width:85%; white-space:pre-wrap;
+    word-break:break-word; font-size:.9rem; line-height:1.35; }
+  .bubble.user{ align-self:flex-end; background:var(--teal2); color:#08211d; }
+  .bubble.agent{ align-self:flex-start; background:#fff; }
+  .notice{ font-size:.72rem; color:#4a4e6d; padding:.4rem .7rem; background:#efe9db;
+    border-top:2px solid var(--ink); }
+  .notice.flash{ background:var(--teal2); color:#08211d; }
+  .composer{ display:none; gap:.4rem; padding:.6rem; border-top:3px solid var(--ink); background:var(--cream); }
+  .composer input{ flex:1; font-family:inherit; font-size:.9rem; padding:.45rem;
+    border:2px solid var(--ink); }
+  button.knop{ font-family:inherit; font-weight:bold; cursor:pointer; border:2px solid var(--ink);
+    background:var(--teal); color:var(--cream); padding:.45rem .8rem; box-shadow:2px 2px 0 var(--shadow); }
+  button.knop:disabled{ opacity:.5; cursor:default; }
+  .bar{ display:flex; gap:.5rem; padding:.6rem; border-top:2px solid var(--ink); background:var(--cream); flex-wrap:wrap; }
+  button.rood{ background:var(--accent); }
+  @media (max-width:640px){ .floor{ grid-template-columns:1fr; } h1.titel{ font-size:1.5rem; } }
+</style>
 </head><body>
-<h1>Dirk Digitaal</h1>
-<p>Koppel je Google Search Console om je zoekprestaties te bekijken. Het kantoor met de AI-agent komt hier binnenkort te staan.</p>
-<a class="knop" href="/oauth/start">Koppel Search Console</a>
+<div class="wrap">
+  <h1 class="titel">Dirk Digitaal<small>jouw digitale marketingbureau &mdash; klik een agent aan</small></h1>
+  <div class="office" role="group" aria-label="Kantoor">
+    <div class="floor">
+      <div class="desk agent" id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent">
+        <span class="badge">online</span>
+        <div class="sprite">&#129302;</div>
+        <div class="monitor"><div class="screen"></div></div>
+        <div class="plate">GSC-agent</div>
+      </div>
+      <div class="desk leeg"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
+      <div class="desk leeg"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
+      <div class="desk leeg"><div class="sprite">&#128100;</div><div class="monitor"><div class="screen"></div></div><div class="plate">binnenkort</div></div>
+    </div>
+  </div>
+  <p class="hint">Klik op de GSC-agent aan het eerste bureau om je Search Console te koppelen en je cijfers te bespreken.</p>
+</div>
+
+<div class="overlay" id="chat-overlay" role="dialog" aria-label="GSC-agent chat">
+  <div class="chat">
+    <header><b>GSC-agent</b><button class="x" id="chat-close" aria-label="Sluiten">X</button></header>
+    <div class="msgs" id="chat-msgs">
+      <div class="bubble agent">Hoi! Ik ben je GSC-agent. Koppel je Google Search Console, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.</div>
+    </div>
+    <div class="notice" id="privacy-notice">Privacy: je koppeling en dit gesprek leven alleen in deze sessie. Ze wissen zichzelf als je weggaat of na 30 minuten. Er wordt niets blijvend opgeslagen.</div>
+    <div class="bar">
+      <button class="knop" id="chat-connect">Koppel Google</button>
+      <button class="knop rood" id="chat-disconnect">Verbreek &amp; wis</button>
+    </div>
+    <div class="composer" id="chat-composer">
+      <input id="chat-input" type="text" placeholder="Stel een vraag over je cijfers..." autocomplete="off">
+      <button class="knop" id="chat-send">Stuur</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var overlay=document.getElementById('chat-overlay');
+  var msgs=document.getElementById('chat-msgs');
+  var input=document.getElementById('chat-input');
+  var sendBtn=document.getElementById('chat-send');
+  var connectBtn=document.getElementById('chat-connect');
+  var composer=document.getElementById('chat-composer');
+  var agent=document.getElementById('agent-desk');
+  var notice=document.getElementById('privacy-notice');
+  var connected=false, busy=false, started=false;
+
+  function openChat(){ overlay.style.display='flex'; }
+  function closeChat(){ overlay.style.display='none'; }
+  function setConnected(v){ connected=v; connectBtn.style.display=v?'none':'inline-block';
+    composer.style.display=v?'flex':'none'; }
+  function addBubble(who,text){ var b=document.createElement('div'); b.className='bubble '+who;
+    b.textContent=text; msgs.appendChild(b); msgs.scrollTop=msgs.scrollHeight; return b; }
+
+  function connect(){ window.location.href='/oauth/start'; }
+
+  async function startAnalysis(){ if(started) return; started=true; await stream(null,'Ik analyseer je Search Console-data...'); }
+
+  async function send(){ var t=(input.value||'').trim(); if(!t||busy) return; input.value='';
+    addBubble('user',t); await stream(t,null); }
+
+  async function stream(message,placeholder){
+    if(busy) return; busy=true; sendBtn.disabled=true;
+    var bubble=addBubble('agent',placeholder||'...'); var got='';
+    try{
+      var r=await fetch('/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(message?{message:message}:{}) });
+      var ct=r.headers.get('Content-Type')||'';
+      if(!r.ok||ct.indexOf('application/json')!==-1){
+        var j={}; try{ j=await r.json(); }catch(e){}
+        bubble.textContent=j.error||'Er ging iets mis. Probeer het opnieuw.';
+        if(r.status===401){ setConnected(false); started=false; }
+        busy=false; sendBtn.disabled=false; return;
+      }
+      var reader=r.body.getReader(); var dec=new TextDecoder(); var buf='';
+      while(true){ var c=await reader.read(); if(c.done) break;
+        buf+=dec.decode(c.value,{stream:true}); var lines=buf.split('\\n'); buf=lines.pop();
+        for(var i=0;i<lines.length;i++){ var line=lines[i].trim();
+          if(line.indexOf('data:')!==0) continue; var p=line.slice(5).trim();
+          if(!p||p==='[DONE]') continue;
+          try{ var evt=JSON.parse(p);
+            if(evt.type==='content_block_delta'&&evt.delta&&typeof evt.delta.text==='string'){
+              got+=evt.delta.text; bubble.textContent=got; msgs.scrollTop=msgs.scrollHeight; } }catch(e){} } }
+      if(!got) bubble.textContent='De agent gaf geen antwoord. Probeer het opnieuw.';
+    }catch(e){ bubble.textContent='Kon de agent niet bereiken. Probeer het opnieuw.'; }
+    busy=false; sendBtn.disabled=false;
+  }
+
+  async function disconnect(){ try{ await fetch('/api/disconnect'); }catch(e){}
+    setConnected(false); started=false; msgs.innerHTML='';
+    notice.textContent='Je sessie is gewist. Er is niets bewaard.'; notice.classList.add('flash'); }
+
+  agent.addEventListener('click',function(){ openChat(); if(connected&&!started) startAnalysis(); });
+  agent.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openChat(); if(connected&&!started) startAnalysis(); } });
+  document.getElementById('chat-close').addEventListener('click',closeChat);
+  connectBtn.addEventListener('click',connect);
+  document.getElementById('chat-disconnect').addEventListener('click',disconnect);
+  sendBtn.addEventListener('click',send);
+  input.addEventListener('keydown',function(e){ if(e.key==='Enter') send(); });
+
+  // Bij (her)laden: al gekoppeld? Dan chat openen en direct analyseren (na terugkeer van Google).
+  fetch('/api/gsc/sites').then(function(r){ if(r.ok){ setConnected(true); openChat(); startAnalysis(); }
+    else{ setConnected(false); } }).catch(function(){ setConnected(false); });
+})();
+</script>
 </body></html>`;
 
 // GSC-data laden en cachen in de sessie (één keer per sessie), zodat elke
@@ -376,9 +551,9 @@ export default {
     const origin = url.origin;
     const redirectUri = origin + "/oauth/callback";
 
-    // AC-2 — placeholder-startpagina.
+    // Startpagina: het 2D retro-kantoor (DIR-14).
     if (path === "/" && request.method === "GET") {
-      return new Response(PLACEHOLDER, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      return new Response(OFFICE_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
     // AC-3 — start OAuth.
