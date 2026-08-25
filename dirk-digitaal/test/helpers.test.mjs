@@ -14,6 +14,9 @@ import {
   computeTrend,
   parseDocMarker,
   docFilename,
+  gscTool,
+  buildGscQueryBody,
+  parseAssistant,
 } from "../src/index.js";
 
 test("buildGoogleAuthUrl: read-only scope + online (geen refresh-token)", () => {
@@ -127,6 +130,43 @@ test("docFilename: veilige, beschrijvende .md-naam met datum", () => {
   assert.equal(docFilename("GSC Actiepunten!", "2026-08-25"), "gsc-actiepunten-20260825.md");
   assert.equal(docFilename("blog/beste pagina", "20260825"), "blog-beste-pagina-20260825.md");
   assert.equal(docFilename("", ""), "document.md");
+});
+
+test("gscTool: heeft naam gsc_query + verplichte dimension", () => {
+  const t = gscTool();
+  assert.equal(t.name, "gsc_query");
+  assert.deepEqual(t.input_schema.required, ["dimension"]);
+  assert.deepEqual(t.input_schema.properties.dimension.enum, ["query", "page", "date"]);
+});
+
+test("buildGscQueryBody: dimensie/limieten/filter", () => {
+  const now = Date.parse("2026-08-25T12:00:00Z");
+  const b = buildGscQueryBody({ dimension: "page", days: 7, row_limit: 5, filter_type: "page", filter_value: "/diensten" }, now);
+  assert.deepEqual(b.dimensions, ["page"]);
+  assert.equal(b.startDate, "2026-08-18");
+  assert.equal(b.endDate, "2026-08-25");
+  assert.equal(b.rowLimit, 5);
+  assert.equal(b.dimensionFilterGroups[0].filters[0].operator, "contains");
+  assert.equal(b.dimensionFilterGroups[0].filters[0].expression, "/diensten");
+  // defaults + clamps: onzin-dimensie → query, days default 28, rowLimit cap 25
+  const d = buildGscQueryBody({ dimension: "onzin", row_limit: 999 }, now);
+  assert.deepEqual(d.dimensions, ["query"]);
+  assert.equal(d.rowLimit, 25);
+  assert.equal(d.startDate, "2026-07-28");
+  assert.equal(d.dimensionFilterGroups, undefined);
+});
+
+test("parseAssistant: splitst tekst en tool_use", () => {
+  const content = [
+    { type: "text", text: "Even kijken. " },
+    { type: "tool_use", id: "tu_1", name: "gsc_query", input: { dimension: "page" } },
+    { type: "text", text: "Klaar." },
+  ];
+  const p = parseAssistant(content);
+  assert.equal(p.text, "Even kijken. Klaar.");
+  assert.equal(p.toolUses.length, 1);
+  assert.equal(p.toolUses[0].id, "tu_1");
+  assert.deepEqual(parseAssistant([]), { text: "", toolUses: [] });
 });
 
 test("dateRange: dagen terug, geclampt", () => {
