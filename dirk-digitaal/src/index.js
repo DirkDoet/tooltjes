@@ -521,7 +521,8 @@ const OFFICE_HTML = `<!doctype html>
   :root{ --navy:#2b2b33; --panel:#3E3E3E; --teal:#015092; --teal2:#2f7fbf;
     --cream:#f4f0e6; --ink:#171717; --accent:#F18E02; --shadow:#000;
     --baksteen:#8a3b2e; --voeg:#5f2a20; --mosterd:#d9a441; --plant:#3c7d3c;
-    --hond:#e0b566; --honddonker:#b98a3e; }
+    --hond:#e0b566; --honddonker:#b98a3e;
+    --leesfont:'Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif; }
   *{ box-sizing:border-box; }
   body{ margin:0; background:#0e1116; color:#e8e2d8; image-rendering:pixelated;
     font-family:'VT323',monospace; -webkit-font-smoothing:none; }
@@ -534,7 +535,17 @@ const OFFICE_HTML = `<!doctype html>
   @keyframes dd-legA{0%,49%{transform:translateY(0)}50%,100%{transform:translateY(-2px)}}
   @keyframes dd-legB{0%,49%{transform:translateY(-2px)}50%,100%{transform:translateY(0)}}
   @keyframes dd-tail{0%,100%{transform:rotate(-8deg)}50%{transform:rotate(10deg)}}
-  @keyframes dd-dogwalk{0%{left:6%;transform:scaleX(1)}34%{left:64%;transform:scaleX(1)}40%{left:66%;transform:scaleX(1)}46%{left:66%;transform:scaleX(-1)}52%{left:66%;transform:scaleX(-1)}86%{left:6%;transform:scaleX(-1)}92%{left:6%;transform:scaleX(1)}100%{left:6%;transform:scaleX(1)}}
+  @keyframes dd-dogwalk{
+    0%{left:5%;bottom:6%;transform:scaleX(1)}
+    16%{left:40%;bottom:6%;transform:scaleX(1)}
+    23%{left:40%;bottom:6%;transform:scaleX(1)}
+    38%{left:71%;bottom:9%;transform:scaleX(1)}
+    54%{left:71%;bottom:9%;transform:scaleX(1)}
+    61%{left:64%;bottom:15%;transform:scaleX(-1)}
+    78%{left:22%;bottom:15%;transform:scaleX(-1)}
+    87%{left:8%;bottom:8%;transform:scaleX(-1)}
+    93%{left:5%;bottom:6%;transform:scaleX(1)}
+    100%{left:5%;bottom:6%;transform:scaleX(1)}}
   @keyframes dd-modal-in{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
   .scene-wrap{ position:relative; width:min(100vw,177.78vh); aspect-ratio:16/9; max-height:100vh; }
   #agent-desk{ cursor:pointer; transition:filter .12s; }
@@ -557,18 +568,20 @@ const OFFICE_HTML = `<!doctype html>
   /* chat */
   .overlay{ display:none; position:fixed; inset:0; background:#0a0b1299;
     align-items:center; justify-content:center; padding:1rem; z-index:10; }
-  .chat{ width:min(34rem,100%); max-height:90vh; display:flex; flex-direction:column;
+  .chat{ width:68vw; min-width:min(40rem,96vw); max-width:96vw; height:82vh; max-height:88vh;
+    display:flex; flex-direction:column; font-family:var(--leesfont);
     background:var(--cream); color:var(--ink); border:4px solid var(--ink);
     box-shadow:8px 8px 0 var(--shadow); }
+  @media (max-width:640px){ .chat{ width:100%; min-width:0; height:auto; max-height:92vh; } }
   .chat header{ background:var(--teal); color:var(--cream); padding:.5rem .7rem;
     display:flex; align-items:center; justify-content:space-between; border-bottom:3px solid var(--ink); }
   .chat header b{ letter-spacing:1px; font-size:.95rem; }
-  .x{ background:var(--accent); color:#fff; border:2px solid var(--ink); cursor:pointer;
-    font-family:inherit; font-weight:bold; padding:.1rem .5rem; }
+  .x{ background:var(--accent); color:var(--ink); border:2px solid var(--ink); cursor:pointer;
+    font-family:var(--leesfont); font-weight:700; font-size:1.1rem; line-height:1; padding:.15rem .55rem; }
   .msgs{ flex:1; overflow:auto; padding:.7rem; display:flex; flex-direction:column; gap:.5rem;
     background:#fbf9f3; min-height:8rem; }
-  .bubble{ padding:.5rem .6rem; border:2px solid var(--ink); max-width:85%; white-space:pre-wrap;
-    word-break:break-word; font-size:.9rem; line-height:1.35; }
+  .bubble{ padding:.55rem .7rem; border:2px solid var(--ink); max-width:85%; white-space:pre-wrap;
+    word-break:break-word; font-family:var(--leesfont); font-size:1.02rem; line-height:1.5; }
   .bubble.user{ align-self:flex-end; background:var(--teal2); color:#08211d; }
   .bubble.agent{ align-self:flex-start; background:#fff; }
   /* typing-indicator (AC-1): pixel-puntjes die verschijnen/verdwijnen */
@@ -583,23 +596,26 @@ const OFFICE_HTML = `<!doctype html>
     border-top:2px solid var(--ink); }
   .notice.flash{ background:var(--teal2); color:#08211d; }
   .composer{ display:none; gap:.4rem; padding:.6rem; border-top:3px solid var(--ink); background:var(--cream); }
-  .composer input{ flex:1; font-family:inherit; font-size:.9rem; padding:.45rem;
+  .composer input{ flex:1; font-family:var(--leesfont); font-size:1rem; padding:.55rem;
     border:2px solid var(--ink); }
-  button.knop{ font-family:inherit; font-weight:bold; cursor:pointer; border:2px solid var(--ink);
-    background:var(--teal); color:var(--cream); padding:.45rem .8rem; box-shadow:2px 2px 0 var(--shadow); }
+  button.knop{ font-family:var(--leesfont); font-weight:700; font-size:1rem; cursor:pointer; border:2px solid var(--ink);
+    background:var(--teal); color:#fff; padding:.5rem .9rem; box-shadow:2px 2px 0 var(--shadow); }
   button.knop:disabled{ opacity:.5; cursor:default; }
   .bar{ display:flex; gap:.5rem; padding:.6rem; border-top:2px solid var(--ink); background:var(--cream); flex-wrap:wrap; }
-  button.rood{ background:var(--accent); }
+  button.rood{ background:var(--accent); color:var(--ink); }
   /* site-keuze + dashboard */
   .sitekeuze{ align-self:flex-start; background:#fff; border:2px solid var(--ink); padding:.6rem; max-width:100%; }
   .sitekeuze p{ margin:0 0 .5rem; font-size:.9rem; }
   .sitekeuze .sitebtn{ display:block; width:100%; text-align:left; margin:.25rem 0; }
-  .dash{ align-self:stretch; display:flex; flex-direction:column; gap:.6rem; }
+  .dash{ align-self:stretch; display:flex; flex-direction:column; gap:1rem; }
   .card{ background:#fff; border:2px solid var(--ink); box-shadow:3px 3px 0 var(--shadow); }
-  .card h3{ margin:0; background:var(--teal); color:var(--cream); font-size:.85rem; letter-spacing:1px;
-    padding:.35rem .6rem; border-bottom:2px solid var(--ink); }
-  .card .body{ padding:.5rem .7rem; font-size:.88rem; line-height:1.4; white-space:pre-wrap; word-break:break-word; }
-  .card .body ul{ margin:.2rem 0; padding-left:1.1rem; }
+  .card h3{ margin:0; background:var(--teal); color:#fff; font-family:var(--leesfont);
+    font-size:1.08rem; font-weight:700; letter-spacing:.3px;
+    padding:.5rem .8rem; border-bottom:2px solid var(--ink); }
+  .card .body{ padding:.8rem 1rem; font-family:var(--leesfont); font-size:1.04rem; line-height:1.65;
+    white-space:pre-wrap; word-break:break-word; }
+  .card .body ul{ margin:.4rem 0; padding-left:1.3rem; }
+  .card .body li{ margin:.25rem 0; }
   .download-knop{ align-self:flex-start; background:var(--accent); color:#111; }
   @media (max-width:640px){ .kamer{ transform:scale(.66); transform-origin:top center; }
     .stage{ height:280px; } h1.titel{ font-size:1.5rem; } }
@@ -720,12 +736,9 @@ const OFFICE_HTML = `<!doctype html>
       </g>
       <use href="#plant" x="500" y="176" width="34" height="52"/>
       <use href="#plant" x="104" y="182" width="30" height="46"/>
-      <use href="#deskEmpty" x="130" y="158" width="96" height="77"/>
-      <text x="160" y="226" font-family="'Press Start 2P'" font-size="6" fill="#7a828a">SOON</text>
-      <use href="#deskEmpty" x="416" y="158" width="96" height="77"/>
-      <text x="446" y="226" font-family="'Press Start 2P'" font-size="6" fill="#7a828a">SOON</text>
-      <use href="#deskEmpty" x="384" y="244" width="132" height="106"/>
-      <text x="428" y="336" font-family="'Press Start 2P'" font-size="7" fill="#7a828a">SOON</text>
+      <use href="#deskEmpty" x="300" y="250" width="80" height="64"/>
+      <use href="#deskEmpty" x="392" y="250" width="80" height="64"/>
+      <use href="#deskEmpty" x="466" y="298" width="126" height="98"/>
       <g id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent">
         <rect x="146" y="220" width="150" height="126" fill="#000" opacity="0"/>
         <rect x="196" y="256" width="42" height="46" fill="#111"/>
@@ -742,11 +755,11 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="252" y="288" width="20" height="2" fill="#c97400"/>
         <rect x="252" y="292" width="10" height="2" fill="#F18E02"/>
         <rect x="176" y="306" width="46" height="5" fill="#333"/>
-        <rect x="150" y="210" width="96" height="26" fill="#0b1219"/>
-        <rect x="150" y="210" width="96" height="26" fill="none" stroke="#F18E02" stroke-width="1"/>
-        <circle cx="161" cy="221" r="4" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
-        <text x="170" y="224" font-family="'Press Start 2P'" font-size="7" fill="#e8e2d8">Albert</text>
-        <text x="156" y="233" font-family="'Press Start 2P'" font-size="5" fill="#9aa2aa">GSC / SEO-SPECIALIST</text>
+        <rect x="146" y="204" width="122" height="32" fill="#0b1219"/>
+        <rect x="146" y="204" width="122" height="32" fill="none" stroke="#F18E02" stroke-width="1.5"/>
+        <circle cx="158" cy="216" r="4" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
+        <text x="168" y="220" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="11" fill="#f4f0e6">Albert</text>
+        <text x="153" y="232" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="8" fill="#c2ccd4">GSC / SEO-specialist</text>
       </g>
       <ellipse cx="86" cy="336" rx="46" ry="12" fill="#2a2f34"/>
       <ellipse cx="86" cy="334" rx="38" ry="9" fill="#6d3b8f" opacity="0.55"/>
