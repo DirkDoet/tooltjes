@@ -639,6 +639,21 @@ const OFFICE_HTML = `<!doctype html>
         <symbol id="hex" viewBox="0 0 40 36">
           <polygon points="10,2 30,2 38,18 30,34 10,34 2,18" fill="#1c242c" stroke="#F18E02" stroke-width="1"/>
         </symbol>
+        <!-- Albert (GSC/SEO): kort bruin haar, roze polo -->
+        <symbol id="albert" viewBox="0 0 40 48">
+          <rect x="9" y="30" width="22" height="18" fill="#e58fa8"/>
+          <rect x="9" y="30" width="22" height="4" fill="#d16f8e"/>
+          <rect x="18" y="30" width="4" height="11" fill="#d16f8e"/>
+          <rect x="17" y="26" width="6" height="5" fill="#d99a63"/>
+          <rect x="13" y="12" width="14" height="16" fill="#e8b98a"/>
+          <rect x="13" y="12" width="14" height="3" fill="#f0c79a"/>
+          <rect x="12" y="8" width="16" height="6" fill="#5a3a1e"/>
+          <rect x="12" y="12" width="2" height="5" fill="#5a3a1e"/>
+          <rect x="26" y="12" width="2" height="5" fill="#5a3a1e"/>
+          <rect x="16" y="18" width="3" height="3" fill="#2a1c0c"/>
+          <rect x="22" y="18" width="3" height="3" fill="#2a1c0c"/>
+          <rect x="18" y="23" width="5" height="2" fill="#c98a5a"/>
+        </symbol>
       </defs>
       <polygon points="0,0 640,0 544,48 96,48" fill="#171b20"/>
       <polygon points="0,0 96,48 96,50 0,4" fill="#0f1216"/>
@@ -707,25 +722,7 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="146" y="220" width="150" height="126" fill="#000" opacity="0"/>
         <rect x="196" y="256" width="42" height="46" fill="#111"/>
         <rect x="200" y="260" width="34" height="30" fill="#1c1c1c"/>
-        <rect x="192" y="274" width="50" height="38" fill="#015092"/>
-        <rect x="192" y="274" width="50" height="6" fill="#0a6bbf"/>
-        <rect x="210" y="280" width="14" height="24" fill="#0a6bbf"/>
-        <rect x="208" y="270" width="18" height="8" fill="#d99a63"/>
-        <rect x="203" y="244" width="28" height="28" fill="#e8b98a"/>
-        <rect x="203" y="244" width="28" height="4" fill="#f0c79a"/>
-        <rect x="201" y="240" width="32" height="10" fill="#4a3320"/>
-        <rect x="201" y="244" width="4" height="12" fill="#4a3320"/>
-        <rect x="229" y="244" width="4" height="12" fill="#4a3320"/>
-        <rect x="206" y="254" width="10" height="8" fill="#1a1a1a"/>
-        <rect x="218" y="254" width="10" height="8" fill="#1a1a1a"/>
-        <rect x="208" y="256" width="6" height="4" fill="#3285D1"/>
-        <rect x="220" y="256" width="6" height="4" fill="#3285D1"/>
-        <rect x="216" y="256" width="2" height="2" fill="#1a1a1a"/>
-        <rect x="199" y="236" width="36" height="6" fill="#222"/>
-        <rect x="197" y="252" width="8" height="16" fill="#222"/>
-        <rect x="229" y="252" width="8" height="16" fill="#222"/>
-        <rect x="199" y="256" width="4" height="8" fill="#F18E02"/>
-        <rect x="231" y="256" width="4" height="8" fill="#F18E02"/>
+        <use href="#albert" x="186" y="238" width="64" height="77"/>
         <rect x="150" y="304" width="132" height="10" fill="#2b2b2b"/>
         <rect x="150" y="314" width="132" height="34" fill="#141414"/>
         <rect x="156" y="314" width="5" height="34" fill="#0c0c0c"/>
@@ -737,10 +734,11 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="252" y="288" width="20" height="2" fill="#c97400"/>
         <rect x="252" y="292" width="10" height="2" fill="#F18E02"/>
         <rect x="176" y="306" width="46" height="5" fill="#333"/>
-        <rect x="150" y="216" width="96" height="18" fill="#0b1219"/>
-        <rect x="150" y="216" width="96" height="18" fill="none" stroke="#F18E02" stroke-width="1"/>
-        <circle cx="161" cy="225" r="4" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
-        <text x="170" y="229" font-family="'Press Start 2P'" font-size="6" fill="#e8e2d8">GSC-AGENT</text>
+        <rect x="150" y="210" width="96" height="26" fill="#0b1219"/>
+        <rect x="150" y="210" width="96" height="26" fill="none" stroke="#F18E02" stroke-width="1"/>
+        <circle cx="161" cy="221" r="4" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
+        <text x="170" y="224" font-family="'Press Start 2P'" font-size="7" fill="#e8e2d8">Albert</text>
+        <text x="156" y="233" font-family="'Press Start 2P'" font-size="5" fill="#9aa2aa">GSC / SEO-SPECIALIST</text>
       </g>
       <ellipse cx="86" cy="336" rx="46" ry="12" fill="#2a2f34"/>
       <ellipse cx="86" cy="334" rx="38" ry="9" fill="#6d3b8f" opacity="0.55"/>
@@ -791,8 +789,21 @@ const OFFICE_HTML = `<!doctype html>
     <header><b>GSC-agent</b><button class="x" id="chat-close" aria-label="Sluiten">X</button></header>
     <div class="chatrow">
       <div class="portret" aria-hidden="true">
-        <div class="avatar">&#129302;</div>
-        <div class="pnaam">&#9679; online</div>
+        <div class="avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true">
+          <rect x="9" y="30" width="22" height="18" fill="#e58fa8"/>
+          <rect x="9" y="30" width="22" height="4" fill="#d16f8e"/>
+          <rect x="18" y="30" width="4" height="11" fill="#d16f8e"/>
+          <rect x="17" y="26" width="6" height="5" fill="#d99a63"/>
+          <rect x="13" y="12" width="14" height="16" fill="#e8b98a"/>
+          <rect x="13" y="12" width="14" height="3" fill="#f0c79a"/>
+          <rect x="12" y="8" width="16" height="6" fill="#5a3a1e"/>
+          <rect x="12" y="12" width="2" height="5" fill="#5a3a1e"/>
+          <rect x="26" y="12" width="2" height="5" fill="#5a3a1e"/>
+          <rect x="16" y="18" width="3" height="3" fill="#2a1c0c"/>
+          <rect x="22" y="18" width="3" height="3" fill="#2a1c0c"/>
+          <rect x="18" y="23" width="5" height="2" fill="#c98a5a"/>
+        </svg></div>
+        <div class="pnaam">&#9679; Albert</div>
       </div>
       <div class="chatmain">
         <div class="msgs" id="chat-msgs">
