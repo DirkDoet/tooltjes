@@ -6,6 +6,10 @@ import {
   isExpired,
   shapePerformance,
   dateRange,
+  buildSystemPrompt,
+  buildAnthropicMessages,
+  extractTextFromSSE,
+  FIRST_ANALYSIS_PROMPT,
 } from "../src/index.js";
 
 test("buildGoogleAuthUrl: read-only scope + online (geen refresh-token)", () => {
@@ -45,6 +49,44 @@ test("shapePerformance: mapt en rondt af", () => {
   assert.deepEqual(out.queries[0], { query: "schoenen kopen", clicks: 12, impressions: 340, ctr: 3.5, position: 4.3 });
   assert.deepEqual(out.pages[0], { page: "https://site.nl/schoenen", clicks: 8, impressions: 210, ctr: 3.8, position: 6.5 });
   assert.deepEqual(shapePerformance(undefined, undefined), { queries: [], pages: [] });
+});
+
+test("buildSystemPrompt: NL jij-vorm analist + data ingebed", () => {
+  const gsc = { actief: "https://site.nl", prestaties: { queries: [{ query: "schoenen", clicks: 12 }] } };
+  const s = buildSystemPrompt(gsc);
+  assert.match(s, /GSC-analist/);
+  assert.match(s, /jij-vorm/);
+  assert.match(s, /schoenen/);          // data zit in de prompt
+  assert.match(buildSystemPrompt(null), /nog geen data/);
+});
+
+test("buildAnthropicMessages: historie + nieuwe vraag", () => {
+  const hist = [{ role: "user", content: "hoi" }, { role: "assistant", content: "hallo" }];
+  const m = buildAnthropicMessages(hist, "welke pagina's zakken?");
+  assert.equal(m.length, 3);
+  assert.deepEqual(m[2], { role: "user", content: "welke pagina's zakken?" });
+  // zonder nieuwe vraag → alleen historie
+  assert.equal(buildAnthropicMessages(hist, "").length, 2);
+  assert.equal(buildAnthropicMessages(null, "x").length, 1);
+});
+
+test("FIRST_ANALYSIS_PROMPT vraagt om eerste analyse + inzoom-vraag", () => {
+  assert.match(FIRST_ANALYSIS_PROMPT, /eerste analyse/i);
+  assert.match(FIRST_ANALYSIS_PROMPT, /inzoomen/i);
+});
+
+test("extractTextFromSSE: plakt content_block_delta tekst aan elkaar", () => {
+  const sse = [
+    'event: message_start',
+    'data: {"type":"message_start"}',
+    '',
+    'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hallo "}}',
+    'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Dirk"}}',
+    'data: {"type":"message_stop"}',
+    'data: [DONE]',
+  ].join("\n");
+  assert.equal(extractTextFromSSE(sse), "Hallo Dirk");
+  assert.equal(extractTextFromSSE(""), "");
 });
 
 test("dateRange: dagen terug, geclampt", () => {

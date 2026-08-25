@@ -81,6 +81,60 @@ export function dateRange(days, now) {
   return { startDate: iso(start), endDate: iso(end) };
 }
 
+// ------------------------------------------------------------------ agent ---
+
+const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_MODEL = "claude-opus-5";
+const ANTHROPIC_VERSION = "2023-06-01";
+const CHAT_MAX_TOKENS = 4096;
+
+// Vraag die de allereerste, automatische analyse uitlokt (AC-3).
+export const FIRST_ANALYSIS_PROMPT =
+  "Geef mij een eerste analyse van mijn Search Console-data: noem de opvallendste " +
+  "zoekwoorden en pagina's, de grootste kansen en de aandachtspunten. Sluit af met " +
+  "de vraag waar ik op wil inzoomen.";
+
+// Systeemprompt: GSC-analist, Nederlands, jij-vorm, gegrond in de sessie-data
+// (aanpak uit de klant-analyse-skill: concreet, cijfermatig, actiegericht).
+export function buildSystemPrompt(gsc) {
+  const data = gsc ? JSON.stringify(gsc, null, 2) : "(nog geen data geladen)";
+  return [
+    "Je bent de GSC-analist van Dirk Digitaal: een scherpe, behulpzame SEO-analist.",
+    "Schrijf altijd in het Nederlands en in de jij-vorm. Wees concreet en cijfermatig:",
+    "verwijs naar echte zoekwoorden, pagina's en getallen uit de data hieronder.",
+    "Geef bruikbare, prioriteerbare aanbevelingen; verzin geen data die er niet staat.",
+    "Als de gebruiker iets vraagt dat niet uit deze data te halen is, zeg dat eerlijk.",
+    "",
+    "Search Console-data van deze sessie (top zoekwoorden en pagina's, laatste periode):",
+    data,
+  ].join("\n");
+}
+
+// Bouwt de messages-array voor de Messages API uit de sessie-historie + nieuwe vraag.
+export function buildAnthropicMessages(history, userText) {
+  const messages = (history || []).map((m) => ({ role: m.role, content: m.content }));
+  if (userText) messages.push({ role: "user", content: userText });
+  return messages;
+}
+
+// Haalt de tekst-deltas uit een Anthropic SSE-stream (voor het bewaren in de historie).
+export function extractTextFromSSE(sse) {
+  let out = "";
+  for (const regel of (sse || "").split("\n")) {
+    const t = regel.trim();
+    if (!t.startsWith("data:")) continue;
+    const payload = t.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    try {
+      const evt = JSON.parse(payload);
+      if (evt.type === "content_block_delta" && evt.delta && typeof evt.delta.text === "string") {
+        out += evt.delta.text;
+      }
+    } catch (e) { /* niet-JSON regels overslaan */ }
+  }
+  return out;
+}
+
 function json(obj, status = 200, extraHeaders) {
   return new Response(JSON.stringify(obj), {
     status,
@@ -132,6 +186,37 @@ export class SessionDO {
       return json({ token });
     }
 
+    // Chat-state (historie + gecachete GSC-data), session-only. Elke aanraking
+    // vernieuwt de activiteit + het TTL-alarm.
+    if (url.pathname === "/chat/state") {
+      const data = await this.state.storage.get(["token", "lastActive", "messages", "gsc"]);
+      const token = data.get("token");
+      if (!token || isExpired(data.get("lastActive"), now)) {
+        await this.state.storage.deleteAll();
+        await this.state.storage.deleteAlarm();
+        return json({ token: null }, 404);
+      }
+      await this.state.storage.put("lastActive", now);
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ token, messages: data.get("messages") || [], gsc: data.get("gsc") || null });
+    }
+
+    if (url.pathname === "/chat/set-gsc") {
+      const { gsc } = await request.json();
+      await this.state.storage.put({ gsc, lastActive: now });
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ ok: true });
+    }
+
+    if (url.pathname === "/chat/append") {
+      const { messages } = await request.json();
+      const bestaand = (await this.state.storage.get("messages")) || [];
+      const nieuw = bestaand.concat(messages || []);
+      await this.state.storage.put({ messages: nieuw, lastActive: now });
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ ok: true });
+    }
+
     if (url.pathname === "/destroy") {
       const token = await this.state.storage.get("token");
       await this.state.storage.deleteAll();
@@ -164,6 +249,29 @@ async function huidigeToken(request, env) {
   return token || null;
 }
 
+async function fetchGscSites(token) {
+  const resp = await fetch(GSC_BASE + "/sites", { headers: { Authorization: "Bearer " + token } });
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  return (data.siteEntry || []).map((s) => ({ siteUrl: s.siteUrl, permissionLevel: s.permissionLevel }));
+}
+
+async function fetchGscPerformance(token, site, days) {
+  const { startDate, endDate } = dateRange(days, Date.now());
+  const endpoint = GSC_BASE + "/sites/" + encodeURIComponent(site) + "/searchAnalytics/query";
+  const vraag = (dimension) =>
+    fetch(endpoint, {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify({ startDate, endDate, dimensions: [dimension], rowLimit: 10 }),
+    });
+  const [qResp, pResp] = await Promise.all([vraag("query"), vraag("page")]);
+  if (!qResp.ok || !pResp.ok) return null;
+  const qData = await qResp.json();
+  const pData = await pResp.json();
+  return { site, startDate, endDate, ...shapePerformance(qData.rows, pData.rows) };
+}
+
 const PLACEHOLDER = `<!doctype html>
 <html lang="nl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -175,8 +283,94 @@ const PLACEHOLDER = `<!doctype html>
 <a class="knop" href="/oauth/start">Koppel Search Console</a>
 </body></html>`;
 
+// GSC-data laden en cachen in de sessie (één keer per sessie), zodat elke
+// vervolgvraag op dezelfde data leunt (AC-4). Kiest de eerste beschikbare site.
+async function ensureGscData(stub, token, cached) {
+  if (cached) return cached;
+  const sites = await fetchGscSites(token);
+  if (!sites || !sites.length) return null;
+  const perf = await fetchGscPerformance(token, sites[0].siteUrl, "28");
+  if (!perf) return null;
+  const gsc = { sites: sites.map((s) => s.siteUrl), actief: sites[0].siteUrl, prestaties: perf };
+  await stub.fetch("https://do/chat/set-gsc", { method: "POST", body: JSON.stringify({ gsc }) });
+  return gsc;
+}
+
+async function handleChat(request, env, ctx) {
+  if (!env.ANTHROPIC_API_KEY) {
+    return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
+  }
+
+  const cookies = parseCookies(request.headers.get("Cookie"));
+  const id = cookies[COOKIE];
+  if (!id) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console." }, 401);
+
+  const stub = sessionStub(env, id);
+  const stateResp = await stub.fetch("https://do/chat/state");
+  if (!stateResp.ok) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console." }, 401);
+  const { token, messages: history, gsc: cachedGsc } = await stateResp.json();
+
+  // Inkomende vraag (optioneel). Zonder vraag + lege historie → eerste analyse.
+  let userText = "";
+  try {
+    const body = await request.json();
+    userText = (body && typeof body.message === "string") ? body.message.trim() : "";
+  } catch (e) { /* geen/lege body → eerste analyse */ }
+  if (!userText && (!history || history.length === 0)) userText = FIRST_ANALYSIS_PROMPT;
+  if (!userText) return json({ error: "Stel een vraag over je Search Console-data." }, 400);
+
+  const gsc = await ensureGscData(stub, token, cachedGsc);
+  if (!gsc) return json({ error: "Kon je Search Console-data niet laden. Is je site gekoppeld in Google?" }, 502);
+
+  const messages = buildAnthropicMessages(history, userText);
+
+  let upstream;
+  try {
+    upstream = await fetch(ANTHROPIC_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "x-api-key": env.ANTHROPIC_API_KEY,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL,
+        max_tokens: CHAT_MAX_TOKENS,
+        stream: true,
+        system: buildSystemPrompt(gsc),
+        messages,
+      }),
+    });
+  } catch (e) {
+    return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
+  }
+  if (!upstream.ok || !upstream.body) {
+    return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+  }
+
+  // Stream naar de client én een kopie meelezen om het antwoord in de historie te bewaren.
+  const [naarClient, meelezen] = upstream.body.tee();
+  ctx.waitUntil((async () => {
+    try {
+      const sse = await new Response(meelezen).text();
+      const antwoord = extractTextFromSSE(sse);
+      const toevoegen = [{ role: "user", content: userText }];
+      if (antwoord) toevoegen.push({ role: "assistant", content: antwoord });
+      await stub.fetch("https://do/chat/append", { method: "POST", body: JSON.stringify({ messages: toevoegen }) });
+    } catch (e) { /* historie-bewaren is best-effort */ }
+  })());
+
+  return new Response(naarClient, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    },
+  });
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
     const origin = url.origin;
@@ -265,10 +459,8 @@ export default {
     if (path === "/api/gsc/sites") {
       const token = await huidigeToken(request, env);
       if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console via /oauth/start." }, 401);
-      const resp = await fetch(GSC_BASE + "/sites", { headers: { Authorization: "Bearer " + token } });
-      if (!resp.ok) return json({ error: "Kon je sites niet ophalen bij Google." }, 502);
-      const data = await resp.json();
-      const sites = (data.siteEntry || []).map((s) => ({ siteUrl: s.siteUrl, permissionLevel: s.permissionLevel }));
+      const sites = await fetchGscSites(token);
+      if (!sites) return json({ error: "Kon je sites niet ophalen bij Google." }, 502);
       return json({ sites });
     }
 
@@ -278,21 +470,14 @@ export default {
       if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console via /oauth/start." }, 401);
       const site = url.searchParams.get("site");
       if (!site) return json({ error: "Geef een site op via ?site=<url>." }, 400);
+      const perf = await fetchGscPerformance(token, site, url.searchParams.get("days"));
+      if (!perf) return json({ error: "Kon de prestaties niet ophalen bij Google." }, 502);
+      return json(perf);
+    }
 
-      const { startDate, endDate } = dateRange(url.searchParams.get("days"), Date.now());
-      const endpoint = GSC_BASE + "/sites/" + encodeURIComponent(site) + "/searchAnalytics/query";
-      const vraag = (dimension) =>
-        fetch(endpoint, {
-          method: "POST",
-          headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-          body: JSON.stringify({ startDate, endDate, dimensions: [dimension], rowLimit: 10 }),
-        });
-
-      const [qResp, pResp] = await Promise.all([vraag("query"), vraag("page")]);
-      if (!qResp.ok || !pResp.ok) return json({ error: "Kon de prestaties niet ophalen bij Google." }, 502);
-      const qData = await qResp.json();
-      const pData = await pResp.json();
-      return json({ site, startDate, endDate, ...shapePerformance(qData.rows, pData.rows) });
+    // AC-1..AC-6 — GSC-agent: streaming chat gegrond in de sessie-data.
+    if (path === "/api/chat" && request.method === "POST") {
+      return handleChat(request, env, ctx);
     }
 
     return json({ error: "Onbekende route." }, 404);
