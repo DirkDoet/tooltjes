@@ -17,9 +17,12 @@ bouwen op deze endpoints.
 | `GET /oauth/callback` | Wisselt de code om voor een access token, maakt de sessie, zet een `httpOnly`-cookie. |
 | `GET /api/gsc/sites` | JSON met je GSC-sites. |
 | `GET /api/gsc/performance?site=<url>&days=<n>` | Top zoekwoorden + top pagina's met clicks/impressies/CTR/positie. |
+| `POST /api/chat` | GSC-analist-agent (Claude, streaming SSE). Lege/eerste call → automatische eerste analyse; daarna vervolgvragen. Body: `{ "message": "..." }`. |
 | `GET /api/disconnect` | Revoket het token bij Google én vernietigt de sessie. |
 
-Niet-gekoppeld → de `/api/gsc/*`-routes geven een nette JSON-fout (HTTP 401).
+Niet-gekoppeld → de `/api/gsc/*`- en `/api/chat`-routes geven een nette JSON-fout (HTTP 401).
+
+De agent (`/api/chat`) is Nederlands + jij-vorm, gegrond in de GSC-data van de sessie (Claude, model `claude-opus-5`). Chatgeschiedenis + geladen data leven in de Durable Object en zijn session-only (weg bij disconnect of na 30 min inactiviteit).
 
 ## Ephemeer ontwerp
 
@@ -48,6 +51,7 @@ cd dirk-digitaal
 npx wrangler deploy            # geeft de Worker-URL terug (voor de redirect-URI)
 npx wrangler secret put GOOGLE_CLIENT_ID       # plak je client-ID
 npx wrangler secret put GOOGLE_CLIENT_SECRET   # plak je client-secret
+npx wrangler secret put ANTHROPIC_API_KEY      # voor de GSC-agent (/api/chat)
 ```
 
 Vul de Worker-URL + `/oauth/callback` in als redirect-URI in Google (stap 1.4),
@@ -69,5 +73,5 @@ npm test             # unit-tests van de pure helpers (geen Google nodig)
 
 ## Secrets
 
-`GOOGLE_CLIENT_ID` en `GOOGLE_CLIENT_SECRET` staan **alleen** in Worker-secrets,
-nooit in de code of in `wrangler.toml`.
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` en `ANTHROPIC_API_KEY` staan **alleen**
+in Worker-secrets, nooit in de code of in `wrangler.toml`.
