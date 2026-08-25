@@ -557,6 +557,21 @@ const OFFICE_HTML = `<!doctype html>
     filter:drop-shadow(0 0 6px #F18E02) drop-shadow(0 0 14px rgba(241,142,2,.6)); }
   .dog{ position:absolute; bottom:6%; left:6%; width:9%; pointer-events:none;
     animation:dd-dogwalk 26s ease-in-out infinite; }
+  /* Rondlopende Albert (DIR-26) */
+  .albert-roam{ position:absolute; left:27%; bottom:12%; width:9%; display:none; z-index:4;
+    cursor:pointer; transition:left 2.7s linear, bottom 2.7s linear; }
+  .albert-roam.zichtbaar{ display:block; }
+  .albert-roam.links{ transform:scaleX(-1); }
+  .albert-roam .albert-fig{ transform-origin:bottom center; }
+  .albert-roam.loopt .albert-fig{ animation:dd-walkbob .42s steps(2) infinite; }
+  .albert-roam.actie .albert-fig{ animation:dd-albert-idle 1.4s ease-in-out infinite; }
+  .albert-roam .poot{ display:none; }
+  .albert-roam.loopt .poot-a{ display:block; animation:dd-legA .34s steps(1) infinite; }
+  .albert-roam.loopt .poot-b{ display:block; animation:dd-legB .34s steps(1) infinite; }
+  @keyframes dd-walkbob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+  @keyframes dd-stretch{0%,100%{transform:translateY(0) scaleY(1)}45%{transform:translateY(-3px) scaleY(1.06)}}
+  #agent-desk.away #albert-body, #agent-desk.away .albert-hand{ opacity:0; }
+  #agent-desk.rekt #albert-body{ animation:dd-stretch 2.2s ease-in-out; }
   /* chat-portret naast de chat (AC-2) */
   .chatrow{ display:flex; flex:1; min-height:0; }
   .chatmain{ flex:1; display:flex; flex-direction:column; min-width:0; }
@@ -743,11 +758,32 @@ const OFFICE_HTML = `<!doctype html>
       <use href="#deskEmpty" x="300" y="250" width="80" height="64"/>
       <use href="#deskEmpty" x="392" y="250" width="80" height="64"/>
       <use href="#deskEmpty" x="466" y="298" width="126" height="98"/>
+      <!-- koffieautomaat (DIR-26) -->
+      <g>
+        <rect x="40" y="250" width="30" height="52" fill="#2b2f36"/>
+        <rect x="40" y="250" width="30" height="6" fill="#3a3f47"/>
+        <rect x="44" y="258" width="22" height="14" fill="#0e1216"/>
+        <rect x="46" y="261" width="10" height="3" fill="#F18E02"/>
+        <rect x="46" y="266" width="14" height="2" fill="#3fd06a"/>
+        <rect x="48" y="278" width="14" height="10" fill="#1a1e24"/>
+        <rect x="52" y="282" width="6" height="6" fill="#e8e2d8"/>
+        <rect x="40" y="298" width="30" height="4" fill="#15181d"/>
+      </g>
+      <!-- printer (DIR-26) -->
+      <g>
+        <rect x="574" y="262" width="28" height="6" fill="#f4f0e6"/>
+        <rect x="572" y="266" width="32" height="6" fill="#2b2f36"/>
+        <rect x="566" y="270" width="44" height="26" fill="#3a3f47"/>
+        <rect x="566" y="270" width="44" height="6" fill="#4a505a"/>
+        <rect x="570" y="280" width="10" height="3" fill="#3fd06a"/>
+        <rect x="584" y="280" width="4" height="3" fill="#F18E02"/>
+        <rect x="566" y="296" width="44" height="4" fill="#20242a"/>
+      </g>
       <g id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent">
         <rect x="146" y="220" width="150" height="126" fill="#000" opacity="0"/>
         <rect x="196" y="256" width="42" height="46" fill="#111"/>
         <rect x="200" y="260" width="34" height="30" fill="#1c1c1c"/>
-        <g style="transform-origin:218px 300px;animation:dd-albert-idle 5.5s ease-in-out infinite">
+        <g id="albert-body" style="transform-origin:218px 300px;animation:dd-albert-idle 5.5s ease-in-out infinite">
           <use href="#albert" x="186" y="238" width="64" height="77"/>
         </g>
         <rect x="150" y="304" width="132" height="10" fill="#2b2b2b"/>
@@ -762,11 +798,11 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="252" y="292" width="10" height="2" fill="#F18E02"/>
         <rect x="176" y="306" width="46" height="5" fill="#333"/>
         <!-- typende handen/armen (DIR-25) -->
-        <g style="transform-origin:210px 303px;animation:dd-type-l .5s steps(2) infinite">
+        <g class="albert-hand" style="transform-origin:210px 303px;animation:dd-type-l .5s steps(2) infinite">
           <rect x="205" y="293" width="6" height="9" fill="#e58fa8"/>
           <rect x="204" y="300" width="9" height="6" fill="#e8b98a"/>
         </g>
-        <g style="transform-origin:227px 303px;animation:dd-type-r .5s steps(2) infinite">
+        <g class="albert-hand" style="transform-origin:227px 303px;animation:dd-type-r .5s steps(2) infinite">
           <rect x="226" y="293" width="6" height="9" fill="#e58fa8"/>
           <rect x="223" y="300" width="9" height="6" fill="#e8b98a"/>
         </g>
@@ -805,6 +841,17 @@ const OFFICE_HTML = `<!doctype html>
           <rect x="42" y="26" width="5" height="9" fill="#c99a4e"/>
         </g>
       </svg>
+    </div>
+
+    <!-- Rondlopende Albert (DIR-26): verborgen tot een kantooractie; klik opent chat. -->
+    <div class="albert-roam" id="albert-roam" role="button" tabindex="0" aria-label="Open de GSC-agent (Albert)">
+      <div class="albert-fig">
+        <svg viewBox="0 0 40 56" width="100%" shape-rendering="crispEdges" style="image-rendering:pixelated;display:block;">
+          <use href="#albert" x="0" y="0" width="40" height="48"/>
+          <g class="poot poot-a"><rect x="14" y="47" width="5" height="9" fill="#2a3138"/></g>
+          <g class="poot poot-b"><rect x="21" y="47" width="5" height="9" fill="#2a3138"/></g>
+        </svg>
+      </div>
     </div>
 
     <div style="position:absolute;top:0;left:0;right:0;height:30%;background:linear-gradient(to bottom, rgba(8,11,15,.82) 0%, rgba(8,11,15,.5) 55%, rgba(8,11,15,0) 100%);pointer-events:none;"></div>
@@ -996,6 +1043,38 @@ const OFFICE_HTML = `<!doctype html>
   document.getElementById('chat-disconnect').addEventListener('click',disconnect);
   sendBtn.addEventListener('click',send);
   input.addEventListener('keydown',function(e){ if(e.key==='Enter') send(); });
+
+  // Albert-kantooracties (DIR-26): af en toe weg van bureau, korte actie, terug. Klik op Albert = chat.
+  (function(){
+    var roam=document.getElementById('albert-roam'); if(!roam) return;
+    roam.addEventListener('click',function(){ openChat(); if(connected&&!started) startFlow(); });
+    roam.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openChat(); if(connected&&!started) startFlow(); } });
+    var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(reduce) return;
+    var HOME={l:27,b:12};
+    var SPOTS=[{l:11,b:16},{l:82,b:16},{l:14,b:14},{l:46,b:8},null];
+    function setPos(l,b){ roam.style.left=l+'%'; roam.style.bottom=b+'%'; }
+    function face(delta){ if(delta<0) roam.classList.add('links'); else roam.classList.remove('links'); }
+    var busyRoam=false;
+    function stretch(){ agent.classList.add('rekt'); setTimeout(function(){ agent.classList.remove('rekt'); plan(); }, 2300); }
+    function go(spot){
+      busyRoam=true; agent.classList.add('away');
+      setPos(HOME.l,HOME.b); roam.classList.add('zichtbaar'); face(spot.l-HOME.l);
+      requestAnimationFrame(function(){ roam.classList.add('loopt'); setPos(spot.l,spot.b); });
+      setTimeout(function(){
+        roam.classList.remove('loopt'); roam.classList.add('actie');
+        setTimeout(function(){
+          roam.classList.remove('actie'); roam.classList.add('loopt'); face(HOME.l-spot.l); setPos(HOME.l,HOME.b);
+          setTimeout(function(){
+            roam.classList.remove('loopt','zichtbaar','links'); agent.classList.remove('away'); busyRoam=false; plan();
+          }, 2900);
+        }, 2200);
+      }, 2900);
+    }
+    function act(){ if(busyRoam){ plan(); return; } var s=SPOTS[Math.floor(Math.random()*SPOTS.length)]; if(s) go(s); else stretch(); }
+    function plan(){ setTimeout(act, 13000+Math.random()*12000); }
+    plan();
+  })();
 
   // Bij (her)laden: al gekoppeld? Dan chat openen en de flow starten (na terugkeer van Google).
   fetch('/api/gsc/sites').then(function(r){ if(r.ok){ setConnected(true); openChat(); startFlow(); }
