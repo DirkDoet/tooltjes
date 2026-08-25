@@ -20,7 +20,21 @@ bouwen op deze endpoints.
 | `POST /api/chat` | GSC-analist-agent (Claude, streaming SSE). Body: `{ "site": "<url>" }` kiest/wisselt de site en levert de SEO-analyse; `{ "message": "..." }` is een vervolgvraag. Lege body: bij meerdere sites → `{ "needSite": true, "sites": [...] }`, bij één site → automatische analyse. |
 | `GET /api/disconnect` | Revoket het token bij Google én vernietigt de sessie. |
 
-Niet-gekoppeld → de `/api/gsc/*`- en `/api/chat`-routes geven een nette JSON-fout (HTTP 401).
+### GA4 / Gertjan (DIR-28)
+
+Dezelfde Google-koppeling dekt nu ook Google Analytics 4 (agent **Gertjan**).
+
+| Route | Doel |
+|-------|------|
+| `GET /api/ga4/properties` | JSON met je GA4-properties (Analytics Admin API). |
+| `GET /api/ga4/report?property=properties/<id>&metric=<m>&dimension=<d>&days=<n>&filter_value=<v>&row_limit=<n>` | Eén GA4-rapport (Analytics Data API `runReport`). |
+| `POST /api/ga4/chat` | GA4-analist-agent (Claude, streaming SSE, live tool-use). Body: `{ "property": "properties/<id>" }` kiest/wisselt de property en levert de analyse; `{ "message": "..." }` is een vervolgvraag. Lege body: meerdere → `{ "needProperty": true, "properties": [...] }`, één → automatische analyse. |
+
+Metrics: `activeUsers`, `sessions`, `screenPageViews`, `conversions`. Dimensies: `pagePath`, `sessionDefaultChannelGroup`, `country`, `deviceCategory`, `date`. Sessie-only, zelfde ephemere aanpak als GSC.
+
+**Google Cloud-setup (eenmalig, zelfde project + OAuth-client):** schakel **Google Analytics Data API** + **Google Analytics Admin API** in, en voeg scope `.../auth/analytics.readonly` toe aan het OAuth consent screen. Koppel daarna opnieuw (het toestemmingsscherm vraagt nu ook GA4).
+
+Niet-gekoppeld → de `/api/gsc/*`-, `/api/ga4/*`- en chat-routes geven een nette JSON-fout (HTTP 401).
 
 De agent (`/api/chat`) is Nederlands + jij-vorm, gegrond in de GSC-data van de gekozen site (Claude, model `claude-sonnet-5`). De eerste analyse is een SEO-overzicht (samenvatting, sterke pagina's, kansen, trend t.o.v. de vorige 28 dagen) met vaste `## `-secties die de frontend als kaarten toont. Chatgeschiedenis + geladen data leven in de Durable Object en zijn session-only (weg bij disconnect of na 30 min inactiviteit).
 

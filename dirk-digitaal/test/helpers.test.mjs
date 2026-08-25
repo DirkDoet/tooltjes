@@ -17,16 +17,26 @@ import {
   gscTool,
   buildGscQueryBody,
   parseAssistant,
+  ga4PropertyId,
+  buildGa4ReportBody,
+  ga4Tool,
+  shapeGa4Rows,
+  shapeGa4Totals,
+  computeGa4Trend,
+  ga4FirstAnalysisPrompt,
+  buildGa4SystemPrompt,
 } from "../src/index.js";
 
-test("buildGoogleAuthUrl: read-only scope + online (geen refresh-token)", () => {
+test("buildGoogleAuthUrl: read-only scopes (GSC + GA4) + online (geen refresh-token)", () => {
   const u = new URL(buildGoogleAuthUrl({
     clientId: "abc.apps.googleusercontent.com",
     redirectUri: "https://dd.example.workers.dev/oauth/callback",
     state: "xyz",
   }));
   assert.equal(u.origin + u.pathname, "https://accounts.google.com/o/oauth2/v2/auth");
-  assert.equal(u.searchParams.get("scope"), "https://www.googleapis.com/auth/webmasters.readonly");
+  const scope = u.searchParams.get("scope");
+  assert.match(scope, /webmasters\.readonly/);
+  assert.match(scope, /analytics\.readonly/);   // DIR-28: GA4-scope erbij
   assert.equal(u.searchParams.get("access_type"), "online");
   assert.equal(u.searchParams.get("response_type"), "code");
   assert.equal(u.searchParams.get("redirect_uri"), "https://dd.example.workers.dev/oauth/callback");
@@ -178,4 +188,81 @@ test("dateRange: dagen terug, geclampt", () => {
   assert.equal(dateRange("onzin", now).startDate, "2026-07-28");
   // clamp naar max 400
   assert.equal(dateRange(9999, now).startDate, dateRange(400, now).startDate);
+});
+
+// ------------------------------------------------------------ GA4 (DIR-28) ---
+
+test("ga4PropertyId: normaliseert properties/<id> en <id>", () => {
+  assert.equal(ga4PropertyId("properties/123456"), "123456");
+  assert.equal(ga4PropertyId("123456"), "123456");
+  assert.equal(ga4PropertyId(""), "");
+});
+
+test("buildGa4ReportBody: dimensie/metric/periode/limiet + filter", () => {
+  const now = Date.parse("2026-08-25T12:00:00Z");
+  const b = buildGa4ReportBody({ dimension: "pagePath", metric: "sessions", days: 7, row_limit: 5, filter_value: "/diensten" }, now);
+  assert.deepEqual(b.dateRanges, [{ startDate: "2026-08-18", endDate: "2026-08-25" }]);
+  assert.deepEqual(b.dimensions, [{ name: "pagePath" }]);
+  assert.deepEqual(b.metrics, [{ name: "sessions" }]);
+  assert.equal(b.limit, 5);
+  assert.equal(b.dimensionFilter.filter.fieldName, "pagePath");
+  assert.equal(b.dimensionFilter.filter.stringFilter.value, "/diensten");
+  // defaults + clamps: onzin → pagePath/sessions, days default 28, limit cap 25, geen filter
+  const d = buildGa4ReportBody({ dimension: "onzin", metric: "onzin", row_limit: 999 }, now);
+  assert.deepEqual(d.dimensions, [{ name: "pagePath" }]);
+  assert.deepEqual(d.metrics, [{ name: "sessions" }]);
+  assert.equal(d.limit, 25);
+  assert.equal(d.dateRanges[0].startDate, "2026-07-28");
+  assert.equal(d.dimensionFilter, undefined);
+});
+
+test("ga4Tool: naam ga4_report + verplichte metric/dimension", () => {
+  const t = ga4Tool();
+  assert.equal(t.name, "ga4_report");
+  assert.deepEqual(t.input_schema.required, ["metric", "dimension"]);
+  assert.ok(t.input_schema.properties.metric.enum.includes("activeUsers"));
+  assert.ok(t.input_schema.properties.dimension.enum.includes("sessionDefaultChannelGroup"));
+});
+
+test("shapeGa4Rows: dimensie + metric-waarde", () => {
+  const rows = [{ dimensionValues: [{ value: "/prijzen" }], metricValues: [{ value: "42" }] }];
+  assert.deepEqual(shapeGa4Rows(rows, "pagePath"), [{ pagePath: "/prijzen", waarde: 42 }]);
+  assert.deepEqual(shapeGa4Rows(undefined, "x"), []);
+});
+
+test("shapeGa4Totals: metricHeaders → { naam: getal }", () => {
+  const report = {
+    metricHeaders: [{ name: "activeUsers" }, { name: "sessions" }],
+    rows: [{ metricValues: [{ value: "120" }, { value: "200" }] }],
+  };
+  assert.deepEqual(shapeGa4Totals(report), { activeUsers: 120, sessions: 200 });
+  assert.deepEqual(shapeGa4Totals({}), {});
+});
+
+test("computeGa4Trend: procentuele verandering users/sessies", () => {
+  assert.deepEqual(computeGa4Trend({ activeUsers: 120, sessions: 300 }, { activeUsers: 100, sessions: 300 }),
+    { activeUsersPct: 20, sessionsPct: 0 });
+  assert.deepEqual(computeGa4Trend({ activeUsers: 10, sessions: 0 }, { activeUsers: 0, sessions: 0 }),
+    { activeUsersPct: 100, sessionsPct: 0 });
+});
+
+test("ga4FirstAnalysisPrompt: dashboard-secties + jij-vorm", () => {
+  const p = ga4FirstAnalysisPrompt();
+  assert.match(p, /## Samenvatting/);
+  assert.match(p, /## Verkeer & trend/);
+  assert.match(p, /## Top pagina's/);
+  assert.match(p, /## Kanalen/);
+  assert.match(p, /## Opvallend/);
+  assert.match(p, /jij-vorm/);
+});
+
+test("buildGa4SystemPrompt: Gertjan, GA4, jij-vorm, data ingebed", () => {
+  const ga4 = { actief: "properties/123", totalen: { sessions: 200 } };
+  const s = buildGa4SystemPrompt(ga4);
+  assert.match(s, /Gertjan/);
+  assert.match(s, /GA4/);
+  assert.match(s, /jij-vorm/);
+  assert.match(s, /ga4_report/);
+  assert.match(s, /properties\/123/);
+  assert.match(buildGa4SystemPrompt(null), /nog geen data/);
 });
