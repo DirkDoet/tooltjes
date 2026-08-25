@@ -141,6 +141,15 @@ export function buildSystemPrompt(gsc) {
     "Geef bruikbare, prioriteerbare aanbevelingen; verzin geen data die er niet staat.",
     "Als de gebruiker iets vraagt dat niet uit deze data te halen is, zeg dat eerlijk.",
     "",
+    "Als de gebruiker vraagt om een downloadbaar document (bijv. een rapport met",
+    "actiepunten of een blog), geef dan UITSLUITEND een documentblok terug, exact zo:",
+    "%%DOC <korte-bestandsslug>",
+    "# Titel",
+    "<nette Markdown met kopjes en '- ' bullets, gegrond in de data>",
+    "%%ENDDOC",
+    "Kies een beschrijvende slug (bijv. gsc-actiepunten of blog-beste-pagina). Zet geen",
+    "tekst buiten het blok. Voor gewone vragen: normaal antwoorden, zonder documentblok.",
+    "",
     "Search Console-data van deze sessie (top zoekwoorden en pagina's, laatste periode):",
     data,
   ].join("\n");
@@ -169,6 +178,29 @@ export function extractTextFromSSE(sse) {
     } catch (e) { /* niet-JSON regels overslaan */ }
   }
   return out;
+}
+
+// Herkent een documentblok in het agent-antwoord (DIR-18). De agent markeert een
+// downloadbaar document als:  %%DOC <bestandsslug>\n<markdown>\n%%ENDDOC
+// Geeft { slug, markdown } terug, of null als er geen documentblok is.
+export function parseDocMarker(text) {
+  const m = (text || "").match(/%%DOC[ \t]+([^\n]*)\n([\s\S]*?)\n?%%ENDDOC/);
+  if (!m) return null;
+  const slug = m[1].trim() || "document";
+  const markdown = m[2].trim();
+  if (!markdown) return null;
+  return { slug, markdown };
+}
+
+// Nette, beschrijvende .md-bestandsnaam op basis van de slug + datum (YYYYMMDD).
+export function docFilename(slug, dateStr) {
+  const veilig = String(slug || "document")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60) || "document";
+  const datum = (dateStr || "").replace(/[^0-9]/g, "").slice(0, 8);
+  return veilig + (datum ? "-" + datum : "") + ".md";
 }
 
 function json(obj, status = 200, extraHeaders) {
@@ -484,6 +516,7 @@ const OFFICE_HTML = `<!doctype html>
     padding:.35rem .6rem; border-bottom:2px solid var(--ink); }
   .card .body{ padding:.5rem .7rem; font-size:.88rem; line-height:1.4; white-space:pre-wrap; word-break:break-word; }
   .card .body ul{ margin:.2rem 0; padding-left:1.1rem; }
+  .download-knop{ align-self:flex-start; background:var(--accent); color:#111; }
   @media (max-width:640px){ .kamer{ transform:scale(.66); transform-origin:top center; }
     .stage{ height:280px; } h1.titel{ font-size:1.5rem; } }
 </style>
@@ -592,6 +625,34 @@ const OFFICE_HTML = `<!doctype html>
     msgs.appendChild(box); msgs.scrollTop=msgs.scrollHeight;
   }
 
+  // Documentblok herkennen (DIR-18): "%%DOC <slug>" ... "%%ENDDOC" met markdown ertussen.
+  function parseDoc(text){
+    var m=(text||'').match(/%%DOC[ \\t]+([^\\n]*)\\n([\\s\\S]*?)\\n?%%ENDDOC/);
+    if(!m) return null;
+    var md=m[2].trim(); if(!md) return null;
+    return { slug:(m[1].trim()||'document'), markdown:md };
+  }
+  function bestandsnaam(slug){
+    var d=new Date(); var yyyymmdd=''+d.getFullYear()+('0'+(d.getMonth()+1)).slice(-2)+('0'+d.getDate()).slice(-2);
+    var veilig=String(slug||'document').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60)||'document';
+    return veilig+'-'+yyyymmdd+'.md';
+  }
+  function toonDownload(slug, md){
+    var naam=bestandsnaam(slug);
+    var b=document.createElement('button'); b.className='knop download-knop';
+    b.textContent='\\u2b07 Download '+naam;
+    b.addEventListener('click',function(){
+      try{
+        var blob=new Blob([md],{type:'text/markdown;charset=utf-8'});
+        var url=URL.createObjectURL(blob);
+        var a=document.createElement('a'); a.href=url; a.download=naam;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+      }catch(e){ b.textContent='Download lukte niet — selecteer de tekst en kopieer.'; }
+    });
+    msgs.appendChild(b); msgs.scrollTop=msgs.scrollHeight;
+  }
+
   async function streamChat(payload, dashboard){
     if(busy) return; busy=true; sendBtn.disabled=true;
     var bubble=addBubble('agent', dashboard?'Ik maak je analyse...':'...'); var got='';
@@ -617,7 +678,11 @@ const OFFICE_HTML = `<!doctype html>
               got+=evt.delta.text; bubble.textContent=got; msgs.scrollTop=msgs.scrollHeight; } }catch(e){} } }
       if(!got){ bubble.textContent='De agent gaf geen antwoord. Probeer het opnieuw.'; }
       else if(dashboard){ msgs.replaceChild(renderDashboard(got), bubble); msgs.scrollTop=msgs.scrollHeight; setActive(true); }
-      else { setActive(true); }
+      else {
+        var doc=parseDoc(got);
+        if(doc){ bubble.textContent=doc.markdown; toonDownload(doc.slug, doc.markdown); }
+        setActive(true);
+      }
     }catch(e){ bubble.textContent='Kon de agent niet bereiken. Probeer het opnieuw.'; }
     busy=false; sendBtn.disabled=false;
   }
