@@ -796,6 +796,9 @@ const OFFICE_HTML = `<!doctype html>
   #agent-desk{ cursor:pointer; transition:filter .12s; }
   #agent-desk:hover, #agent-desk:focus{ outline:none;
     filter:drop-shadow(0 0 6px #F18E02) drop-shadow(0 0 14px rgba(241,142,2,.6)); }
+  #gertjan-desk{ cursor:pointer; transition:filter .12s; }
+  #gertjan-desk:hover, #gertjan-desk:focus{ outline:none;
+    filter:drop-shadow(0 0 6px #3fd06a) drop-shadow(0 0 14px rgba(63,208,106,.6)); }
   .dog{ position:absolute; bottom:6%; left:6%; width:9%; pointer-events:none;
     animation:dd-dogwalk 26s ease-in-out infinite; }
   /* Rondlopende Albert (DIR-26) */
@@ -938,6 +941,21 @@ const OFFICE_HTML = `<!doctype html>
           <rect x="22" y="18" width="3" height="3" fill="#2a1c0c"/>
           <rect x="18" y="23" width="5" height="2" fill="#c98a5a"/>
         </symbol>
+        <!-- Gertjan (GA4): bril, korte baard, licht overhemd (DIR-29) -->
+        <symbol id="gertjan" viewBox="0 0 40 48">
+          <rect x="9" y="30" width="22" height="18" fill="#c7ccd2"/>
+          <rect x="9" y="30" width="22" height="4" fill="#aeb4bb"/>
+          <rect x="19" y="30" width="2" height="18" fill="#aeb4bb"/>
+          <rect x="17" y="26" width="6" height="5" fill="#d99a63"/>
+          <rect x="13" y="12" width="14" height="16" fill="#e8b98a"/>
+          <rect x="12" y="24" width="16" height="4" fill="#8a7050"/>
+          <rect x="12" y="8" width="16" height="6" fill="#6a4e2a"/>
+          <rect x="14" y="17" width="6" height="5" fill="#1a1a1a"/>
+          <rect x="15" y="18" width="4" height="3" fill="#bfe0ec"/>
+          <rect x="20" y="18" width="2" height="1" fill="#1a1a1a"/>
+          <rect x="22" y="17" width="6" height="5" fill="#1a1a1a"/>
+          <rect x="23" y="18" width="4" height="3" fill="#bfe0ec"/>
+        </symbol>
       </defs>
       <polygon points="0,0 640,0 544,48 96,48" fill="#171b20"/>
       <polygon points="0,0 96,48 96,50 0,4" fill="#0f1216"/>
@@ -996,7 +1014,17 @@ const OFFICE_HTML = `<!doctype html>
       </g>
       <use href="#plant" x="500" y="176" width="34" height="52"/>
       <use href="#plant" x="104" y="182" width="30" height="46"/>
-      <use href="#deskEmpty" x="300" y="250" width="80" height="64"/>
+      <!-- Gertjan (GA4-agent), actief + klikbaar (DIR-29) -->
+      <g id="gertjan-desk" role="button" tabindex="0" aria-label="Open de GA4-agent Gertjan">
+        <rect x="284" y="224" width="110" height="120" fill="#000" opacity="0"/>
+        <use href="#gertjan" x="306" y="250" width="52" height="63"/>
+        <use href="#deskEmpty" x="286" y="266" width="96" height="76"/>
+        <rect x="284" y="224" width="108" height="26" fill="#0b1219"/>
+        <rect x="284" y="224" width="108" height="26" fill="none" stroke="#3fd06a" stroke-width="1.5"/>
+        <circle cx="295" cy="235" r="4" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
+        <text x="305" y="239" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="10" fill="#f4f0e6">Gertjan</text>
+        <text x="289" y="248" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="7" fill="#c2ccd4">GA4-data-specialist</text>
+      </g>
       <use href="#deskEmpty" x="392" y="250" width="80" height="64"/>
       <use href="#deskEmpty" x="466" y="298" width="126" height="98"/>
       <!-- koffieautomaat (DIR-26) -->
@@ -1110,28 +1138,15 @@ const OFFICE_HTML = `<!doctype html>
 
 <div class="overlay" id="chat-overlay" role="dialog" aria-label="GSC-agent chat">
   <div class="chat">
-    <header><b>GSC-agent</b><button class="x" id="chat-close" aria-label="Sluiten">X</button></header>
+    <header><b id="chat-title">GSC-agent</b><button class="x" id="chat-close" aria-label="Sluiten">X</button></header>
     <div class="chatrow">
       <div class="portret" aria-hidden="true">
-        <div class="avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true">
-          <rect x="9" y="30" width="22" height="18" fill="#e58fa8"/>
-          <rect x="9" y="30" width="22" height="4" fill="#d16f8e"/>
-          <rect x="18" y="30" width="4" height="11" fill="#d16f8e"/>
-          <rect x="17" y="26" width="6" height="5" fill="#d99a63"/>
-          <rect x="13" y="12" width="14" height="16" fill="#e8b98a"/>
-          <rect x="13" y="12" width="14" height="3" fill="#f0c79a"/>
-          <rect x="12" y="8" width="16" height="6" fill="#5a3a1e"/>
-          <rect x="12" y="12" width="2" height="5" fill="#5a3a1e"/>
-          <rect x="26" y="12" width="2" height="5" fill="#5a3a1e"/>
-          <rect x="16" y="18" width="3" height="3" fill="#2a1c0c"/>
-          <rect x="22" y="18" width="3" height="3" fill="#2a1c0c"/>
-          <rect x="18" y="23" width="5" height="2" fill="#c98a5a"/>
-        </svg></div>
-        <div class="pnaam">&#9679; Albert</div>
+        <div class="avatar" id="chat-avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#albert"/></svg></div>
+        <div class="pnaam" id="chat-pnaam">&#9679; Albert</div>
       </div>
       <div class="chatmain">
         <div class="msgs" id="chat-msgs">
-          <div class="bubble agent">Hoi! Ik ben je GSC-agent. Koppel je Google Search Console, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.</div>
+          <div class="bubble agent">Hoi! Ik ben Albert, je GSC-agent. Koppel je Google-account, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.</div>
         </div>
         <div class="notice" id="privacy-notice">Privacy: je koppeling en dit gesprek leven alleen in deze sessie. Ze wissen zichzelf als je weggaat of na 30 minuten. Er wordt niets blijvend opgeslagen. Klik hieronder op "Koppel Google" om te beginnen.</div>
         <div class="bar">
@@ -1158,11 +1173,39 @@ const OFFICE_HTML = `<!doctype html>
   var switchBtn=document.getElementById('chat-switch');
   var composer=document.getElementById('chat-composer');
   var agent=document.getElementById('agent-desk');
+  var gertjanDesk=document.getElementById('gertjan-desk');
   var notice=document.getElementById('privacy-notice');
+  var titleEl=document.getElementById('chat-title');
+  var avatarEl=document.getElementById('chat-avatar');
+  var pnaamEl=document.getElementById('chat-pnaam');
   var connected=false, busy=false, started=false;
 
-  function openChat(){ overlay.style.display='flex'; }
+  // Agent-config: welke agent je aanklikt bepaalt portret, persona en endpoints (DIR-29).
+  var AGENTS={
+    gsc:{ key:'gsc', naam:'Albert', titel:'GSC-agent', sym:'albert', chat:'/api/chat', bron:'/api/gsc/sites',
+      needKey:'needSite', listKey:'sites', selKey:'site', switchLabel:'Andere site',
+      vraag:'Welke website wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je zoekcijfers...',
+      intro:'Hoi! Ik ben Albert, je GSC-agent. Koppel je Google-account, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.',
+      itemValue:function(x){return x;}, itemLabel:function(x){return x;} },
+    ga4:{ key:'ga4', naam:'Gertjan', titel:'GA4-agent (Gertjan)', sym:'gertjan', chat:'/api/ga4/chat', bron:'/api/ga4/properties',
+      needKey:'needProperty', listKey:'properties', selKey:'property', switchLabel:'Andere property',
+      vraag:'Welke GA4-property wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je GA4-cijfers...',
+      intro:'Hoi! Ik ben Gertjan, je GA4-data-specialist. Koppel je Google-account, dan geef ik je meteen een overzicht van je verkeer en kun je me alles vragen.',
+      itemValue:function(x){return x&&x.property;}, itemLabel:function(x){return (x&&(x.displayName||x.property))||'';} } };
+  var cur=AGENTS.gsc;
+
+  function openChat(key){ if(key) useAgent(key); overlay.style.display='flex'; }
   function closeChat(){ overlay.style.display='none'; }
+  function useAgent(key){
+    if(cur.key===key) return;              // zelfde agent → gesprek behouden
+    cur=AGENTS[key];
+    titleEl.textContent=cur.titel;
+    avatarEl.innerHTML='<svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#'+cur.sym+'"/></svg>';
+    pnaamEl.innerHTML='&#9679; '+cur.naam;
+    input.placeholder=cur.ph; switchBtn.textContent=cur.switchLabel;
+    started=false; setActive(false); msgs.innerHTML=''; addBubble('agent', cur.intro);
+    if(notice){ notice.style.display=connected?'none':'block'; notice.classList.remove('flash'); }
+  }
   function setConnected(v){ connected=v; connectBtn.style.display=v?'none':'inline-block';
     if(notice) notice.style.display=v?'none':'block'; }
   function setActive(v){ composer.style.display=v?'flex':'none'; switchBtn.style.display=v?'inline-block':'none'; }
@@ -1171,7 +1214,7 @@ const OFFICE_HTML = `<!doctype html>
   function setTyping(b){ b.innerHTML='<span class="typing" role="status" aria-label="Agent is aan het typen"><i></i><i></i><i></i></span>'; }
   function esc(s){ return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
 
-  function connect(){ window.location.href='/oauth/start'; }
+  function connect(){ try{ sessionStorage.setItem('dd_agent', cur.key); }catch(e){} window.location.href='/oauth/start'; }
 
   // Zet de gestreamde analyse-tekst met '## '-koppen om naar kaarten (AC-5).
   function renderDashboard(text){
@@ -1192,12 +1235,13 @@ const OFFICE_HTML = `<!doctype html>
     return wrap;
   }
 
-  function renderSitePicker(sites){
+  function renderPicker(items){
     var box=document.createElement('div'); box.className='sitekeuze';
-    var p=document.createElement('p'); p.textContent='Welke website wil je analyseren?'; box.appendChild(p);
-    (sites||[]).forEach(function(s){ var b=document.createElement('button'); b.className='knop sitebtn';
-      b.textContent=s; b.addEventListener('click',function(){ box.remove(); addBubble('user','Analyseer '+s);
-        streamChat({site:s}, true); }); box.appendChild(b); });
+    var p=document.createElement('p'); p.textContent=cur.vraag; box.appendChild(p);
+    (items||[]).forEach(function(it){ var val=cur.itemValue(it), label=cur.itemLabel(it);
+      var b=document.createElement('button'); b.className='knop sitebtn';
+      b.textContent=label; b.addEventListener('click',function(){ box.remove(); addBubble('user',cur.prefix+label);
+        var payload={}; payload[cur.selKey]=val; streamChat(payload, true); }); box.appendChild(b); });
     msgs.appendChild(box); msgs.scrollTop=msgs.scrollHeight;
   }
 
@@ -1233,12 +1277,12 @@ const OFFICE_HTML = `<!doctype html>
     if(busy) return; busy=true; sendBtn.disabled=true;
     var bubble=addBubble('agent',''); setTyping(bubble); var got='';
     try{
-      var r=await fetch('/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
+      var r=await fetch(cur.chat,{ method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify(payload||{}) });
       var ct=r.headers.get('Content-Type')||'';
       if(!r.ok||ct.indexOf('application/json')!==-1){
         var j={}; try{ j=await r.json(); }catch(e){}
-        if(j&&j.needSite){ bubble.remove(); renderSitePicker(j.sites); busy=false; sendBtn.disabled=false; return; }
+        if(j&&j[cur.needKey]){ bubble.remove(); renderPicker(j[cur.listKey]); busy=false; sendBtn.disabled=false; return; }
         bubble.textContent=(j&&j.error)||'Er ging iets mis. Probeer het opnieuw.';
         if(r.status===401){ setConnected(false); setActive(false); started=false; }
         busy=false; sendBtn.disabled=false; return;
@@ -1269,18 +1313,23 @@ const OFFICE_HTML = `<!doctype html>
   async function send(){ var t=(input.value||'').trim(); if(!t||busy) return; input.value='';
     addBubble('user',t); await streamChat({message:t}, false); }
 
-  async function switchSite(){ if(busy) return;
-    try{ var r=await fetch('/api/gsc/sites'); if(!r.ok) return; var j=await r.json(); renderSitePicker(j.sites||[]); }catch(e){} }
+  async function switchBron(){ if(busy) return;
+    try{ var r=await fetch(cur.bron); if(!r.ok) return; var j=await r.json(); renderPicker(j[cur.listKey]||[]); }catch(e){} }
 
   async function disconnect(){ try{ await fetch('/api/disconnect'); }catch(e){}
     setConnected(false); setActive(false); started=false; msgs.innerHTML='';
     notice.textContent='Je sessie is gewist. Er is niets bewaard.'; notice.classList.add('flash'); }
 
-  agent.addEventListener('click',function(){ openChat(); if(connected&&!started) startFlow(); });
-  agent.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openChat(); if(connected&&!started) startFlow(); } });
+  function openAgent(key){ openChat(key); if(connected&&!started) startFlow(); }
+  agent.addEventListener('click',function(){ openAgent('gsc'); });
+  agent.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent('gsc'); } });
+  if(gertjanDesk){
+    gertjanDesk.addEventListener('click',function(){ openAgent('ga4'); });
+    gertjanDesk.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent('ga4'); } });
+  }
   document.getElementById('chat-close').addEventListener('click',closeChat);
   connectBtn.addEventListener('click',connect);
-  switchBtn.addEventListener('click',switchSite);
+  switchBtn.addEventListener('click',switchBron);
   document.getElementById('chat-disconnect').addEventListener('click',disconnect);
   sendBtn.addEventListener('click',send);
   input.addEventListener('keydown',function(e){ if(e.key==='Enter') send(); });
@@ -1288,8 +1337,8 @@ const OFFICE_HTML = `<!doctype html>
   // Albert-kantooracties (DIR-26): af en toe weg van bureau, korte actie, terug. Klik op Albert = chat.
   (function(){
     var roam=document.getElementById('albert-roam'); if(!roam) return;
-    roam.addEventListener('click',function(){ openChat(); if(connected&&!started) startFlow(); });
-    roam.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openChat(); if(connected&&!started) startFlow(); } });
+    roam.addEventListener('click',function(){ openAgent('gsc'); });
+    roam.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent('gsc'); } });
     var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if(reduce) return;
     var HOME={l:27,b:12};
@@ -1317,8 +1366,11 @@ const OFFICE_HTML = `<!doctype html>
     plan();
   })();
 
-  // Bij (her)laden: al gekoppeld? Dan chat openen en de flow starten (na terugkeer van Google).
-  fetch('/api/gsc/sites').then(function(r){ if(r.ok){ setConnected(true); openChat(); startFlow(); }
+  // Bij (her)laden: al gekoppeld? Eén koppeling dekt beide agents. Open de agent die
+  // de koppeling startte (in sessionStorage bewaard bij connect), default Albert/GSC.
+  fetch('/api/gsc/sites').then(function(r){ if(r.ok){ setConnected(true);
+      var k='gsc'; try{ k=sessionStorage.getItem('dd_agent')||'gsc'; }catch(e){}
+      openAgent(AGENTS[k]?k:'gsc'); }
     else{ setConnected(false); } }).catch(function(){ setConnected(false); });
 })();
 
