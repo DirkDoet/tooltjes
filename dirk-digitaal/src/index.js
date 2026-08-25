@@ -136,10 +136,15 @@ export function buildSystemPrompt(gsc) {
   const data = gsc ? JSON.stringify(gsc, null, 2) : "(nog geen data geladen)";
   return [
     "Je bent de GSC-analist van Dirk Digitaal: een scherpe, behulpzame SEO-analist.",
-    "Schrijf altijd in het Nederlands en in de jij-vorm. Wees concreet en cijfermatig:",
-    "verwijs naar echte zoekwoorden, pagina's en getallen uit de data hieronder.",
-    "Geef bruikbare, prioriteerbare aanbevelingen; verzin geen data die er niet staat.",
-    "Als de gebruiker iets vraagt dat niet uit deze data te halen is, zeg dat eerlijk.",
+    "Schrijf altijd in het Nederlands en in de jij-vorm. Antwoord HELDER: korte zinnen,",
+    "concrete cijfers, geen jargon-brei. Verwijs naar echte zoekwoorden, pagina's en",
+    "getallen. Geef bruikbare, prioriteerbare aanbevelingen; verzin geen data.",
+    "",
+    "Je hebt een tool `gsc_query` om LIVE specifieke Search Console-data op te halen",
+    "(per pagina, zoekwoord of periode, eventueel gefilterd op één pagina/zoekwoord).",
+    "Gebruik die tool zodra de vraag over data gaat die niet in het overzicht hieronder",
+    "staat (bijv. een specifieke pagina of zoekwoord). Baseer je antwoord dan op de",
+    "opgehaalde cijfers, niet op een aanname. Lukt ophalen niet, zeg dat eerlijk.",
     "",
     "Als de gebruiker vraagt om een downloadbaar document (bijv. een rapport met",
     "actiepunten of een blog), geef dan UITSLUITEND een documentblok terug, exact zo:",
@@ -384,6 +389,125 @@ async function fetchGscPerformanceWithTrend(token, site) {
     vorige_totalen: prevTot,
     trend: computeTrend(curTot, prevTot),
   };
+}
+
+// ---------------------------------------------------- live GSC-tool (DIR-20) ---
+
+// Tool-definitie waarmee de agent tijdens het gesprek gericht GSC-data ophaalt.
+export function gscTool() {
+  return {
+    name: "gsc_query",
+    description:
+      "Haal live Google Search Console-prestaties op voor de gekozen site. Gebruik dit " +
+      "bij een vraag over een specifieke pagina, zoekwoord of periode die niet in het " +
+      "beginoverzicht staat. Groepeer op query, page of date; optioneel filteren op een " +
+      "pagina of zoekwoord (bevat-match).",
+    input_schema: {
+      type: "object",
+      properties: {
+        dimension: { type: "string", enum: ["query", "page", "date"], description: "Waarop groeperen." },
+        days: { type: "integer", description: "Aantal dagen terug (default 28, max 180)." },
+        filter_type: { type: "string", enum: ["page", "query"], description: "Optioneel filterveld." },
+        filter_value: { type: "string", description: "Filterwaarde (bevat-match)." },
+        row_limit: { type: "integer", description: "Max rijen (default 10, max 25)." },
+      },
+      required: ["dimension"],
+    },
+  };
+}
+
+function clamp(n, lo, hi, dflt) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return dflt;
+  return Math.max(lo, Math.min(hi, Math.round(x)));
+}
+
+// Bouwt de searchAnalytics.query-body uit de tool-argumenten (met verstandige limieten, AC-3).
+export function buildGscQueryBody(args, now) {
+  const a = args || {};
+  const days = clamp(a.days, 1, 180, 28);
+  const { startDate, endDate } = dateRange(days, now);
+  const dim = ["query", "page", "date"].includes(a.dimension) ? a.dimension : "query";
+  const body = { startDate, endDate, dimensions: [dim], rowLimit: clamp(a.row_limit, 1, 25, 10) };
+  if ((a.filter_type === "page" || a.filter_type === "query") && a.filter_value) {
+    body.dimensionFilterGroups = [{
+      filters: [{ dimension: a.filter_type, operator: "contains", expression: String(a.filter_value) }],
+    }];
+  }
+  return body;
+}
+
+async function fetchGscQuery(token, site, args) {
+  if (!site) return { error: "Geen site gekozen." };
+  const body = buildGscQueryBody(args, Date.now());
+  const endpoint = GSC_BASE + "/sites/" + encodeURIComponent(site) + "/searchAnalytics/query";
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) return { error: "Kon deze data niet ophalen bij Google (" + resp.status + ")." };
+  const data = await resp.json();
+  const sleutel = body.dimensions[0];
+  const rows = (data.rows || []).map((r) => ({
+    [sleutel]: (r.keys && r.keys[0]) || "",
+    clicks: Math.round(r.clicks || 0),
+    impressions: Math.round(r.impressions || 0),
+    ctr: Math.round((r.ctr || 0) * 1000) / 10,
+    position: Math.round((r.position || 0) * 10) / 10,
+  }));
+  return { periode: { van: body.startDate, tot: body.endDate }, dimensie: sleutel, rijen: rows };
+}
+
+// Splitst een assistant-response in tekst + tool_use-blokken.
+export function parseAssistant(content) {
+  let text = "";
+  const toolUses = [];
+  for (const b of content || []) {
+    if (b.type === "text" && typeof b.text === "string") text += b.text;
+    else if (b.type === "tool_use") toolUses.push(b);
+  }
+  return { text: text.trim(), toolUses };
+}
+
+async function callAnthropic(env, system, messages) {
+  const resp = await fetch(ANTHROPIC_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "x-api-key": env.ANTHROPIC_API_KEY,
+      "anthropic-version": ANTHROPIC_VERSION,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: CHAT_MAX_TOKENS,
+      system,
+      messages,
+      tools: [gscTool()],
+    }),
+  });
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+// Verpakt platte tekst als een SSE-stream die de bestaande frontend (content_block_delta) leest.
+function sseResponse(text) {
+  const enc = new TextEncoder();
+  const stuk = [];
+  for (let i = 0; i < text.length; i += 48) stuk.push(text.slice(i, i + 48));
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const p of stuk) {
+        const evt = { type: "content_block_delta", delta: { type: "text_delta", text: p } };
+        controller.enqueue(enc.encode("data: " + JSON.stringify(evt) + "\n\n"));
+      }
+      controller.enqueue(enc.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" },
+  });
 }
 
 const OFFICE_HTML = `<!doctype html>
@@ -915,51 +1039,49 @@ async function handleChat(request, env, ctx) {
     promptText = userText;
   }
 
-  const messages = buildAnthropicMessages(history, promptText);
+  const system = buildSystemPrompt(gsc);
+  const site = gsc && gsc.actief;
+  const convo = buildAnthropicMessages(history, promptText);
 
-  let upstream;
+  // Agentische tool-loop: het model mag live GSC-data ophalen (gsc_query) vóór het
+  // antwoordt. Max iteraties beperkt kosten/rate (AC-3). We voeren de loop niet-
+  // streamend uit en sturen de uiteindelijke tekst als SSE naar de bestaande frontend.
+  let finalText = "";
   try {
-    upstream = await fetch(ANTHROPIC_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "x-api-key": env.ANTHROPIC_API_KEY,
-        "anthropic-version": ANTHROPIC_VERSION,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: CHAT_MAX_TOKENS,
-        stream: true,
-        system: buildSystemPrompt(gsc),
-        messages,
-      }),
-    });
+    for (let i = 0; i < 5; i++) {
+      const resp = await callAnthropic(env, system, convo);
+      if (!resp || !resp.content) {
+        return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+      }
+      const parsed = parseAssistant(resp.content);
+      if (resp.stop_reason === "tool_use" && parsed.toolUses.length) {
+        convo.push({ role: "assistant", content: resp.content });
+        const resultaten = [];
+        for (const tu of parsed.toolUses) {
+          let out;
+          try { out = await fetchGscQuery(token, site, tu.input); }
+          catch (e) { out = { error: "kon deze data niet ophalen" }; }
+          resultaten.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out) });
+        }
+        convo.push({ role: "user", content: resultaten });
+        continue;
+      }
+      finalText = parsed.text;
+      break;
+    }
   } catch (e) {
     return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
   }
-  if (!upstream.ok || !upstream.body) {
-    return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
-  }
+  if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
-  // Stream naar de client én een kopie meelezen om het antwoord in de historie te bewaren.
-  const [naarClient, meelezen] = upstream.body.tee();
-  ctx.waitUntil((async () => {
-    try {
-      const sse = await new Response(meelezen).text();
-      const antwoord = extractTextFromSSE(sse);
-      const toevoegen = [{ role: "user", content: storedUser }];
-      if (antwoord) toevoegen.push({ role: "assistant", content: antwoord });
-      await stub.fetch("https://do/chat/append", { method: "POST", body: JSON.stringify({ messages: toevoegen }) });
-    } catch (e) { /* historie-bewaren is best-effort */ }
-  })());
+  ctx.waitUntil(
+    stub.fetch("https://do/chat/append", {
+      method: "POST",
+      body: JSON.stringify({ messages: [{ role: "user", content: storedUser }, { role: "assistant", content: finalText }] }),
+    }).catch(() => {})
+  );
 
-  return new Response(naarClient, {
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
-    },
-  });
+  return sseResponse(finalText);
 }
 
 export default {
