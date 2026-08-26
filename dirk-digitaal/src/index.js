@@ -1775,6 +1775,7 @@ const OFFICE_HTML = `<!doctype html>
         <div class="notice" id="privacy-notice">Privacy: je koppeling en dit gesprek leven alleen in deze sessie. Ze wissen zichzelf als je weggaat of na 30 minuten. Er wordt niets blijvend opgeslagen. Klik hieronder op "Koppel Google" om te beginnen.</div>
         <div class="bar">
           <button class="knop" id="chat-connect">Koppel Google</button>
+          <button class="knop" id="chat-meta" style="display:none">Meta Ads</button>
           <button class="knop" id="chat-switch" style="display:none">Andere site</button>
           <button class="knop rood" id="chat-disconnect">Verbreek &amp; wis</button>
         </div>
@@ -1794,6 +1795,7 @@ const OFFICE_HTML = `<!doctype html>
   var input=document.getElementById('chat-input');
   var sendBtn=document.getElementById('chat-send');
   var connectBtn=document.getElementById('chat-connect');
+  var metaBtn=document.getElementById('chat-meta');
   var switchBtn=document.getElementById('chat-switch');
   var composer=document.getElementById('chat-composer');
   var agent=document.getElementById('agent-desk');
@@ -1819,9 +1821,9 @@ const OFFICE_HTML = `<!doctype html>
       intro:'Hoi! Ik ben Gertjan, je GA4-data-specialist. Koppel je Google-account, dan geef ik je meteen een overzicht van je verkeer en kun je me alles vragen.',
       itemValue:function(x){return x&&x.property;}, itemLabel:function(x){return (x&&(x.displayName||x.property))||'';} },
     ads:{ key:'ads', naam:'Ilona', titel:'Ads-agent (Ilona)', sym:'ilona', chat:'/api/ads/chat', bron:'/api/ads/customers',
-      needKey:'needAccount', listKey:'accounts', selKey:'customer', switchLabel:'Ander account',
+      needKey:'needAccount', listKey:'accounts', selKey:'customer', switchLabel:'Ander account', connectLabel:'Koppel Google Ads',
       vraag:'Welk Google Ads-account wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je advertentiecijfers...',
-      intro:'Hoi! Ik ben Ilona, je Google Ads-specialist. Koppel je Google-account, dan geef ik je meteen een overzicht van je campagnes en kun je me alles vragen.',
+      intro:'Hoi! Ik ben Ilona, je advertentie-specialist. Kies een platform: "Koppel Google Ads" voor je Google-campagnes, of "Meta Ads" voor je Facebook/Instagram-cijfers (die komen via je persoonlijke klant-link).',
       itemValue:function(x){return x&&x.customer;}, itemLabel:function(x){return (x&&(x.id||x.customer))||'';} },
     anton:{ key:'anton', naam:'Anton', titel:'Content-specialist (Anton)', sym:'anton', chat:'/api/content/chat',
       geenKoppeling:true, ph:'Plak je tekst of vraag een bewerking...',
@@ -1837,6 +1839,8 @@ const OFFICE_HTML = `<!doctype html>
     avatarEl.innerHTML='<svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#'+cur.sym+'"/></svg>';
     pnaamEl.innerHTML='&#9679; '+cur.naam;
     input.placeholder=cur.ph; switchBtn.textContent=cur.switchLabel;
+    if(connectBtn) connectBtn.textContent=cur.connectLabel||'Koppel Google';
+    if(metaBtn) metaBtn.style.display=(key==='ads')?'inline-block':'none';   // Meta-knop alleen bij Ilona (DIR-42)
     started=false; setActive(false); msgs.innerHTML=''; addBubble('agent', cur.intro);
     if(cur.geenKoppeling){
       // Anton (DIR-39): geen koppel-stap → direct klaar om te chatten, geen privacy/koppel-scherm.
@@ -1857,6 +1861,22 @@ const OFFICE_HTML = `<!doctype html>
   function esc(s){ return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
 
   function connect(){ try{ sessionStorage.setItem('dd_agent', cur.key); }catch(e){} window.location.href='/oauth/start'; }
+
+  // Meta-knop (DIR-42): in een klant-magic-link-sessie direct Meta-modus; anders uitleg.
+  function metaKlik(){
+    if(busy) return;
+    fetch('/api/meta/status').then(function(r){ return r.json(); }).then(function(j){
+      if(j && j.available){
+        if(notice) notice.style.display='none';
+        if(connectBtn) connectBtn.style.display='none';
+        setActive(true); started=true;
+        addBubble('user','Laat mijn Meta-cijfers zien');
+        streamChat({}, false);
+      } else {
+        addBubble('agent','Meta-cijfers (Facebook/Instagram) zie je via je persoonlijke klant-link. Vraag Dirk om jouw link — die maakt hij in het beheer. Voor je Google-campagnes klik je op "Koppel Google Ads".');
+      }
+    }).catch(function(){ addBubble('agent','Kon de Meta-status niet ophalen. Probeer het later opnieuw.'); });
+  }
 
   // Zet de gestreamde analyse-tekst met '## '-koppen om naar kaarten (AC-5).
   function renderDashboard(text){
@@ -1979,6 +1999,7 @@ const OFFICE_HTML = `<!doctype html>
   }
   document.getElementById('chat-close').addEventListener('click',closeChat);
   connectBtn.addEventListener('click',connect);
+  if(metaBtn) metaBtn.addEventListener('click',metaKlik);
   switchBtn.addEventListener('click',switchBron);
   document.getElementById('chat-disconnect').addEventListener('click',disconnect);
   sendBtn.addEventListener('click',send);
@@ -2791,6 +2812,13 @@ export default {
     // DIR-30 — Ilona-agent (Google Ads): streaming chat met live tool-use (AC-4/AC-5).
     if (path === "/api/ads/chat" && request.method === "POST") {
       return handleAdsChat(request, env, ctx);
+    }
+
+    // DIR-42 — of deze sessie een klant-magic-link-context met Meta heeft (voor de Meta-knop).
+    if (path === "/api/meta/status" && request.method === "GET") {
+      const cookies = parseCookies(request.headers.get("Cookie"));
+      const klant = await kvGetClient(env, cookies[KLANT_COOKIE]);
+      return json({ available: !!(klant && metaConfigured(env)), naam: klant ? klant.naam : null });
     }
 
     // DIR-39 — Anton (content/tekst): pure Claude-agent, geen koppeling.
