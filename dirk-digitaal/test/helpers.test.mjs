@@ -38,6 +38,7 @@ import {
   shapeMetaInsights,
   metaTool,
   randomKey,
+  buildContentSystemPrompt,
 } from "../src/index.js";
 import { createHmac } from "node:crypto";
 
@@ -410,4 +411,14 @@ test("randomKey: uniek, niet-raadbaar (36 hex)", () => {
   const a = randomKey(), b = randomKey();
   assert.match(a, /^[0-9a-f]{36}$/);
   assert.notEqual(a, b);
+});
+
+test("buildContentSystemPrompt: Anton content-agent, NL jij-vorm, %%DOC, geen databron", () => {
+  const s = buildContentSystemPrompt();
+  assert.match(s, /Anton/);
+  assert.match(s, /jij-vorm/);
+  assert.match(s, /vertalen/);
+  assert.match(s, /SEO/);
+  assert.match(s, /%%DOC/);
+  assert.doesNotMatch(s, /nog geen data/);
 });

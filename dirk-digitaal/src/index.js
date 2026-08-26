@@ -132,6 +132,28 @@ const AGENT_INSTRUCTIES = {
       "## Opvallend\nWat springt eruit of verdient aandacht.\n" +
       "Sluit af met een korte vraag waar ik op wil inzoomen. Schrijf in het Nederlands, jij-vorm.",
   },
+  // ---- Anton — content/tekst (geen databron/koppeling) ----
+  anton: {
+    persona: [
+      "Je bent Anton, de content- en tekstspecialist van Dirk Digitaal. Je hebt GEEN databron of",
+      "koppeling — je werkt puur met de tekst en instructies die de gebruiker je geeft.",
+      "Schrijf altijd in het Nederlands en in de jij-vorm (tenzij de gebruiker een andere taal vraagt,",
+      "bijvoorbeeld bij vertalen). Lever HELDERE, direct bruikbare output; leg alleen kort uit als dat helpt.",
+      "",
+      "Je helpt met: schrijven, vertalen, spelling- en grammaticacontrole, inkorten, verlengen,",
+      "herschrijven (andere toon of doelgroep) en SEO-teksten. Vraag door als de opdracht onduidelijk is;",
+      "verzin geen feiten.",
+      "",
+      "Als de gebruiker vraagt om een downloadbaar document, geef dan UITSLUITEND een documentblok terug,",
+      "exact zo:",
+      "%%DOC <korte-bestandsslug>",
+      "# Titel",
+      "<nette Markdown met kopjes en '- ' bullets>",
+      "%%ENDDOC",
+      "Kies een beschrijvende slug (bijvoorbeeld blog-najaarsactie). Voor gewone bewerkingen: normaal",
+      "antwoorden, zonder documentblok.",
+    ],
+  },
 };
 // ============================================================================
 // ===== EINDE AGENT-INSTRUCTIES ==============================================
@@ -399,6 +421,11 @@ export function adsFirstAnalysisPrompt() {
 export function buildAdsSystemPrompt(ads) {
   const data = ads ? JSON.stringify(ads, null, 2) : "(nog geen data geladen)";
   return AGENT_INSTRUCTIES.ilona.persona.concat([data]).join("\n");
+}
+
+// Systeemprompt: Anton (content/tekst). Geen databron — puur de persona (DIR-39).
+export function buildContentSystemPrompt() {
+  return AGENT_INSTRUCTIES.anton.persona.join("\n");
 }
 
 // -------------------- Meta Ads + admin + klanten (KV, DIR-30) ---
@@ -787,6 +814,26 @@ export class SessionDO {
       return json({ ok: true });
     }
 
+    // Anton (content) sessie-historie (DIR-39): geen token nodig.
+    if (url.pathname === "/chat/state-content") {
+      const data = await this.state.storage.get(["lastActive", "contentmessages"]);
+      if (isExpired(data.get("lastActive"), now)) {
+        return json({ messages: [] });
+      }
+      await this.state.storage.put("lastActive", now);
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ messages: data.get("contentmessages") || [] });
+    }
+
+    if (url.pathname === "/chat/append-content") {
+      const { messages } = await request.json();
+      const bestaand = (await this.state.storage.get("contentmessages")) || [];
+      const nieuw = bestaand.concat(messages || []);
+      await this.state.storage.put({ contentmessages: nieuw, lastActive: now });
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ ok: true });
+    }
+
     // Sessie aanmaken/aanraken zonder Google-token (voor klant-magic-link, DIR-30).
     if (url.pathname === "/touch") {
       await this.state.storage.put("lastActive", now);
@@ -1143,7 +1190,7 @@ async function callAnthropic(env, system, messages, tools) {
 }
 
 // Verpakt platte tekst als een SSE-stream die de bestaande frontend (content_block_delta) leest.
-function sseResponse(text) {
+function sseResponse(text, extraHeaders) {
   const enc = new TextEncoder();
   const stuk = [];
   for (let i = 0; i < text.length; i += 48) stuk.push(text.slice(i, i + 48));
@@ -1158,7 +1205,7 @@ function sseResponse(text) {
     },
   });
   return new Response(stream, {
-    headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" },
+    headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache", ...(extraHeaders || {}) },
   });
 }
 
@@ -1202,6 +1249,9 @@ const OFFICE_HTML = `<!doctype html>
   #ilona-desk{ cursor:pointer; transition:filter .12s; }
   #ilona-desk:hover, #ilona-desk:focus{ outline:none;
     filter:drop-shadow(0 0 6px #e58fa8) drop-shadow(0 0 14px rgba(229,143,168,.6)); }
+  #anton-desk{ cursor:pointer; transition:filter .12s; }
+  #anton-desk:hover, #anton-desk:focus{ outline:none;
+    filter:drop-shadow(0 0 6px #3285D1) drop-shadow(0 0 14px rgba(50,133,209,.6)); }
   /* Hond (DIR-32): JS-gedreven, orthogonaal, zit/ligt bij de mand. */
   .dog{ position:absolute; bottom:6%; left:6%; width:9%; pointer-events:none;
     transition:left .6s linear, bottom .6s linear; }
@@ -1232,6 +1282,8 @@ const OFFICE_HTML = `<!doctype html>
   #gertjan-desk.rekt #gertjan-body{ animation:dd-stretch 2.2s ease-in-out; }
   #ilona-desk.away #ilona-body, #ilona-desk.away .ilona-hand{ opacity:0; }
   #ilona-desk.rekt #ilona-body{ animation:dd-stretch 2.2s ease-in-out; }
+  #anton-desk.away #anton-body, #anton-desk.away .anton-hand{ opacity:0; }
+  #anton-desk.rekt #anton-body{ animation:dd-stretch 2.2s ease-in-out; }
   /* chat-portret naast de chat (AC-2) */
   .chatrow{ display:flex; flex:1; min-height:0; }
   .chatmain{ flex:1; display:flex; flex-direction:column; min-width:0; }
@@ -1393,6 +1445,21 @@ const OFFICE_HTML = `<!doctype html>
           <rect x="22" y="18" width="2" height="2" fill="#2a1c0c"/>
           <rect x="18" y="23" width="4" height="2" fill="#d98a8a"/>
         </symbol>
+        <!-- Anton (content): kaal/kort haar, donker colbert + wit overhemd (DIR-39) -->
+        <symbol id="anton" viewBox="0 0 40 48">
+          <rect x="8" y="30" width="24" height="18" fill="#2a2f3a"/>
+          <rect x="17" y="30" width="6" height="16" fill="#f0f0f0"/>
+          <rect x="19" y="31" width="2" height="12" fill="#015092"/>
+          <rect x="8" y="30" width="6" height="18" fill="#20242e"/>
+          <rect x="26" y="30" width="6" height="18" fill="#20242e"/>
+          <rect x="17" y="26" width="6" height="5" fill="#c98a5a"/>
+          <rect x="13" y="12" width="14" height="16" fill="#d9a878"/>
+          <rect x="13" y="12" width="14" height="3" fill="#e6b98a"/>
+          <rect x="14" y="10" width="12" height="2" fill="#6a5a4a"/>
+          <rect x="16" y="18" width="2" height="2" fill="#2a1c0c"/>
+          <rect x="22" y="18" width="2" height="2" fill="#2a1c0c"/>
+          <rect x="18" y="23" width="4" height="2" fill="#b57a55"/>
+        </symbol>
       </defs>
       <polygon points="0,0 640,0 544,48 96,48" fill="#171b20"/>
       <polygon points="0,0 96,48 96,50 0,4" fill="#0f1216"/>
@@ -1496,8 +1563,27 @@ const OFFICE_HTML = `<!doctype html>
         <text x="464" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Ilona</text>
         <text x="464" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">Google Ads-specialist</text>
       </g>
-      <!-- Leeg: rechts-VOOR, op één lijn met Albert -->
-      <use href="#deskEmpty" x="458" y="250" width="120" height="96"/>
+      <!-- Anton (content-agent), actief + klikbaar (DIR-39) — rechts-voor -->
+      <g id="anton-desk" role="button" tabindex="0" aria-label="Open de content-agent Anton">
+        <rect x="458" y="222" width="120" height="130" fill="#000" opacity="0"/>
+        <g id="anton-body" style="transform-origin:504px 300px;animation:dd-albert-idle 6.2s ease-in-out infinite">
+          <use href="#anton" x="478" y="254" width="52" height="63"/>
+        </g>
+        <use href="#deskEmpty" x="458" y="250" width="120" height="96"/>
+        <g class="anton-hand" style="transform-origin:498px 305px;animation:dd-type-l .5s steps(2) infinite">
+          <rect x="494" y="300" width="6" height="9" fill="#2a2f3a"/>
+          <rect x="493" y="307" width="9" height="6" fill="#d9a878"/>
+        </g>
+        <g class="anton-hand" style="transform-origin:514px 305px;animation:dd-type-r .5s steps(2) infinite">
+          <rect x="510" y="300" width="6" height="9" fill="#2a2f3a"/>
+          <rect x="507" y="307" width="9" height="6" fill="#d9a878"/>
+        </g>
+        <rect x="468" y="228" width="100" height="24" fill="#0b1219"/>
+        <rect x="468" y="228" width="100" height="24" fill="none" stroke="#3285D1" stroke-width="1.5"/>
+        <circle cx="478" cy="236" r="3.5" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
+        <text x="518" y="238" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Anton</text>
+        <text x="518" y="247" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">Content-specialist</text>
+      </g>
       <!-- koffieautomaat (DIR-26) -->
       <g>
         <rect x="40" y="250" width="30" height="52" fill="#2b2f36"/>
@@ -1622,6 +1708,17 @@ const OFFICE_HTML = `<!doctype html>
         </svg>
       </div>
     </div>
+    <div class="roam" id="anton-roam" role="button" tabindex="0" aria-label="Open de content-agent (Anton)">
+      <div class="roam-fig">
+        <svg viewBox="0 0 40 56" width="100%" shape-rendering="crispEdges" style="image-rendering:pixelated;display:block;">
+          <use href="#anton" x="0" y="0" width="40" height="48"/>
+          <g class="poot poot-a"><rect x="14" y="47" width="5" height="9" fill="#2a3138"/></g>
+          <g class="poot poot-b"><rect x="21" y="47" width="5" height="9" fill="#2a3138"/></g>
+          <g class="draag draag-koffie"><rect x="30" y="30" width="7" height="8" fill="#e8e2d8"/><rect x="30" y="30" width="7" height="2" fill="#c9c2b4"/><rect x="37" y="32" width="2" height="3" fill="#e8e2d8"/></g>
+          <g class="draag draag-papier"><rect x="30" y="28" width="8" height="11" fill="#f4f0e6"/><rect x="32" y="31" width="4" height="1" fill="#9aa2aa"/><rect x="32" y="34" width="4" height="1" fill="#9aa2aa"/></g>
+        </svg>
+      </div>
+    </div>
 
     <div style="position:absolute;top:0;left:0;right:0;height:30%;background:linear-gradient(to bottom, rgba(8,11,15,.82) 0%, rgba(8,11,15,.5) 55%, rgba(8,11,15,0) 100%);pointer-events:none;"></div>
     <div style="position:absolute;top:5%;left:0;right:0;text-align:center;pointer-events:none;">
@@ -1675,6 +1772,7 @@ const OFFICE_HTML = `<!doctype html>
   var agent=document.getElementById('agent-desk');
   var gertjanDesk=document.getElementById('gertjan-desk');
   var ilonaDesk=document.getElementById('ilona-desk');
+  var antonDesk=document.getElementById('anton-desk');
   var notice=document.getElementById('privacy-notice');
   var titleEl=document.getElementById('chat-title');
   var avatarEl=document.getElementById('chat-avatar');
@@ -1697,7 +1795,10 @@ const OFFICE_HTML = `<!doctype html>
       needKey:'needAccount', listKey:'accounts', selKey:'customer', switchLabel:'Ander account',
       vraag:'Welk Google Ads-account wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je advertentiecijfers...',
       intro:'Hoi! Ik ben Ilona, je Google Ads-specialist. Koppel je Google-account, dan geef ik je meteen een overzicht van je campagnes en kun je me alles vragen.',
-      itemValue:function(x){return x&&x.customer;}, itemLabel:function(x){return (x&&(x.id||x.customer))||'';} } };
+      itemValue:function(x){return x&&x.customer;}, itemLabel:function(x){return (x&&(x.id||x.customer))||'';} },
+    anton:{ key:'anton', naam:'Anton', titel:'Content-specialist (Anton)', sym:'anton', chat:'/api/content/chat',
+      geenKoppeling:true, ph:'Plak je tekst of vraag een bewerking...',
+      intro:'Hoi! Ik ben Anton, je content-specialist. Plak een tekst en vraag me te schrijven, vertalen, spellingchecken, in te korten, te verlengen, SEO-optimaliseren of te herschrijven.' } };
   var cur=AGENTS.gsc;
 
   function openChat(key){ if(key) useAgent(key); overlay.style.display='flex'; }
@@ -1710,7 +1811,15 @@ const OFFICE_HTML = `<!doctype html>
     pnaamEl.innerHTML='&#9679; '+cur.naam;
     input.placeholder=cur.ph; switchBtn.textContent=cur.switchLabel;
     started=false; setActive(false); msgs.innerHTML=''; addBubble('agent', cur.intro);
-    if(notice){ notice.style.display=connected?'none':'block'; notice.classList.remove('flash'); }
+    if(cur.geenKoppeling){
+      // Anton (DIR-39): geen koppel-stap → direct klaar om te chatten, geen privacy/koppel-scherm.
+      if(notice) notice.style.display='none';
+      if(connectBtn) connectBtn.style.display='none';
+      setActive(true); switchBtn.style.display='none'; started=true;
+    } else {
+      if(connectBtn) connectBtn.style.display=connected?'none':'inline-block';
+      if(notice){ notice.style.display=connected?'none':'block'; notice.classList.remove('flash'); }
+    }
   }
   function setConnected(v){ connected=v; connectBtn.style.display=v?'none':'inline-block';
     if(notice) notice.style.display=v?'none':'block'; }
@@ -1837,6 +1946,10 @@ const OFFICE_HTML = `<!doctype html>
     ilonaDesk.addEventListener('click',function(){ openAgent('ads'); });
     ilonaDesk.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent('ads'); } });
   }
+  if(antonDesk){
+    antonDesk.addEventListener('click',function(){ openAgent('anton'); });
+    antonDesk.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent('anton'); } });
+  }
   document.getElementById('chat-close').addEventListener('click',closeChat);
   connectBtn.addEventListener('click',connect);
   switchBtn.addEventListener('click',switchBron);
@@ -1849,12 +1962,12 @@ const OFFICE_HTML = `<!doctype html>
   // geeft planten water; af en toe lopen twee agents naar elkaar om te "overleggen".
   (function(){
     var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    var HOMES={ gsc:{l:20,b:12}, ga4:{l:44,b:24}, ads:{l:66,b:24} };
+    var HOMES={ gsc:{l:20,b:12}, ga4:{l:44,b:24}, ads:{l:66,b:24}, anton:{l:76,b:12} };
     // Albert/Gertjan: koffie, printje, hond aaien (mand links-achter), rekken.
     var GEWONE=[{l:9,b:16,drag:'koffie'},{l:88,b:16,drag:'papier'},{l:16,b:15,drag:null},{l:34,b:9,drag:null},null];
     // Ilona: planten water geven (rechts + links), en af en toe rekken.
     var ILONA=[{l:78,b:20,drag:'gieter'},{l:16,b:13,drag:'gieter'},null];
-    var ACTIES={ gsc:GEWONE, ga4:GEWONE, ads:ILONA };
+    var ACTIES={ gsc:GEWONE, ga4:GEWONE, ads:ILONA, anton:GEWONE };
     function maakRoamer(desk, roam, key){
       if(!desk||!roam) return;
       var home=HOMES[key], spots=ACTIES[key];
@@ -1892,7 +2005,7 @@ const OFFICE_HTML = `<!doctype html>
       }
       // Overleggen: loop naar de zijkant van een ander bureau, sta daar even, ga terug.
       function overleg(){
-        var andere=['gsc','ga4','ads'].filter(function(x){ return x!==key; });
+        var andere=['gsc','ga4','ads','anton'].filter(function(x){ return x!==key; });
         var o=HOMES[andere[Math.floor(Math.random()*andere.length)]];
         trip({ l: o.l + (home.l < o.l ? -9 : 9), b: o.b }, { wacht:3000 });
       }
@@ -1908,6 +2021,7 @@ const OFFICE_HTML = `<!doctype html>
     maakRoamer(agent, document.getElementById('albert-roam'), 'gsc');
     maakRoamer(gertjanDesk, document.getElementById('gertjan-roam'), 'ga4');
     maakRoamer(ilonaDesk, document.getElementById('ilona-roam'), 'ads');
+    maakRoamer(antonDesk, document.getElementById('anton-roam'), 'anton');
   })();
 
   // Bij (her)laden: al gekoppeld? Eén koppeling dekt beide agents. Open de agent die
@@ -2352,6 +2466,48 @@ async function handleAdsChat(request, env, ctx) {
   return sseResponse(finalText);
 }
 
+// Anton (content/tekst): pure Claude-agent, geen databron/koppeling (DIR-39).
+async function handleContentChat(request, env, ctx) {
+  if (!env.ANTHROPIC_API_KEY) {
+    return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
+  }
+  const cookies = parseCookies(request.headers.get("Cookie"));
+  let id = cookies[COOKIE];
+  let setCookie = null;
+  if (!id) { id = crypto.randomUUID(); setCookie = sessionCookie(id, Math.floor(SESSION_TTL_MS / 1000)); }
+  const stub = sessionStub(env, id);
+  await stub.fetch("https://do/touch", { method: "POST" }).catch(() => {});
+  let history = [];
+  try { const r = await stub.fetch("https://do/chat/state-content"); if (r.ok) history = (await r.json()).messages || []; } catch (e) { /* stateless fallback */ }
+
+  let body = {};
+  try { body = await request.json(); } catch (e) { /* leeg */ }
+  const userText = (body && typeof body.message === "string") ? body.message.trim() : "";
+  if (!userText) return json({ error: "Plak een tekst of stel een vraag." }, 400);
+
+  const system = buildContentSystemPrompt();
+  const convo = buildAnthropicMessages(history, userText);
+
+  let finalText = "";
+  try {
+    const resp = await callAnthropic(env, system, convo, []);
+    if (!resp || !resp.content) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+    finalText = parseAssistant(resp.content).text;
+  } catch (e) {
+    return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
+  }
+  if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
+
+  ctx.waitUntil(
+    stub.fetch("https://do/chat/append-content", {
+      method: "POST",
+      body: JSON.stringify({ messages: [{ role: "user", content: userText }, { role: "assistant", content: finalText }] }),
+    }).catch(() => {})
+  );
+
+  return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined);
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -2574,6 +2730,11 @@ export default {
     // DIR-30 — Ilona-agent (Google Ads): streaming chat met live tool-use (AC-4/AC-5).
     if (path === "/api/ads/chat" && request.method === "POST") {
       return handleAdsChat(request, env, ctx);
+    }
+
+    // DIR-39 — Anton (content/tekst): pure Claude-agent, geen koppeling.
+    if (path === "/api/content/chat" && request.method === "POST") {
+      return handleContentChat(request, env, ctx);
     }
 
     return json({ error: "Onbekende route." }, 404);
