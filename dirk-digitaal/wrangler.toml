@@ -11,6 +11,15 @@ class_name = "SessionDO"
 tag = "v1"
 new_sqlite_classes = ["SessionDO"]
 
+# KV voor klant-config (DIR-30): sleutel -> { naam, adAccountId }. Alleen config, geen klantdata.
+[[kv_namespaces]]
+binding = "CLIENTS"
+id = "REPLACE_ME"  # wrangler kv namespace create CLIENTS -> id hier plakken (vóór deploy)
+
 # Secrets (NIET hier invullen — via `wrangler secret put`):
 #   wrangler secret put GOOGLE_CLIENT_ID
 #   wrangler secret put GOOGLE_CLIENT_SECRET
+#   wrangler secret put ANTHROPIC_API_KEY
+#   wrangler secret put META_SYSTEM_TOKEN     # Meta System User-token (Ilona)
+#   wrangler secret put META_APP_SECRET       # voor appsecret_proof
+#   wrangler secret put ADMIN_PASSWORD        # admin-beheer klanten

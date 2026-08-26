@@ -32,7 +32,14 @@ import {
   sumAdsRows,
   adsFirstAnalysisPrompt,
   buildAdsSystemPrompt,
+  appsecretProof,
+  metaActId,
+  buildMetaInsightsParams,
+  shapeMetaInsights,
+  metaTool,
+  randomKey,
 } from "../src/index.js";
+import { createHmac } from "node:crypto";
 
 test("buildGoogleAuthUrl: read-only scopes (GSC + GA4) + online (geen refresh-token)", () => {
   const u = new URL(buildGoogleAuthUrl({
@@ -347,4 +354,60 @@ test("buildAdsSystemPrompt: Ilona, Google Ads, jij-vorm, data ingebed", () => {
   assert.match(s, /ads_report/);
   assert.match(s, /customers\/123/);
   assert.match(buildAdsSystemPrompt(null), /nog geen data/);
+});
+
+// ------------------------------------------------- Meta Ads (DIR-30) ---
+
+test("appsecretProof: HMAC-SHA256(token, appSecret) hex", async () => {
+  const proof = await appsecretProof("tok123", "sec456");
+  const verwacht = createHmac("sha256", "sec456").update("tok123").digest("hex");
+  assert.equal(proof, verwacht);
+  assert.match(proof, /^[0-9a-f]{64}$/);
+});
+
+test("metaActId: normaliseert act_<id> en <id>", () => {
+  assert.equal(metaActId("act_123"), "act_123");
+  assert.equal(metaActId("123"), "act_123");
+  assert.equal(metaActId(""), "");
+});
+
+test("buildMetaInsightsParams: time_range als APARTE params + limieten", () => {
+  const now = Date.parse("2026-08-25T12:00:00Z");
+  const p = buildMetaInsightsParams({ level: "campaign", days: 7, row_limit: 5 }, now);
+  assert.equal(p.level, "campaign");
+  assert.equal(p["time_range[since]"], "2026-08-18");
+  assert.equal(p["time_range[until]"], "2026-08-25");
+  assert.equal(p.limit, "5");
+  assert.match(p.fields, /spend/);
+  assert.match(p.fields, /reach/);
+  assert.equal(p["time_range"], undefined);        // geen JSON-string
+  // defaults/clamps: onzin-level -> campaign, days 28, limit cap 50
+  const d = buildMetaInsightsParams({ level: "onzin", row_limit: 999 }, now);
+  assert.equal(d.level, "campaign");
+  assert.equal(d.limit, "50");
+  assert.equal(d["time_range[since]"], "2026-07-28");
+});
+
+test("shapeMetaInsights: spend/clicks/bereik + actions -> resultaten", () => {
+  const rows = [{
+    campaign_name: "Zomer",
+    spend: "12.345", impressions: "1000", clicks: "50", reach: "800", ctr: "5", cpc: "0.25",
+    actions: [{ action_type: "lead", value: "3" }, { action_type: "purchase", value: "2" }],
+  }];
+  assert.deepEqual(shapeMetaInsights(rows), [
+    { campagne: "Zomer", spend: 12.35, impressies: 1000, clicks: 50, bereik: 800, ctr: 5, cpc: 0.25, resultaten: 5 },
+  ]);
+  assert.deepEqual(shapeMetaInsights(undefined), []);
+});
+
+test("metaTool: naam meta_report", () => {
+  const t = metaTool();
+  assert.equal(t.name, "meta_report");
+  assert.ok(t.input_schema.properties.level.enum.includes("campaign"));
+});
+
+test("randomKey: uniek, niet-raadbaar (36 hex)", () => {
+  const a = randomKey(), b = randomKey();
+  assert.match(a, /^[0-9a-f]{36}$/);
+  assert.notEqual(a, b);
 });

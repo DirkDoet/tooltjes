@@ -31,6 +31,11 @@ const GA4_ADMIN_BASE = "https://analyticsadmin.googleapis.com/v1beta";
 const GA4_DATA_BASE = "https://analyticsdata.googleapis.com/v1beta";
 const GADS_VERSION = "v18";
 const GADS_BASE = "https://googleads.googleapis.com/" + GADS_VERSION;
+// Meta Ads per klant (magic-link + System User-token, achter admin-beheer) — DIR-30.
+const META_VERSION = "v21.0";
+const META_GRAPH_BASE = "https://graph.facebook.com/" + META_VERSION;
+const ADMIN_COOKIE = "dd_admin";   // admin-sessie (klantbeheer)
+const KLANT_COOKIE = "dd_klant";   // klant-sleutel (scoping via magic-link)
 
 // ============================================================================
 // ===== AGENT-INSTRUCTIES — HIER AANPASSEN, daarna `wrangler deploy` ==========
@@ -102,10 +107,10 @@ const AGENT_INSTRUCTIES = {
       "## Opvallend\nWat springt eruit of verdient aandacht (sterke stijging/daling, opvallend kanaal).\n" +
       "Sluit af met een korte vraag waar ik op wil inzoomen. Schrijf in het Nederlands, jij-vorm.",
   },
-  // ---- Ilona — Google Ads (Meta volgt later) ----
+  // ---- Ilona — Google Ads (+ Meta voor gekoppelde klanten) ----
   ilona: {
     persona: [
-      "Je bent Ilona, de advertentie-specialist van Dirk Digitaal (Google Ads; Meta volgt later).",
+      "Je bent Ilona, de advertentie-specialist van Dirk Digitaal (Google Ads en, voor gekoppelde klanten, Meta Ads).",
       "Schrijf altijd in het Nederlands en in de jij-vorm. Antwoord HELDER: korte zinnen,",
       "concrete cijfers (kosten in euro's, conversies), geen jargon-brei. Verwijs naar echte",
       "campagnes, zoekwoorden en getallen. Geef bruikbare, prioriteerbare aanbevelingen; verzin geen data.",
@@ -396,6 +401,168 @@ export function buildAdsSystemPrompt(ads) {
   return AGENT_INSTRUCTIES.ilona.persona.concat([data]).join("\n");
 }
 
+// -------------------- Meta Ads + admin + klanten (KV, DIR-30) ---
+
+// HMAC-SHA256 → hex (Web Crypto). Voor appsecret_proof én de admin-cookie.
+async function hmacHex(key, message) {
+  const enc = new TextEncoder();
+  const k = await crypto.subtle.importKey("raw", enc.encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", k, enc.encode(message));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// appsecret_proof = HMAC-SHA256 van het access token met het app-secret (AC-3).
+export async function appsecretProof(token, appSecret) {
+  return hmacHex(appSecret || "", token || "");
+}
+
+// Constante-tijd string-vergelijk (voorkomt timing-lek).
+function veiligGelijk(a, b) {
+  const x = String(a || ""), y = String(b || "");
+  if (x.length !== y.length) return false;
+  let r = 0;
+  for (let i = 0; i < x.length; i++) r |= x.charCodeAt(i) ^ y.charCodeAt(i);
+  return r === 0;
+}
+
+// Unieke, niet-raadbare sleutel voor een klant-magic-link (AC-1/AC-6).
+export function randomKey() {
+  const bytes = new Uint8Array(18);
+  crypto.getRandomValues(bytes);
+  let s = "";
+  for (const b of bytes) s += b.toString(16).padStart(2, "0");
+  return s; // 36 hex-tekens
+}
+
+// Admin-cookie: HMAC van een vaste string met het wachtwoord (niet te vervalsen).
+async function adminCookieValue(env) {
+  return hmacHex(env.ADMIN_PASSWORD || "", "dd-admin-v1");
+}
+
+// Geldige admin-sessie? (AC-1/AC-6)
+async function isAdmin(request, env) {
+  if (!env.ADMIN_PASSWORD) return false;
+  const got = parseCookies(request.headers.get("Cookie"))[ADMIN_COOKIE];
+  if (!got) return false;
+  return veiligGelijk(got, await adminCookieValue(env));
+}
+
+// Meta klaar? (system-token + app-secret aanwezig)
+function metaConfigured(env) {
+  return !!(env.META_SYSTEM_TOKEN && env.META_APP_SECRET);
+}
+
+// ---- Klant-config in KV: sleutel -> { naam, adAccountId } (AC-1). ----
+async function kvAddClient(env, naam, adAccountId) {
+  if (!env.CLIENTS) return null;
+  const key = randomKey();
+  const rec = { naam: String(naam || "").slice(0, 120), adAccountId: metaActId(adAccountId) };
+  await env.CLIENTS.put(key, JSON.stringify(rec));
+  return { key, ...rec };
+}
+async function kvGetClient(env, key) {
+  if (!env.CLIENTS || !key) return null;
+  const raw = await env.CLIENTS.get(key);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (e) { return null; }
+}
+async function kvListClients(env) {
+  if (!env.CLIENTS) return [];
+  const uit = [];
+  const list = await env.CLIENTS.list({ limit: 1000 });
+  for (const k of list.keys || []) {
+    const rec = await kvGetClient(env, k.name);
+    if (rec) uit.push({ key: k.name, naam: rec.naam, adAccountId: rec.adAccountId });
+  }
+  return uit;
+}
+async function kvDeleteClient(env, key) {
+  if (!env.CLIENTS || !key) return false;
+  await env.CLIENTS.delete(key);
+  return true;
+}
+
+// ---- Meta Graph-helpers (server-to-server, system-token + appsecret_proof) ----
+async function metaGraphGet(env, path, params) {
+  const token = env.META_SYSTEM_TOKEN;
+  const proof = await appsecretProof(token, env.META_APP_SECRET);
+  const qs = new URLSearchParams(params || {});
+  qs.set("access_token", token);
+  qs.set("appsecret_proof", proof);
+  const resp = await fetch(META_GRAPH_BASE + path + "?" + qs.toString());
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+// Normaliseer een ad-account-id naar "act_<cijfers>".
+export function metaActId(id) {
+  const s = String(id || "").trim();
+  if (!s) return "";
+  return /^act_/.test(s) ? s : "act_" + s.replace(/\D/g, "");
+}
+
+// Query-params voor act_<id>/insights. time_range als APARTE params (AC-4).
+export function buildMetaInsightsParams(args, now) {
+  const a = args || {};
+  const days = clamp(a.days, 1, 365, 28);
+  const { startDate, endDate } = dateRange(days, now);
+  const level = ["account", "campaign"].includes(a.level) ? a.level : "campaign";
+  const p = {
+    level,
+    fields: "campaign_name,spend,impressions,clicks,reach,ctr,cpc,actions",
+    limit: String(clamp(a.row_limit, 1, 50, 15)),
+  };
+  p["time_range[since]"] = startDate;
+  p["time_range[until]"] = endDate;
+  return p;
+}
+
+// Meta-insights-rijen → compact formaat.
+export function shapeMetaInsights(rows) {
+  return (rows || []).map((r) => {
+    const acties = Array.isArray(r.actions) ? r.actions.reduce((t, x) => t + Number(x.value || 0), 0) : 0;
+    return {
+      campagne: r.campaign_name || "(account)",
+      spend: Math.round(Number(r.spend || 0) * 100) / 100,
+      impressies: Math.round(Number(r.impressions || 0)),
+      clicks: Math.round(Number(r.clicks || 0)),
+      bereik: Math.round(Number(r.reach || 0)),
+      ctr: Math.round(Number(r.ctr || 0) * 100) / 100,
+      cpc: Math.round(Number(r.cpc || 0) * 100) / 100,
+      resultaten: Math.round(acties * 10) / 10,
+    };
+  });
+}
+
+// Tool waarmee Ilona live Meta-cijfers ophaalt voor het klant-account (AC-5).
+export function metaTool() {
+  return {
+    name: "meta_report",
+    description:
+      "Haal live Meta (Facebook/Instagram) Ads-cijfers op voor het account van deze klant: spend, " +
+      "impressies, klikken, bereik, CTR, CPC en resultaten, per campagne. Gebruik dit voor vragen " +
+      "over Meta-advertenties. Benoem duidelijk dat het om Meta gaat.",
+    input_schema: {
+      type: "object",
+      properties: {
+        level: { type: "string", enum: ["campaign", "account"], description: "Detailniveau." },
+        days: { type: "integer", description: "Aantal dagen terug (default 28, max 365)." },
+        row_limit: { type: "integer", description: "Max rijen (default 15, max 50)." },
+      },
+      required: [],
+    },
+  };
+}
+
+// Tool-call: Meta-insights live ophalen voor het (KV-gescopte) account (AC-4).
+async function fetchMetaInsights(env, act, args) {
+  const actId = metaActId(act);
+  if (!actId) return { error: "Geen Meta-account gekoppeld voor deze klant." };
+  const data = await metaGraphGet(env, "/" + actId + "/insights", buildMetaInsightsParams(args, Date.now()));
+  if (!data) return { error: "Kon deze Meta-data niet ophalen bij Facebook." };
+  return { rijen: shapeMetaInsights(data.data) };
+}
+
 // ------------------------------------------------------------------ agent ---
 
 const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
@@ -618,6 +785,26 @@ export class SessionDO {
       await this.state.storage.put({ adsmessages: nieuw, lastActive: now });
       await this.state.storage.setAlarm(now + SESSION_TTL_MS);
       return json({ ok: true });
+    }
+
+    // Sessie aanmaken/aanraken zonder Google-token (voor klant-magic-link, DIR-30).
+    if (url.pathname === "/touch") {
+      await this.state.storage.put("lastActive", now);
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ ok: true });
+    }
+
+    // Ilona-sessiestate die ook zonder Google-token werkt (klant-sessie).
+    if (url.pathname === "/chat/state-ilona") {
+      const data = await this.state.storage.get(["token", "lastActive", "adsmessages", "ads"]);
+      if (isExpired(data.get("lastActive"), now)) {
+        await this.state.storage.deleteAll();
+        await this.state.storage.deleteAlarm();
+        return json({ token: null }, 404);
+      }
+      await this.state.storage.put("lastActive", now);
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ token: data.get("token") || null, messages: data.get("adsmessages") || [], ads: data.get("ads") || null });
     }
 
     if (url.pathname === "/destroy") {
@@ -1762,6 +1949,87 @@ const OFFICE_HTML = `<!doctype html>
 </script>
 </body></html>`;
 
+// Admin-beheer klanten (DIR-30): simpele, functionele pagina achter ADMIN_PASSWORD.
+// NB: geen ${}/backticks/backslash-escapes in de inline JS (template-literal-veiligheid).
+const ADMIN_HTML = `<!doctype html>
+<html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dirk Digitaal — klantbeheer</title>
+<style>
+  body{ font-family:'Segoe UI',system-ui,Arial,sans-serif; max-width:760px; margin:2rem auto; padding:0 1rem; color:#171717; background:#f4f0e6; }
+  h1{ font-size:1.3rem; } h2{ font-size:1rem; margin-top:1.5rem; }
+  input,button{ font:inherit; padding:.5rem; margin:.2rem 0; }
+  input[type=text],input[type=password]{ width:100%; box-sizing:border-box; border:1px solid #999; }
+  button{ background:#015092; color:#fff; border:0; cursor:pointer; border-radius:3px; }
+  button.rood{ background:#b3402f; }
+  .rij{ border:1px solid #ccc; background:#fff; padding:.6rem; margin:.4rem 0; border-radius:4px; }
+  .rij b{ display:block; } .muted{ color:#666; font-size:.85rem; }
+  .link{ width:100%; box-sizing:border-box; }
+  #fout{ color:#b3402f; } .verborgen{ display:none; }
+</style></head><body>
+  <h1>Dirk Digitaal — klantbeheer (Meta)</h1>
+  <p class="muted">Voeg per klant een naam + Meta ad-account-id toe. Je krijgt een unieke link die je de klant stuurt; die link toont alleen zijn eigen Meta-data.</p>
+  <div id="login">
+    <h2>Inloggen</h2>
+    <input id="pw" type="password" placeholder="Admin-wachtwoord" autocomplete="current-password">
+    <button id="loginBtn">Inloggen</button>
+  </div>
+  <div id="beheer" class="verborgen">
+    <h2>Nieuwe klant</h2>
+    <input id="naam" type="text" placeholder="Naam (bijv. Bas van Genderen)">
+    <input id="acct" type="text" placeholder="Meta ad-account-id (bijv. act_1234567890 of 1234567890)">
+    <button id="addBtn">Toevoegen + link maken</button>
+    <h2>Klanten</h2>
+    <div id="lijst"></div>
+  </div>
+  <p id="fout"></p>
+<script>
+  var fout=document.getElementById('fout');
+  function toon(el,v){ el.className = v ? '' : 'verborgen'; }
+  function meld(t){ fout.textContent = t || ''; }
+  function api(method, path, data){
+    var opt={ method:method, headers:{'Content-Type':'application/json'} };
+    if(data) opt.body=JSON.stringify(data);
+    return fetch(path, opt).then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); });
+  }
+  function render(clients){
+    var lijst=document.getElementById('lijst'); lijst.textContent='';
+    if(!clients || !clients.length){ var p=document.createElement('p'); p.className='muted'; p.textContent='Nog geen klanten.'; lijst.appendChild(p); return; }
+    clients.forEach(function(c){
+      var d=document.createElement('div'); d.className='rij';
+      var b=document.createElement('b'); b.textContent=c.naam+'  ('+c.adAccountId+')'; d.appendChild(b);
+      var inp=document.createElement('input'); inp.className='link'; inp.type='text'; inp.readOnly=true;
+      inp.value=location.origin+'/?k='+c.key; inp.addEventListener('focus',function(){ inp.select(); });
+      d.appendChild(inp);
+      var del=document.createElement('button'); del.className='rood'; del.textContent='Verwijderen';
+      del.addEventListener('click',function(){ api('DELETE','/api/admin/clients?key='+encodeURIComponent(c.key)).then(laad); });
+      d.appendChild(del);
+      lijst.appendChild(d);
+    });
+  }
+  function laad(){
+    api('GET','/api/admin/clients').then(function(res){
+      if(!res.ok){ toon(document.getElementById('beheer'),false); toon(document.getElementById('login'),true); return; }
+      toon(document.getElementById('login'),false); toon(document.getElementById('beheer'),true);
+      render(res.j.clients||[]);
+    });
+  }
+  document.getElementById('loginBtn').addEventListener('click',function(){
+    meld(''); api('POST','/api/admin/login',{ password:document.getElementById('pw').value }).then(function(res){
+      if(!res.ok){ meld(res.j.error||'Inloggen mislukt.'); return; } laad();
+    });
+  });
+  document.getElementById('addBtn').addEventListener('click',function(){
+    meld(''); var naam=document.getElementById('naam').value, acct=document.getElementById('acct').value;
+    api('POST','/api/admin/clients',{ naam:naam, adAccountId:acct }).then(function(res){
+      if(!res.ok){ meld(res.j.error||'Toevoegen mislukt.'); return; }
+      document.getElementById('naam').value=''; document.getElementById('acct').value=''; laad();
+    });
+  });
+  laad();
+</script>
+</body></html>`;
+
 // Data voor één gekozen site laden + in de sessie zetten (historie schoon).
 async function selectSite(stub, token, siteUrl, alleSites) {
   const perf = await fetchGscPerformanceWithTrend(token, siteUrl);
@@ -1977,17 +2245,24 @@ async function handleAdsChat(request, env, ctx) {
   if (!env.ANTHROPIC_API_KEY) {
     return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
   }
-  if (!env.GOOGLE_ADS_DEVELOPER_TOKEN) {
-    return json({ error: "Google Ads is nog niet geconfigureerd (developer-token ontbreekt)." }, 500);
-  }
   const cookies = parseCookies(request.headers.get("Cookie"));
   const id = cookies[COOKIE];
-  if (!id) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account." }, 401);
+  if (!id) return json({ error: "Niet gekoppeld. Koppel Google Ads, of open je persoonlijke Meta-link." }, 401);
+
+  // Klant-scoping (DIR-30): de magic-link-sleutel bepaalt (via KV) welk Meta-account.
+  const klant = await kvGetClient(env, cookies[KLANT_COOKIE]);
+  const metaOn = !!(klant && metaConfigured(env));
+  const metaacct = klant ? klant.adAccountId : "";
 
   const stub = sessionStub(env, id);
-  const stateResp = await stub.fetch("https://do/chat/state-ads");
-  if (!stateResp.ok) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account." }, 401);
+  const stateResp = await stub.fetch("https://do/chat/state-ilona");
+  if (!stateResp.ok) return json({ error: "Je sessie is verlopen. Herlaad de pagina." }, 401);
   let { token, messages: history, ads } = await stateResp.json();
+
+  const googleAds = !!(token && env.GOOGLE_ADS_DEVELOPER_TOKEN);
+  if (!googleAds && !metaOn) {
+    return json({ error: "Nog geen advertentie-bron. Koppel Google Ads, of open je persoonlijke Meta-link." }, 401);
+  }
 
   let body = {};
   try { body = await request.json(); } catch (e) { /* lege body toegestaan */ }
@@ -1997,7 +2272,7 @@ async function handleAdsChat(request, env, ctx) {
   let promptText;
   let storedUser = userText;
 
-  if (wantCustomer) {
+  if (googleAds && wantCustomer) {
     const accounts = await fetchAdsCustomers(token, env);
     if (!accounts || !accounts.length) return json({ error: "Geen Google Ads-accounts gevonden in je koppeling." }, 502);
     if (!accounts.some((a) => a.customer === wantCustomer)) return json({ error: "Dat account staat niet in je koppeling." }, 400);
@@ -2006,7 +2281,7 @@ async function handleAdsChat(request, env, ctx) {
     history = [];
     promptText = ADS_ANALYSIS_PROMPT;
     storedUser = "[Analyse van " + wantCustomer + "]";
-  } else if (!ads) {
+  } else if (googleAds && !ads && !userText) {
     const accounts = await fetchAdsCustomers(token, env);
     if (!accounts || !accounts.length) return json({ error: "Geen Google Ads-accounts gevonden in je koppeling." }, 502);
     if (accounts.length > 1) return json({ needAccount: true, accounts });
@@ -2015,19 +2290,32 @@ async function handleAdsChat(request, env, ctx) {
     history = [];
     promptText = ADS_ANALYSIS_PROMPT;
     storedUser = "[Analyse van " + accounts[0].customer + "]";
-  } else {
-    if (!userText) return json({ error: "Stel een vraag over je advertentiecijfers." }, 400);
+  } else if (userText) {
     promptText = userText;
+  } else if (metaOn) {
+    promptText = "Geef een kort overzicht van de Meta-advertentieprestaties. Gebruik de meta_report-tool voor live cijfers en benoem duidelijk dat het om Meta gaat.";
+    storedUser = "[Meta-overzicht]";
+  } else {
+    return json({ error: "Stel een vraag over je advertentiecijfers." }, 400);
   }
 
-  const system = buildAdsSystemPrompt(ads);
+  let system = buildAdsSystemPrompt(ads);
+  const tools = [];
+  if (googleAds) tools.push(adsTool());
+  if (metaOn) {
+    tools.push(metaTool());
+    system += "\n\nMeta Ads is beschikbaar voor deze klant" + (klant.naam ? " (" + klant.naam + ")" : "") +
+      " — gebruik de meta_report-tool voor live Meta-cijfers en benoem duidelijk dat het om Meta gaat.";
+  }
+  if (!googleAds) system += "\n\nGoogle Ads is voor deze bezoeker niet gekoppeld; als daarnaar gevraagd wordt, zeg dat vriendelijk.";
+
   const customer = ads && ads.actief;
   const convo = buildAnthropicMessages(history, promptText);
 
   let finalText = "";
   try {
     for (let i = 0; i < 5; i++) {
-      const resp = await callAnthropic(env, system, convo, [adsTool()]);
+      const resp = await callAnthropic(env, system, convo, tools);
       if (!resp || !resp.content) {
         return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
       }
@@ -2037,8 +2325,10 @@ async function handleAdsChat(request, env, ctx) {
         const resultaten = [];
         for (const tu of parsed.toolUses) {
           let out;
-          try { out = await fetchAdsReport(token, env, customer, tu.input); }
-          catch (e) { out = { error: "kon deze data niet ophalen" }; }
+          try {
+            if (tu.name === "meta_report") out = metaOn ? await fetchMetaInsights(env, metaacct, tu.input) : { error: "Meta niet beschikbaar in deze sessie." };
+            else out = await fetchAdsReport(token, env, customer, tu.input);
+          } catch (e) { out = { error: "kon deze data niet ophalen" }; }
           resultaten.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out) });
         }
         convo.push({ role: "user", content: resultaten });
@@ -2069,9 +2359,60 @@ export default {
     const origin = url.origin;
     const redirectUri = origin + "/oauth/callback";
 
-    // Startpagina: het 2D retro-kantoor (DIR-14).
+    // Startpagina: het 2D retro-kantoor (DIR-14). Met ?k=<sleutel> = klant-magic-link
+    // (DIR-30): valideer de sleutel in KV, scope de sessie tot dat account, veeg de URL schoon.
     if (path === "/" && request.method === "GET") {
+      const k = url.searchParams.get("k");
+      if (k) {
+        const klant = await kvGetClient(env, k);
+        if (klant) {
+          let sid = parseCookies(request.headers.get("Cookie"))[COOKIE];
+          const setC = [];
+          if (!sid) { sid = crypto.randomUUID(); setC.push(sessionCookie(sid, Math.floor(SESSION_TTL_MS / 1000))); }
+          await sessionStub(env, sid).fetch("https://do/touch", { method: "POST" });
+          setC.push(`${KLANT_COOKIE}=${encodeURIComponent(k)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
+          const headers = new Headers({ Location: origin + "/" });
+          for (const c of setC) headers.append("Set-Cookie", c);
+          return new Response(null, { status: 302, headers });
+        }
+        // Onbekende/ongeldige sleutel → gewoon het kantoor, zonder Meta-scoping (AC-6).
+      }
       return new Response(OFFICE_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
+    // Admin-beheer klanten (DIR-30) — achter ADMIN_PASSWORD.
+    if (path === "/admin" && request.method === "GET") {
+      return new Response(ADMIN_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+    if (path === "/api/admin/login" && request.method === "POST") {
+      if (!env.ADMIN_PASSWORD) return json({ error: "Admin niet geconfigureerd (ADMIN_PASSWORD ontbreekt)." }, 500);
+      let b = {}; try { b = await request.json(); } catch (e) { /* leeg */ }
+      if (!b || !veiligGelijk(String(b.password || ""), env.ADMIN_PASSWORD)) return json({ error: "Onjuist wachtwoord." }, 401);
+      const val = await adminCookieValue(env);
+      return json({ ok: true }, 200, { "Set-Cookie": `${ADMIN_COOKIE}=${val}; Path=/; HttpOnly; Secure; SameSite=Lax` });
+    }
+    if (path === "/api/admin/logout" && request.method === "POST") {
+      return json({ ok: true }, 200, { "Set-Cookie": `${ADMIN_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0` });
+    }
+    if (path === "/api/admin/clients") {
+      if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
+      if (!env.CLIENTS) return json({ error: "KV (CLIENTS) is nog niet geconfigureerd." }, 500);
+      if (request.method === "GET") return json({ clients: await kvListClients(env) });
+      if (request.method === "POST") {
+        let b = {}; try { b = await request.json(); } catch (e) { /* leeg */ }
+        const naam = (b && b.naam || "").trim();
+        const acct = (b && b.adAccountId || "").trim();
+        if (!naam || !acct) return json({ error: "Naam en ad-account-id zijn verplicht." }, 400);
+        const rec = await kvAddClient(env, naam, acct);
+        return json({ client: rec, link: origin + "/?k=" + rec.key });
+      }
+      if (request.method === "DELETE") {
+        const key = url.searchParams.get("key");
+        if (!key) return json({ error: "Geef ?key=<sleutel>." }, 400);
+        await kvDeleteClient(env, key);
+        return json({ ok: true });
+      }
+      return json({ error: "Methode niet toegestaan." }, 405);
     }
 
     // AC-3 — start OAuth.

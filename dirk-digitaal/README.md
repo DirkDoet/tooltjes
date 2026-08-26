@@ -48,6 +48,21 @@ Rapporten: `campaigns`, `keywords`, `ad_groups`, `search_terms` (kosten in euro'
 
 **Prerequisites (Dirk, aanvragen kosten tijd):** in hetzelfde Cloud-project de **Google Ads API** (`googleads.googleapis.com`) inschakelen; scope `.../auth/adwords` op het consent screen; een **developer token** aanvragen (Google Ads Manager → API Center) met **Basic Access** (zonder Basic Access alléén eigen test-accounts). Zet het token als secret `GOOGLE_ADS_DEVELOPER_TOKEN`. Zonder dat secret geven de `/api/ads/*`-routes een nette fout.
 
+### Meta Ads per klant — magic-link + System User-token (DIR-30)
+
+Ilona kan óók **Meta Ads** tonen, **per klant**, zonder Facebook-login. Eén server-side **System User-token** (app "Dirk Doet Dashboard") leest de accounts; een **admin** koppelt per klant een ad-account en genereert een **magic-link**. De klant opent zijn link en Ilona toont alleen zíjn Meta-cijfers.
+
+| Route | Doel |
+|-------|------|
+| `GET /admin` | Klantbeheer (achter `ADMIN_PASSWORD`): klant + Meta ad-account-id toevoegen → unieke magic-link; overzicht + verwijderen. |
+| `POST /api/admin/login` | `{ "password": "..." }` → server-side check → httpOnly admin-cookie. |
+| `GET/POST/DELETE /api/admin/clients` | Klant-CRUD (alleen admin). Config in KV `CLIENTS`: sleutel → `{ naam, adAccountId }`. |
+| `GET /?k=<sleutel>` | Magic-link: scope de sessie tot dat ad-account (cookie), veeg de URL schoon. |
+
+De Ilona-chat (`POST /api/ads/chat`) krijgt binnen een klant-sessie de tool **`meta_report`** (Graph API v21.0, server-to-server met `appsecret_proof`; `time_range[since]`/`[until]` als aparte params). Meta-cijfers: spend, impressies, klikken, bereik, CTR, CPC, resultaten (per campagne).
+
+**Setup (Dirk):** `wrangler kv namespace create CLIENTS` → het id in `wrangler.toml` (`[[kv_namespaces]] binding="CLIENTS"`) plakken. Secrets: `wrangler secret put META_SYSTEM_TOKEN`, `META_APP_SECRET`, `ADMIN_PASSWORD`. Klant-ad-accounts aan de System User toewijzen in Business Manager. Zonder token/secret of geldige sleutel: geen Meta-toegang (nette NL-fout). Het system-token/secret komt **nooit** naar de client; klant A kan niet bij klant B (random sleutels). Google-flows (GSC/GA4/Google Ads) blijven per-user en ongemoeid.
+
 Niet-gekoppeld → de `/api/gsc/*`-, `/api/ga4/*`-, `/api/ads/*`- en chat-routes geven een nette JSON-fout (HTTP 401).
 
 De agent (`/api/chat`) is Nederlands + jij-vorm, gegrond in de GSC-data van de gekozen site (Claude, model `claude-sonnet-5`). De eerste analyse is een SEO-overzicht (samenvatting, sterke pagina's, kansen, trend t.o.v. de vorige 28 dagen) met vaste `## `-secties die de frontend als kaarten toont. Chatgeschiedenis + geladen data leven in de Durable Object en zijn session-only (weg bij disconnect of na 30 min inactiviteit).
