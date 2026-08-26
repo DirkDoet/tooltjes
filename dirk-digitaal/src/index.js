@@ -1023,6 +1023,9 @@ const OFFICE_HTML = `<!doctype html>
   #gertjan-desk{ cursor:pointer; transition:filter .12s; }
   #gertjan-desk:hover, #gertjan-desk:focus{ outline:none;
     filter:drop-shadow(0 0 6px #3fd06a) drop-shadow(0 0 14px rgba(63,208,106,.6)); }
+  #ilona-desk{ cursor:pointer; transition:filter .12s; }
+  #ilona-desk:hover, #ilona-desk:focus{ outline:none;
+    filter:drop-shadow(0 0 6px #e58fa8) drop-shadow(0 0 14px rgba(229,143,168,.6)); }
   .dog{ position:absolute; bottom:6%; left:6%; width:9%; pointer-events:none;
     animation:dd-dogwalk 26s ease-in-out infinite; }
   /* Rondlopende Albert (DIR-26) */
@@ -1183,6 +1186,24 @@ const OFFICE_HTML = `<!doctype html>
           <rect x="22" y="17" width="6" height="5" fill="#1a1a1a"/>
           <rect x="23" y="18" width="4" height="3" fill="#bfe0ec"/>
         </symbol>
+        <!-- Ilona (Google Ads): blond opgestoken haar + bloemenblouse (DIR-36) -->
+        <symbol id="ilona" viewBox="0 0 40 48">
+          <rect x="9" y="30" width="22" height="18" fill="#2f7f6e"/>
+          <rect x="13" y="34" width="2" height="2" fill="#F18E02"/>
+          <rect x="19" y="38" width="2" height="2" fill="#e58fa8"/>
+          <rect x="24" y="33" width="2" height="2" fill="#f0f0f0"/>
+          <rect x="16" y="42" width="2" height="2" fill="#F18E02"/>
+          <rect x="22" y="40" width="2" height="2" fill="#e58fa8"/>
+          <rect x="17" y="26" width="6" height="5" fill="#e0a878"/>
+          <rect x="13" y="12" width="14" height="16" fill="#f0c79a"/>
+          <rect x="12" y="9" width="16" height="6" fill="#e6c86a"/>
+          <rect x="18" y="4" width="6" height="6" fill="#e6c86a"/>
+          <rect x="11" y="13" width="2" height="6" fill="#e6c86a"/>
+          <rect x="27" y="13" width="2" height="6" fill="#e6c86a"/>
+          <rect x="16" y="18" width="2" height="2" fill="#2a1c0c"/>
+          <rect x="22" y="18" width="2" height="2" fill="#2a1c0c"/>
+          <rect x="18" y="23" width="4" height="2" fill="#d98a8a"/>
+        </symbol>
       </defs>
       <polygon points="0,0 640,0 544,48 96,48" fill="#171b20"/>
       <polygon points="0,0 96,48 96,50 0,4" fill="#0f1216"/>
@@ -1254,7 +1275,17 @@ const OFFICE_HTML = `<!doctype html>
         <text x="340" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">GA4-data-specialist</text>
       </g>
       <!-- Leeg: rechts-van-midden, ACHTER -->
-      <use href="#deskEmpty" x="410" y="232" width="104" height="83"/>
+      <!-- Ilona (Ads-agent), actief + klikbaar (DIR-36) -->
+      <g id="ilona-desk" role="button" tabindex="0" aria-label="Open de Ads-agent Ilona">
+        <rect x="410" y="204" width="104" height="114" fill="#000" opacity="0"/>
+        <use href="#ilona" x="424" y="234" width="48" height="58"/>
+        <use href="#deskEmpty" x="410" y="232" width="104" height="83"/>
+        <rect x="414" y="206" width="100" height="24" fill="#0b1219"/>
+        <rect x="414" y="206" width="100" height="24" fill="none" stroke="#e58fa8" stroke-width="1.5"/>
+        <circle cx="424" cy="214" r="3.5" fill="#e58fa8" style="animation:dd-blink 2s steps(1) infinite"/>
+        <text x="464" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Ilona</text>
+        <text x="464" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">Google Ads-specialist</text>
+      </g>
       <!-- Leeg: rechts-VOOR, op één lijn met Albert -->
       <use href="#deskEmpty" x="458" y="250" width="120" height="96"/>
       <!-- koffieautomaat (DIR-26) -->
@@ -1406,6 +1437,7 @@ const OFFICE_HTML = `<!doctype html>
   var composer=document.getElementById('chat-composer');
   var agent=document.getElementById('agent-desk');
   var gertjanDesk=document.getElementById('gertjan-desk');
+  var ilonaDesk=document.getElementById('ilona-desk');
   var notice=document.getElementById('privacy-notice');
   var titleEl=document.getElementById('chat-title');
   var avatarEl=document.getElementById('chat-avatar');
@@ -1423,7 +1455,12 @@ const OFFICE_HTML = `<!doctype html>
       needKey:'needProperty', listKey:'properties', selKey:'property', switchLabel:'Andere property',
       vraag:'Welke GA4-property wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je GA4-cijfers...',
       intro:'Hoi! Ik ben Gertjan, je GA4-data-specialist. Koppel je Google-account, dan geef ik je meteen een overzicht van je verkeer en kun je me alles vragen.',
-      itemValue:function(x){return x&&x.property;}, itemLabel:function(x){return (x&&(x.displayName||x.property))||'';} } };
+      itemValue:function(x){return x&&x.property;}, itemLabel:function(x){return (x&&(x.displayName||x.property))||'';} },
+    ads:{ key:'ads', naam:'Ilona', titel:'Ads-agent (Ilona)', sym:'ilona', chat:'/api/ads/chat', bron:'/api/ads/customers',
+      needKey:'needAccount', listKey:'accounts', selKey:'customer', switchLabel:'Ander account',
+      vraag:'Welk Google Ads-account wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je advertentiecijfers...',
+      intro:'Hoi! Ik ben Ilona, je Google Ads-specialist. Koppel je Google-account, dan geef ik je meteen een overzicht van je campagnes en kun je me alles vragen.',
+      itemValue:function(x){return x&&x.customer;}, itemLabel:function(x){return (x&&(x.id||x.customer))||'';} } };
   var cur=AGENTS.gsc;
 
   function openChat(key){ if(key) useAgent(key); overlay.style.display='flex'; }
@@ -1558,6 +1595,10 @@ const OFFICE_HTML = `<!doctype html>
   if(gertjanDesk){
     gertjanDesk.addEventListener('click',function(){ openAgent('ga4'); });
     gertjanDesk.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent('ga4'); } });
+  }
+  if(ilonaDesk){
+    ilonaDesk.addEventListener('click',function(){ openAgent('ads'); });
+    ilonaDesk.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent('ads'); } });
   }
   document.getElementById('chat-close').addEventListener('click',closeChat);
   connectBtn.addEventListener('click',connect);
