@@ -1356,6 +1356,9 @@ const OFFICE_HTML = `<!doctype html>
   .roam.draagt-gieter .draag-gieter{ display:block; }
   @keyframes dd-walkbob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
   @keyframes dd-stretch{0%,100%{transform:translateY(0) scaleY(1)}45%{transform:translateY(-3px) scaleY(1.06)}}
+  /* Hond aaien: bukken bij de mand (DIR-44 AC-6). */
+  @keyframes dd-bend{0%,100%{transform:translateY(0) scaleY(1)}45%,60%{transform:translateY(7px) scaleY(.88)}}
+  .roam.aait .roam-fig{ animation:dd-bend 1s ease-in-out infinite; }
   #agent-desk.away #albert-body, #agent-desk.away .albert-hand{ opacity:0; }
   #agent-desk.rekt #albert-body{ animation:dd-stretch 2.2s ease-in-out; }
   #gertjan-desk.away #gertjan-body, #gertjan-desk.away .gertjan-hand{ opacity:0; }
@@ -1654,7 +1657,7 @@ const OFFICE_HTML = `<!doctype html>
         <text x="464" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Ilona</text>
         <text x="464" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">Google Ads-specialist</text>
       </g>
-      <!-- Anton (content-agent), actief + klikbaar (DIR-39) — rechts-voor -->
+      <!-- Anton (content-agent), actief + klikbaar (DIR-39) — front-rechts (paar met Albert, DIR-44 AC-7) -->
       <g id="anton-desk" role="button" tabindex="0" aria-label="Open de content-agent Anton">
         <rect x="458" y="222" width="120" height="130" fill="#000" opacity="0"/>
         <g id="anton-body" style="transform-origin:504px 300px;animation:dd-albert-idle 6.2s ease-in-out infinite">
@@ -1698,24 +1701,11 @@ const OFFICE_HTML = `<!doctype html>
       </g>
       <g id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent" transform="translate(-30,0)">
         <rect x="146" y="220" width="150" height="126" fill="#000" opacity="0"/>
-        <rect x="196" y="256" width="42" height="46" fill="#111"/>
-        <rect x="200" y="260" width="34" height="30" fill="#1c1c1c"/>
         <g id="albert-body" style="transform-origin:218px 300px;animation:dd-albert-idle 5.5s ease-in-out infinite">
           <use href="#albert" x="186" y="238" width="64" height="77"/>
         </g>
-        <rect x="180" y="304" width="104" height="10" fill="#2b2b2b"/>
-        <rect x="180" y="314" width="104" height="34" fill="#141414"/>
-        <rect x="186" y="314" width="5" height="34" fill="#0c0c0c"/>
-        <rect x="273" y="314" width="5" height="34" fill="#0c0c0c"/>
-        <rect x="252" y="298" width="8" height="8" fill="#0c0c0c"/>
-        <rect x="246" y="278" width="36" height="24" fill="#0a0a0a"/>
-        <rect x="250" y="282" width="28" height="16" fill="#3a2400"/>
-        <rect x="252" y="284" width="14" height="2" fill="#F18E02"/>
-        <rect x="252" y="288" width="20" height="2" fill="#c97400"/>
-        <rect x="252" y="292" width="10" height="2" fill="#F18E02"/>
-        <rect x="196" y="306" width="34" height="7" fill="#3a3f47"/>
-        <rect x="198" y="307" width="30" height="2" fill="#20242a"/>
-        <rect x="198" y="310" width="30" height="2" fill="#20242a"/>
+        <!-- zelfde bureau-template (#deskEmpty 104x83) als de andere drie: even groot (DIR-44 AC-7) -->
+        <use href="#deskEmpty" x="166" y="256" width="104" height="83"/>
         <!-- typende handen/armen (DIR-25) -->
         <g class="albert-hand" style="transform-origin:210px 303px;animation:dd-type-l .5s steps(2) infinite">
           <rect x="205" y="293" width="6" height="9" fill="#e58fa8"/>
@@ -2115,19 +2105,24 @@ const OFFICE_HTML = `<!doctype html>
       // Loop van huis naar een bestemming, wacht daar, en loop terug.
       function trip(dest, opts){
         busy=true; actief=true; desk.classList.add('away');
+        // Zet de roamer eerst zonder animatie op zijn werkplek en forceer een reflow, zodat de
+        // startpositie vaststaat vóór de eerste stap — geen zichtbare teleport (DIR-44 AC-5).
         roam.style.transition='none'; roam.style.left=home.l+'%'; roam.style.bottom=home.b+'%'; pos={l:home.l,b:home.b};
         roam.classList.add('zichtbaar');
-        requestAnimationFrame(function(){
+        void roam.getBoundingClientRect();
+        requestAnimationFrame(function(){ requestAnimationFrame(function(){
           walk(dest, function(){
             if(opts.drag) roam.classList.add('draagt-'+opts.drag);
+            if(opts.bend) roam.classList.add('aait');
             setTimeout(function(){
+              roam.classList.remove('aait');
               walk(home, function(){
                 roam.classList.remove('zichtbaar','links','draagt-koffie','draagt-papier','draagt-gieter');
                 desk.classList.remove('away'); busy=false; actief=false; plan();
               });
             }, opts.wacht || 1700);
           });
-        });
+        }); });
       }
       // Overleggen: loop naar de zijkant van een ander bureau, sta daar even, ga terug.
       function overleg(){
@@ -2135,13 +2130,19 @@ const OFFICE_HTML = `<!doctype html>
         var o=HOMES[andere[Math.floor(Math.random()*andere.length)]];
         trip({ l: o.l + (home.l < o.l ? -9 : 9), b: o.b }, { wacht:3000 });
       }
+      // Naar de hondenmand links-achter lopen en zichtbaar bukken/aaien (DIR-44 AC-6).
+      function petDog(){ trip({l:15,b:14}, { wacht:1900, bend:true }); }
       function act(){
-        if(busy||actief){ plan(); return; }   // iemand anders loopt al → wacht tot vrij
-        if(Math.random()<0.25){ overleg(); return; }
+        var r=Math.random();
+        // Rekken/strekken gebeurt aan het eigen bureau (geen looplock nodig) → mag altijd, dus zichtbaar vaak.
+        if(r<0.30){ stretch(); return; }
+        if(busy||actief){ plan(); return; }   // roamen: er loopt al iemand → wacht tot vrij (max 1)
+        if(r<0.45){ overleg(); return; }
+        if(key!=='ads' && r<0.72){ petDog(); return; }   // Ilona watert planten i.p.v. hond aaien
         var s=spots[Math.floor(Math.random()*spots.length)];
         if(s) trip(s, { drag:s.drag, wacht:1700 }); else stretch();
       }
-      function plan(){ setTimeout(act, 12000+Math.random()*13000); }
+      function plan(){ setTimeout(act, 8000+Math.random()*9000); }
       plan();
     }
     maakRoamer(agent, document.getElementById('albert-roam'), 'gsc');
