@@ -528,6 +528,29 @@ export function metaActId(id) {
   return /^act_/.test(s) ? s : "act_" + s.replace(/\D/g, "");
 }
 
+// Ruwe Graph-ad-account-nodes → [{act, id, name}] (DIR-40).
+function shapeMetaAccounts(data) {
+  return (data && data.data || []).map((a) => ({ act: metaActId(a.id || a.account_id), id: a.account_id || metaActId(a.id).replace(/^act_/, ""), name: a.name || a.id }));
+}
+
+// Ad-accounts die het system-token ziet (primair me/adaccounts, fallback BM) — DIR-40 AC-1.
+const META_BUSINESS_ID = "360632044272098"; // Business Manager "Dirk Doet"
+async function fetchMetaAdAccounts(env) {
+  const mine = await metaGraphGet(env, "/me/adaccounts", { fields: "account_id,name", limit: "500" });
+  let accounts = mine ? shapeMetaAccounts(mine) : [];
+  if (accounts.length === 0) {
+    // Fallback: via Business Manager (client + owned ad-accounts).
+    const bizId = env.META_BUSINESS_ID || META_BUSINESS_ID;
+    const merged = {};
+    for (const edge of ["client_ad_accounts", "owned_ad_accounts"]) {
+      const bm = await metaGraphGet(env, "/" + bizId + "/" + edge, { fields: "account_id,name", limit: "500" });
+      for (const a of shapeMetaAccounts(bm)) merged[a.act] = a;
+    }
+    accounts = Object.values(merged);
+  }
+  return accounts;
+}
+
 // Query-params voor act_<id>/insights. time_range als APARTE params (AC-4).
 export function buildMetaInsightsParams(args, now) {
   const a = args || {};
@@ -2089,12 +2112,15 @@ const ADMIN_HTML = `<!doctype html>
     <button id="loginBtn">Inloggen</button>
   </div>
   <div id="beheer" class="verborgen">
-    <h2>Nieuwe klant</h2>
+    <h2>Je Meta-accounts</h2>
+    <p class="muted">Automatisch opgehaald via het system-token. Klik "Magic-link maken" bij een account om de klant te koppelen.</p>
+    <div id="accounts"></div>
+    <h2>Gekoppelde klanten</h2>
+    <div id="lijst"></div>
+    <h2>Handmatig toevoegen (optioneel)</h2>
     <input id="naam" type="text" placeholder="Naam (bijv. Bas van Genderen)">
     <input id="acct" type="text" placeholder="Meta ad-account-id (bijv. act_1234567890 of 1234567890)">
     <button id="addBtn">Toevoegen + link maken</button>
-    <h2>Klanten</h2>
-    <div id="lijst"></div>
   </div>
   <p id="fout"></p>
 <script>
@@ -2121,11 +2147,34 @@ const ADMIN_HTML = `<!doctype html>
       lijst.appendChild(d);
     });
   }
+  function renderAccounts(accounts, clients){
+    var box=document.getElementById('accounts'); box.textContent='';
+    var gekoppeld={}; (clients||[]).forEach(function(c){ gekoppeld[c.adAccountId]=true; });
+    if(!accounts || !accounts.length){ var p=document.createElement('p'); p.className='muted'; p.textContent='Geen Meta-accounts gevonden (of nog niet geconfigureerd).'; box.appendChild(p); return; }
+    accounts.forEach(function(a){
+      var d=document.createElement('div'); d.className='rij';
+      var b=document.createElement('b'); b.textContent=a.name+'  ('+a.act+')'; d.appendChild(b);
+      if(gekoppeld[a.act]){ var s=document.createElement('span'); s.className='muted'; s.textContent='Al gekoppeld'; d.appendChild(s); }
+      else {
+        var mk=document.createElement('button'); mk.textContent='Magic-link maken';
+        mk.addEventListener('click',function(){ meld(''); api('POST','/api/admin/clients',{ naam:a.name, adAccountId:a.act }).then(function(res){ if(!res.ok){ meld(res.j.error||'Koppelen mislukt.'); return; } laad(); }); });
+        d.appendChild(mk);
+      }
+      box.appendChild(d);
+    });
+  }
+  function laadAccounts(clients){
+    var box=document.getElementById('accounts'); box.textContent='Meta-accounts laden...';
+    api('GET','/api/admin/meta-accounts').then(function(res){
+      if(!res.ok){ box.textContent=(res.j&&res.j.error)||'Kon Meta-accounts niet ophalen.'; return; }
+      renderAccounts(res.j.accounts||[], clients);
+    });
+  }
   function laad(){
     api('GET','/api/admin/clients').then(function(res){
       if(!res.ok){ toon(document.getElementById('beheer'),false); toon(document.getElementById('login'),true); return; }
       toon(document.getElementById('login'),false); toon(document.getElementById('beheer'),true);
-      render(res.j.clients||[]);
+      var clients=res.j.clients||[]; render(clients); laadAccounts(clients);
     });
   }
   document.getElementById('loginBtn').addEventListener('click',function(){
@@ -2549,6 +2598,14 @@ export default {
     }
     if (path === "/api/admin/logout" && request.method === "POST") {
       return json({ ok: true }, 200, { "Set-Cookie": `${ADMIN_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0` });
+    }
+    // DIR-40 — admin: Meta ad-accounts automatisch oplijsten via het system-token.
+    if (path === "/api/admin/meta-accounts" && request.method === "GET") {
+      if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
+      if (!metaConfigured(env)) return json({ error: "Meta is nog niet geconfigureerd (system-token/app-secret ontbreekt)." }, 500);
+      const accounts = await fetchMetaAdAccounts(env);
+      if (accounts === null) return json({ error: "Kon je Meta ad-accounts niet ophalen bij Facebook." }, 502);
+      return json({ accounts });
     }
     if (path === "/api/admin/clients") {
       if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
