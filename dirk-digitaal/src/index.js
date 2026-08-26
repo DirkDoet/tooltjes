@@ -1319,7 +1319,15 @@ const OFFICE_HTML = `<!doctype html>
   .portret .avatar{ width:72px; height:72px; background:#0b1219; border:2px solid var(--accent);
     display:flex; align-items:center; justify-content:center; font-size:2.2rem; }
   .portret .pnaam{ margin-top:.4rem; font-size:.85rem; letter-spacing:1px; color:#3fd06a; }
-  @media (prefers-reduced-motion: reduce){ .scene-wrap *{ animation:none !important; } }
+  /* portret dynamisch (DIR-40): af en toe knipperen + 'typen' terwijl er een reactie binnenkomt */
+  .portret .avatar svg{ display:block; width:100%; height:100%; }
+  .portret .avatar .ooglid{ opacity:0; animation:dd-eyelid 5s steps(1,end) infinite; }
+  @keyframes dd-eyelid{ 0%,92%,100%{ opacity:0; } 94%,97%{ opacity:1; } }
+  .portret .avatar.aantypen svg{ animation:dd-portret-typ .5s ease-in-out infinite; transform-origin:50% 100%; }
+  .portret .avatar.aantypen .ooglid{ animation:dd-eyelid 1.4s steps(1,end) infinite; }
+  @keyframes dd-portret-typ{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-2px); } }
+  @media (prefers-reduced-motion: reduce){ .scene-wrap *{ animation:none !important; }
+    .portret .avatar .ooglid, .portret .avatar.aantypen svg{ animation:none !important; } }
   @media (max-width:640px){ .portret{ flex-basis:60px; }
     .portret .avatar{ width:48px; height:48px; font-size:1.5rem; } }
 
@@ -1767,7 +1775,7 @@ const OFFICE_HTML = `<!doctype html>
     <header><b id="chat-title">GSC-agent</b><button class="x" id="chat-close" aria-label="Sluiten">X</button></header>
     <div class="chatrow">
       <div class="portret" aria-hidden="true">
-        <div class="avatar" id="chat-avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#albert"/></svg></div>
+        <div class="avatar" id="chat-avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#albert"/><rect class="ooglid" x="14" y="17" width="12" height="4" fill="#e8b98a"/></svg></div>
         <div class="pnaam" id="chat-pnaam">&#9679; Albert</div>
       </div>
       <div class="chatmain">
@@ -1812,25 +1820,33 @@ const OFFICE_HTML = `<!doctype html>
 
   // Agent-config: welke agent je aanklikt bepaalt portret, persona en endpoints (DIR-29).
   var AGENTS={
-    gsc:{ key:'gsc', naam:'Albert', titel:'GSC-agent', sym:'albert', chat:'/api/chat', bron:'/api/gsc/sites',
+    gsc:{ key:'gsc', naam:'Albert', titel:'GSC-agent', sym:'albert', huid:'#e8b98a', chat:'/api/chat', bron:'/api/gsc/sites',
       needKey:'needSite', listKey:'sites', selKey:'site', switchLabel:'Andere site',
       vraag:'Welke website wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je zoekcijfers...',
       intro:'Hoi! Ik ben Albert, je GSC-agent. Koppel je Google-account, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.',
       itemValue:function(x){return x;}, itemLabel:function(x){return x;} },
-    ga4:{ key:'ga4', naam:'Gertjan', titel:'GA4-agent (Gertjan)', sym:'gertjan', chat:'/api/ga4/chat', bron:'/api/ga4/properties',
+    ga4:{ key:'ga4', naam:'Gertjan', titel:'GA4-agent (Gertjan)', sym:'gertjan', huid:'#e8b98a', chat:'/api/ga4/chat', bron:'/api/ga4/properties',
       needKey:'needProperty', listKey:'properties', selKey:'property', switchLabel:'Andere property',
       vraag:'Welke GA4-property wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je GA4-cijfers...',
       intro:'Hoi! Ik ben Gertjan, je GA4-data-specialist. Koppel je Google-account, dan geef ik je meteen een overzicht van je verkeer en kun je me alles vragen.',
       itemValue:function(x){return x&&x.property;}, itemLabel:function(x){return (x&&(x.displayName||x.property))||'';} },
-    ads:{ key:'ads', naam:'Ilona', titel:'Ads-agent (Ilona)', sym:'ilona', chat:'/api/ads/chat', bron:'/api/ads/customers',
+    ads:{ key:'ads', naam:'Ilona', titel:'Ads-agent (Ilona)', sym:'ilona', huid:'#f0c79a', chat:'/api/ads/chat', bron:'/api/ads/customers',
       needKey:'needAccount', listKey:'accounts', selKey:'customer', switchLabel:'Ander account', connectLabel:'Koppel Google Ads',
       vraag:'Welk Google Ads-account wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je advertentiecijfers...',
       intro:'Hoi! Ik ben Ilona, je advertentie-specialist. Kies een platform: "Koppel Google Ads" voor je Google-campagnes, of "Meta Ads" voor je Facebook/Instagram-cijfers (die komen via je persoonlijke klant-link).',
       itemValue:function(x){return x&&x.customer;}, itemLabel:function(x){return (x&&(x.id||x.customer))||'';} },
-    anton:{ key:'anton', naam:'Anton', titel:'Content-specialist (Anton)', sym:'anton', chat:'/api/content/chat',
+    anton:{ key:'anton', naam:'Anton', titel:'Content-specialist (Anton)', sym:'anton', huid:'#d9a878', chat:'/api/content/chat',
       geenKoppeling:true, ph:'Plak je tekst of vraag een bewerking...',
       intro:'Hoi! Ik ben Anton, je content-specialist. Plak een tekst en vraag me te schrijven, vertalen, spellingchecken, in te korten, te verlengen, SEO-optimaliseren of te herschrijven.' } };
   var cur=AGENTS.gsc;
+
+  // Portret-SVG: agent-symbool + knipperend ooglid (huidskleur over de ogen). DIR-40.
+  function avatarSVG(a){
+    return '<svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true">'
+      +'<use href="#'+a.sym+'"/>'
+      +'<rect class="ooglid" x="14" y="17" width="12" height="4" fill="'+(a.huid||'#e8b98a')+'"/>'
+      +'</svg>';
+  }
 
   function openChat(key){ if(key) useAgent(key); overlay.style.display='flex'; }
   function closeChat(){ overlay.style.display='none'; }
@@ -1838,7 +1854,7 @@ const OFFICE_HTML = `<!doctype html>
     if(cur.key===key) return;              // zelfde agent → gesprek behouden
     cur=AGENTS[key];
     titleEl.textContent=cur.titel;
-    avatarEl.innerHTML='<svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#'+cur.sym+'"/></svg>';
+    avatarEl.innerHTML=avatarSVG(cur);
     pnaamEl.innerHTML='&#9679; '+cur.naam;
     input.placeholder=cur.ph; switchBtn.textContent=cur.switchLabel;
     if(connectBtn) connectBtn.textContent=cur.connectLabel||'Koppel Google';
@@ -1939,6 +1955,7 @@ const OFFICE_HTML = `<!doctype html>
 
   async function streamChat(payload, dashboard){
     if(busy) return; busy=true; sendBtn.disabled=true;
+    if(avatarEl) avatarEl.classList.add('aantypen');   // portret 'typt' terwijl antwoord binnenkomt (DIR-40)
     var bubble=addBubble('agent',''); setTyping(bubble); var got='';
     try{
       var r=await fetch(cur.chat,{ method:'POST', headers:{'Content-Type':'application/json'},
@@ -1946,10 +1963,10 @@ const OFFICE_HTML = `<!doctype html>
       var ct=r.headers.get('Content-Type')||'';
       if(!r.ok||ct.indexOf('application/json')!==-1){
         var j={}; try{ j=await r.json(); }catch(e){}
-        if(j&&j[cur.needKey]){ bubble.remove(); renderPicker(j[cur.listKey]); busy=false; sendBtn.disabled=false; return; }
+        if(j&&j[cur.needKey]){ bubble.remove(); renderPicker(j[cur.listKey]); busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen'); return; }
         bubble.textContent=(j&&j.error)||'Er ging iets mis. Probeer het opnieuw.';
         if(r.status===401){ setConnected(false); setActive(false); started=false; }
-        busy=false; sendBtn.disabled=false; return;
+        busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen'); return;
       }
       var reader=r.body.getReader(); var dec=new TextDecoder(); var buf='';
       while(true){ var c=await reader.read(); if(c.done) break;
@@ -1968,7 +1985,7 @@ const OFFICE_HTML = `<!doctype html>
         setActive(true);
       }
     }catch(e){ bubble.textContent='Kon de agent niet bereiken. Probeer het opnieuw.'; }
-    busy=false; sendBtn.disabled=false;
+    busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen');
   }
 
   // Startpunt na koppelen: backend beslist tussen site-keuze (meerdere) of directe analyse (één).
@@ -2018,6 +2035,7 @@ const OFFICE_HTML = `<!doctype html>
     // Ilona: planten water geven (rechts + links), en af en toe rekken.
     var ILONA=[{l:78,b:20,drag:'gieter'},{l:16,b:13,drag:'gieter'},null];
     var ACTIES={ gsc:GEWONE, ga4:GEWONE, ads:ILONA, anton:GEWONE };
+    var actief=false;   // gedeelde lock: er mag maar ÉÉN agent tegelijk rondlopen (DIR-41)
     function maakRoamer(desk, roam, key){
       if(!desk||!roam) return;
       var home=HOMES[key], spots=ACTIES[key];
@@ -2038,7 +2056,7 @@ const OFFICE_HTML = `<!doctype html>
       function stretch(){ desk.classList.add('rekt'); setTimeout(function(){ desk.classList.remove('rekt'); plan(); }, 2300); }
       // Loop van huis naar een bestemming, wacht daar, en loop terug.
       function trip(dest, opts){
-        busy=true; desk.classList.add('away');
+        busy=true; actief=true; desk.classList.add('away');
         roam.style.transition='none'; roam.style.left=home.l+'%'; roam.style.bottom=home.b+'%'; pos={l:home.l,b:home.b};
         roam.classList.add('zichtbaar');
         requestAnimationFrame(function(){
@@ -2047,7 +2065,7 @@ const OFFICE_HTML = `<!doctype html>
             setTimeout(function(){
               walk(home, function(){
                 roam.classList.remove('zichtbaar','links','draagt-koffie','draagt-papier','draagt-gieter');
-                desk.classList.remove('away'); busy=false; plan();
+                desk.classList.remove('away'); busy=false; actief=false; plan();
               });
             }, opts.wacht || 1700);
           });
@@ -2060,7 +2078,7 @@ const OFFICE_HTML = `<!doctype html>
         trip({ l: o.l + (home.l < o.l ? -9 : 9), b: o.b }, { wacht:3000 });
       }
       function act(){
-        if(busy){ plan(); return; }
+        if(busy||actief){ plan(); return; }   // iemand anders loopt al → wacht tot vrij
         if(Math.random()<0.25){ overleg(); return; }
         var s=spots[Math.floor(Math.random()*spots.length)];
         if(s) trip(s, { drag:s.drag, wacht:1700 }); else stretch();
