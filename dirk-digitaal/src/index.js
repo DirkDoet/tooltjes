@@ -1336,11 +1336,11 @@ const OFFICE_HTML = `<!doctype html>
   .dog.loopt .dogleg-b{ animation:dd-legB .5s steps(1) infinite; }
   .dog .dogbody{ transform-origin:bottom center; transition:transform .5s ease; }
   .dog .dogleg{ transition:transform .5s ease; }
-  /* Zit: compact op het achterste. Lig: languit + plat (DIR-41). */
-  .dog.zit .dogbody{ transform:translateY(3px) scaleY(.86); }
-  .dog.zit .dogleg{ transform:translateY(4px); }
-  .dog.ligt .dogbody{ transform:translateY(11px) scaleY(.42) scaleX(1.06); }
-  .dog.ligt .dogleg{ transform:translateY(7px) scaleX(1.15); }
+  /* Zit: achterlijf ingezakt, kop omhoog (duidelijke zit-pose). Lig: plat/languit (DIR-44). */
+  .dog.zit .dogbody{ transform:translateY(2px) rotate(-13deg); transform-origin:82% bottom; }
+  .dog.zit .dogleg{ transform:translateY(6px) scaleY(.5); }
+  .dog.ligt .dogbody{ transform:translateY(15px) scaleY(.32) scaleX(1.12); }
+  .dog.ligt .dogleg{ transform:translateY(10px) scaleY(.4) scaleX(1.18); }
   /* Rondlopende agents (DIR-32): benen ALTIJD zichtbaar, alleen orthogonaal, dragen items. */
   .roam{ position:absolute; left:24%; bottom:12%; width:9%; display:none; z-index:4; cursor:pointer; }
   .roam.zichtbaar{ display:block; }
@@ -1597,15 +1597,16 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="458" y="106" width="14" height="12" fill="#3a2f18"/>
         <rect x="460" y="112" width="10" height="10" fill="#ffb733" style="animation:dd-bulb 3.6s ease-in-out infinite"/>
       </g>
-      <!-- mosterdgele bank: rechts-voor in de hoek -->
-      <g transform="translate(454,52)">
-        <rect x="100" y="272" width="86" height="20" fill="#c99a1e"/>
-        <rect x="100" y="266" width="86" height="10" fill="#d9ab2c"/>
-        <rect x="100" y="250" width="10" height="24" fill="#b8891a"/>
-        <rect x="176" y="250" width="10" height="24" fill="#b8891a"/>
-        <rect x="112" y="256" width="28" height="14" fill="#e4b83e"/>
-        <rect x="144" y="256" width="28" height="14" fill="#e4b83e"/>
-        <rect x="100" y="290" width="86" height="6" fill="#7d5c10"/>
+      <!-- mosterdgele bank: 90° verticaal, tegen de rechtermuur, boven/achter de printer (DIR-44) -->
+      <g>
+        <rect x="622" y="176" width="14" height="84" fill="#c99a1e"/>
+        <rect x="622" y="176" width="14" height="6" fill="#d9ab2c"/>
+        <rect x="600" y="176" width="22" height="12" fill="#b8891a"/>
+        <rect x="600" y="248" width="22" height="12" fill="#b8891a"/>
+        <rect x="602" y="188" width="20" height="60" fill="#d9ab2c"/>
+        <rect x="606" y="192" width="14" height="26" fill="#e4b83e"/>
+        <rect x="606" y="220" width="14" height="26" fill="#e4b83e"/>
+        <rect x="600" y="188" width="6" height="60" fill="#7d5c10"/>
       </g>
       <use href="#plant" x="500" y="176" width="34" height="52"/>
       <use href="#plant" x="104" y="182" width="30" height="46"/>
@@ -1730,9 +1731,14 @@ const OFFICE_HTML = `<!doctype html>
         <text x="221" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Albert</text>
         <text x="218" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">GSC / SEO-specialist</text>
       </g>
-      <ellipse cx="86" cy="336" rx="46" ry="12" fill="#2a2f34"/>
-      <ellipse cx="86" cy="334" rx="38" ry="9" fill="#6d3b8f" opacity="0.55"/>
-      <ellipse cx="86" cy="333" rx="30" ry="6" fill="#824aa8" opacity="0.5"/>
+      <!-- paars kleed: links-achter (DIR-44) -->
+      <ellipse cx="78" cy="306" rx="46" ry="12" fill="#2a2f34"/>
+      <ellipse cx="78" cy="304" rx="38" ry="9" fill="#6d3b8f" opacity="0.55"/>
+      <ellipse cx="78" cy="303" rx="30" ry="6" fill="#824aa8" opacity="0.5"/>
+      <!-- hondenmand op het kleed (DIR-44) -->
+      <ellipse cx="78" cy="318" rx="34" ry="9" fill="#5b3a1e"/>
+      <ellipse cx="78" cy="316" rx="27" ry="6.5" fill="#7a5330"/>
+      <ellipse cx="78" cy="315" rx="20" ry="4.5" fill="#9c6b3f"/>
       <polygon points="0,300 640,300 640,360 0,360" fill="#000" opacity="0.10"/>
     </svg>
 
@@ -1813,7 +1819,6 @@ const OFFICE_HTML = `<!doctype html>
     <div style="position:absolute;top:0;left:0;right:0;height:30%;background:linear-gradient(to bottom, rgba(8,11,15,.82) 0%, rgba(8,11,15,.5) 55%, rgba(8,11,15,0) 100%);pointer-events:none;"></div>
     <div style="position:absolute;top:5%;left:0;right:0;text-align:center;pointer-events:none;">
       <div style="font-family:'Press Start 2P',monospace;color:#F18E02;font-size:clamp(18px,4.4vw,52px);letter-spacing:2px;text-shadow:4px 4px 0 #015092,8px 8px 0 rgba(0,0,0,.35);">DIRK DIGITAAL</div>
-      <div style="margin-top:14px;font-family:'VT323',monospace;color:#e8e2d8;font-size:clamp(16px,2.4vw,30px);letter-spacing:3px;text-shadow:2px 2px 0 #000;">Verwarrend duidelijk</div>
     </div>
     <div style="position:absolute;bottom:4%;left:0;right:0;text-align:center;pointer-events:none;">
       <span style="display:inline-block;font-family:'VT323',monospace;font-size:clamp(15px,2.1vw,26px);letter-spacing:1px;color:#e8e2d8;background:rgba(11,18,25,.72);border:1px solid #F18E02;padding:6px 16px;text-shadow:1px 1px 0 #000;animation:dd-cta 2.4s ease-in-out infinite;">
@@ -2083,10 +2088,10 @@ const OFFICE_HTML = `<!doctype html>
   (function(){
     var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     var HOMES={ gsc:{l:20,b:12}, ga4:{l:41,b:24}, ads:{l:63,b:24}, anton:{l:76,b:12} };
-    // Albert/Gertjan: koffie, printje, hond aaien (mand links-achter), rekken.
-    var GEWONE=[{l:9,b:16,drag:'koffie'},{l:88,b:16,drag:'papier'},{l:16,b:15,drag:null},{l:34,b:9,drag:null},null];
-    // Ilona: planten water geven (rechts + links), en af en toe rekken.
-    var ILONA=[{l:78,b:20,drag:'gieter'},{l:16,b:13,drag:'gieter'},null];
+    // Albert/Gertjan/Anton: koffie, printje, wat rondlopen. Hond aaien + rekken lopen via act().
+    var GEWONE=[{l:9,b:16,drag:'koffie'},{l:88,b:16,drag:'papier'},{l:34,b:9,drag:null},null];
+    // Ilona: de twee planten water geven (rechts-achter ~x500, links-achter ~x104), en af en toe rekken.
+    var ILONA=[{l:78,b:20,drag:'gieter'},{l:18,b:20,drag:'gieter'},null];
     var ACTIES={ gsc:GEWONE, ga4:GEWONE, ads:ILONA, anton:GEWONE };
     var actief=false;   // gedeelde lock: er mag maar ÉÉN agent tegelijk rondlopen (DIR-41)
     function maakRoamer(desk, roam, key){
