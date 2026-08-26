@@ -2164,7 +2164,7 @@ const OFFICE_HTML = `<!doctype html>
 (function(){
   var dog=document.querySelector('.dog'); if(!dog) return;
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var BED={l:14,b:14};
+  var BED={l:13,b:18};   // op de verplaatste hondenmand links-achter (DIR-44 AC-2/3)
   var SPOTS=[{l:34,b:8},{l:58,b:8},{l:72,b:16},{l:46,b:18},{l:82,b:9}];
   var pos={l:6,b:6};
   dog.style.left=pos.l+'%'; dog.style.bottom=pos.b+'%';
