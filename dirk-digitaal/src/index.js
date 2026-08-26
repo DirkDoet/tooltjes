@@ -1242,18 +1242,21 @@ const OFFICE_HTML = `<!doctype html>
       <use href="#plant" x="500" y="176" width="34" height="52"/>
       <use href="#plant" x="104" y="182" width="30" height="46"/>
       <!-- Gertjan (GA4-agent), actief + klikbaar (DIR-29) -->
+      <!-- Gertjan: links-van-midden, ACHTER (DIR-37) -->
       <g id="gertjan-desk" role="button" tabindex="0" aria-label="Open de GA4-agent Gertjan">
-        <rect x="290" y="214" width="96" height="118" fill="#000" opacity="0"/>
-        <use href="#gertjan" x="298" y="240" width="48" height="58"/>
-        <use href="#deskEmpty" x="290" y="256" width="96" height="76"/>
-        <rect x="290" y="214" width="96" height="24" fill="#0b1219"/>
-        <rect x="290" y="214" width="96" height="24" fill="none" stroke="#3fd06a" stroke-width="1.5"/>
-        <circle cx="300" cy="222" r="3.5" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
-        <text x="341" y="224" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Gertjan</text>
-        <text x="338" y="233" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">GA4-data-specialist</text>
+        <rect x="286" y="204" width="104" height="114" fill="#000" opacity="0"/>
+        <use href="#gertjan" x="308" y="234" width="48" height="58"/>
+        <use href="#deskEmpty" x="286" y="232" width="104" height="83"/>
+        <rect x="290" y="206" width="100" height="24" fill="#0b1219"/>
+        <rect x="290" y="206" width="100" height="24" fill="none" stroke="#3fd06a" stroke-width="1.5"/>
+        <circle cx="300" cy="214" r="3.5" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
+        <text x="340" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Gertjan</text>
+        <text x="340" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">GA4-data-specialist</text>
       </g>
-      <use href="#deskEmpty" x="404" y="250" width="76" height="61"/>
-      <use href="#deskEmpty" x="470" y="300" width="104" height="83"/>
+      <!-- Leeg: rechts-van-midden, ACHTER -->
+      <use href="#deskEmpty" x="410" y="232" width="104" height="83"/>
+      <!-- Leeg: rechts-VOOR, op één lijn met Albert -->
+      <use href="#deskEmpty" x="458" y="250" width="120" height="96"/>
       <!-- koffieautomaat (DIR-26) -->
       <g>
         <rect x="40" y="250" width="30" height="52" fill="#2b2f36"/>
