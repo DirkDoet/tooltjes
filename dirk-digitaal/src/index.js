@@ -1370,7 +1370,7 @@ const OFFICE_HTML = `<!doctype html>
   /* chat-portret naast de chat (AC-2) */
   .chatrow{ display:flex; flex:1; min-height:0; }
   .chatmain{ flex:1; display:flex; flex-direction:column; min-width:0; }
-  .portret{ flex:0 0 84px; display:flex; flex-direction:column; align-items:center; padding:.6rem;
+  .portret{ position:relative; flex:0 0 84px; display:flex; flex-direction:column; align-items:center; padding:.6rem;
     background:#14202b; border-right:3px solid var(--ink); }
   .portret .avatar{ width:72px; height:72px; background:#0b1219; border:2px solid var(--accent);
     display:flex; align-items:center; justify-content:center; font-size:2.2rem; }
@@ -1381,9 +1381,20 @@ const OFFICE_HTML = `<!doctype html>
   @keyframes dd-eyelid{ 0%,92%,100%{ opacity:0; } 94%,97%{ opacity:1; } }
   .portret .avatar.aantypen svg{ animation:dd-portret-typ .5s ease-in-out infinite; transform-origin:50% 100%; }
   .portret .avatar.aantypen .ooglid{ animation:dd-eyelid 1.4s steps(1,end) infinite; }
-  @keyframes dd-portret-typ{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-2px); } }
+  @keyframes dd-portret-typ{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-3px); } }
+  /* Zichtbare typ-indicator: '···'-ballonnetje boven de kop terwijl het antwoord streamt (DIR-46 D) */
+  .portret .typ-indicator{ display:none; position:absolute; top:2px; left:50%; transform:translateX(-50%);
+    align-items:center; gap:4px; background:#f4f0e6; border:2px solid var(--ink); border-radius:11px; padding:4px 8px; z-index:2; }
+  .portret .typ-indicator::after{ content:''; position:absolute; bottom:-6px; left:50%; transform:translateX(-50%);
+    border-left:5px solid transparent; border-right:5px solid transparent; border-top:6px solid var(--ink); }
+  .portret .typ-indicator span{ width:6px; height:6px; border-radius:50%; background:#2a2f36; display:inline-block;
+    animation:dd-typdot 1s ease-in-out infinite; }
+  .portret .typ-indicator span:nth-child(2){ animation-delay:.18s; }
+  .portret .typ-indicator span:nth-child(3){ animation-delay:.36s; }
+  #chat-avatar.aantypen ~ .typ-indicator{ display:inline-flex; }
+  @keyframes dd-typdot{ 0%,100%{ transform:translateY(0); opacity:.35; } 50%{ transform:translateY(-4px); opacity:1; } }
   @media (prefers-reduced-motion: reduce){ .scene-wrap *{ animation:none !important; }
-    .portret .avatar .ooglid, .portret .avatar.aantypen svg{ animation:none !important; } }
+    .portret .avatar .ooglid, .portret .avatar.aantypen svg, .portret .typ-indicator span{ animation:none !important; } }
   @media (max-width:640px){ .portret{ flex-basis:60px; }
     .portret .avatar{ width:48px; height:48px; font-size:1.5rem; } }
 
@@ -1505,8 +1516,6 @@ const OFFICE_HTML = `<!doctype html>
         </symbol>
         <!-- Gertjan (GA4): bril, korte baard, licht overhemd (DIR-29) -->
         <symbol id="gertjan" viewBox="0 0 40 48">
-          <rect x="6" y="31" width="4" height="16" fill="#aeb4bb"/>
-          <rect x="30" y="31" width="4" height="16" fill="#aeb4bb"/>
           <rect x="9" y="30" width="22" height="18" fill="#c7ccd2"/>
           <rect x="9" y="30" width="22" height="4" fill="#aeb4bb"/>
           <rect x="19" y="30" width="2" height="18" fill="#aeb4bb"/>
@@ -1622,11 +1631,11 @@ const OFFICE_HTML = `<!doctype html>
         </g>
         <use href="#deskEmpty" x="286" y="232" width="104" height="83"/>
         <g class="gertjan-hand" style="transform-origin:320px 297px;animation:dd-type-l .5s steps(2) infinite">
-          <rect x="316" y="283" width="6" height="9" fill="#7e8b99"/>
+          <rect x="316" y="283" width="6" height="9" fill="#c7ccd2"/>
           <rect x="315" y="290" width="9" height="6" fill="#e8b98a"/>
         </g>
         <g class="gertjan-hand" style="transform-origin:337px 297px;animation:dd-type-r .5s steps(2) infinite">
-          <rect x="334" y="283" width="6" height="9" fill="#7e8b99"/>
+          <rect x="334" y="283" width="6" height="9" fill="#c7ccd2"/>
           <rect x="331" y="290" width="9" height="6" fill="#e8b98a"/>
         </g>
         <rect x="290" y="206" width="100" height="24" fill="#0b1219"/>
@@ -1666,11 +1675,11 @@ const OFFICE_HTML = `<!doctype html>
         <use href="#deskEmpty" x="452" y="256" width="104" height="83"/>
         <g class="anton-hand" style="transform-origin:498px 305px;animation:dd-type-l .5s steps(2) infinite">
           <rect x="494" y="300" width="6" height="9" fill="#2a2f3a"/>
-          <rect x="493" y="307" width="9" height="6" fill="#e8b98a"/>
+          <rect x="493" y="307" width="9" height="6" fill="#d9a878"/>
         </g>
         <g class="anton-hand" style="transform-origin:514px 305px;animation:dd-type-r .5s steps(2) infinite">
           <rect x="510" y="300" width="6" height="9" fill="#2a2f3a"/>
-          <rect x="507" y="307" width="9" height="6" fill="#e8b98a"/>
+          <rect x="507" y="307" width="9" height="6" fill="#d9a878"/>
         </g>
         <rect x="468" y="228" width="100" height="24" fill="#0b1219"/>
         <rect x="468" y="228" width="100" height="24" fill="none" stroke="#3285D1" stroke-width="1.5"/>
@@ -1823,6 +1832,7 @@ const OFFICE_HTML = `<!doctype html>
       <div class="portret" aria-hidden="true">
         <div class="avatar" id="chat-avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#albert"/><rect class="ooglid" x="14" y="17" width="12" height="4" fill="#e8b98a"/></svg></div>
         <div class="pnaam" id="chat-pnaam">&#9679; Albert</div>
+        <div class="typ-indicator" aria-hidden="true"><span></span><span></span><span></span></div>
       </div>
       <div class="chatmain">
         <div class="msgs" id="chat-msgs">
