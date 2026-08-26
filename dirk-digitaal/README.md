@@ -34,7 +34,21 @@ Metrics: `activeUsers`, `sessions`, `screenPageViews`, `conversions`. Dimensies:
 
 **Google Cloud-setup (eenmalig, zelfde project + OAuth-client):** schakel **Google Analytics Data API** + **Google Analytics Admin API** in, en voeg scope `.../auth/analytics.readonly` toe aan het OAuth consent screen. Koppel daarna opnieuw (het toestemmingsscherm vraagt nu ook GA4).
 
-Niet-gekoppeld → de `/api/gsc/*`-, `/api/ga4/*`- en chat-routes geven een nette JSON-fout (HTTP 401).
+### Google Ads / Ilona (DIR-30, backend)
+
+Dezelfde Google-koppeling dekt nu ook Google Ads (agent **Ilona**). **Backend-slice**: alleen Google Ads (Meta + frontend volgen later).
+
+| Route | Doel |
+|-------|------|
+| `GET /api/ads/customers` | JSON met je toegankelijke Google Ads-accounts. |
+| `GET /api/ads/report?customer=customers/<id>&report=<r>&days=<n>&row_limit=<n>` | Eén Google Ads-rapport (GAQL via `googleAds:search`). |
+| `POST /api/ads/chat` | Ads-agent Ilona (Claude, streaming SSE, live tool-use `ads_report`). Body: `{ "customer": "customers/<id>" }` kiest/wisselt het account + analyse; `{ "message": "..." }` is een vervolgvraag. Lege body: meerdere → `{ "needAccount": true, "accounts": [...] }`, één → automatische analyse. |
+
+Rapporten: `campaigns`, `keywords`, `ad_groups`, `search_terms` (kosten in euro's, klikken, impressies, conversies). Sessie-only, zelfde ephemere aanpak.
+
+**Prerequisites (Dirk, aanvragen kosten tijd):** in hetzelfde Cloud-project de **Google Ads API** (`googleads.googleapis.com`) inschakelen; scope `.../auth/adwords` op het consent screen; een **developer token** aanvragen (Google Ads Manager → API Center) met **Basic Access** (zonder Basic Access alléén eigen test-accounts). Zet het token als secret `GOOGLE_ADS_DEVELOPER_TOKEN`. Zonder dat secret geven de `/api/ads/*`-routes een nette fout.
+
+Niet-gekoppeld → de `/api/gsc/*`-, `/api/ga4/*`-, `/api/ads/*`- en chat-routes geven een nette JSON-fout (HTTP 401).
 
 De agent (`/api/chat`) is Nederlands + jij-vorm, gegrond in de GSC-data van de gekozen site (Claude, model `claude-sonnet-5`). De eerste analyse is een SEO-overzicht (samenvatting, sterke pagina's, kansen, trend t.o.v. de vorige 28 dagen) met vaste `## `-secties die de frontend als kaarten toont. Chatgeschiedenis + geladen data leven in de Durable Object en zijn session-only (weg bij disconnect of na 30 min inactiviteit).
 
@@ -65,7 +79,8 @@ cd dirk-digitaal
 npx wrangler deploy            # geeft de Worker-URL terug (voor de redirect-URI)
 npx wrangler secret put GOOGLE_CLIENT_ID       # plak je client-ID
 npx wrangler secret put GOOGLE_CLIENT_SECRET   # plak je client-secret
-npx wrangler secret put ANTHROPIC_API_KEY      # voor de GSC-agent (/api/chat)
+npx wrangler secret put ANTHROPIC_API_KEY      # voor de agents (/api/chat, /api/ga4/chat, /api/ads/chat)
+npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN   # optioneel: voor Ilona / Google Ads (/api/ads/*)
 ```
 
 Vul de Worker-URL + `/oauth/callback` in als redirect-URI in Google (stap 1.4),
@@ -87,5 +102,5 @@ npm test             # unit-tests van de pure helpers (geen Google nodig)
 
 ## Secrets
 
-`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` en `ANTHROPIC_API_KEY` staan **alleen**
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ANTHROPIC_API_KEY` en (optioneel) `GOOGLE_ADS_DEVELOPER_TOKEN` staan **alleen**
 in Worker-secrets, nooit in de code of in `wrangler.toml`.

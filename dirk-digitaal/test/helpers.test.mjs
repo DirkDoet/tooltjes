@@ -25,6 +25,13 @@ import {
   computeGa4Trend,
   ga4FirstAnalysisPrompt,
   buildGa4SystemPrompt,
+  adsCustomerId,
+  buildAdsQuery,
+  adsTool,
+  shapeAdsRows,
+  sumAdsRows,
+  adsFirstAnalysisPrompt,
+  buildAdsSystemPrompt,
 } from "../src/index.js";
 
 test("buildGoogleAuthUrl: read-only scopes (GSC + GA4) + online (geen refresh-token)", () => {
@@ -37,6 +44,7 @@ test("buildGoogleAuthUrl: read-only scopes (GSC + GA4) + online (geen refresh-to
   const scope = u.searchParams.get("scope");
   assert.match(scope, /webmasters\.readonly/);
   assert.match(scope, /analytics\.readonly/);   // DIR-28: GA4-scope erbij
+  assert.match(scope, /auth\/adwords/);          // DIR-30: Google Ads-scope erbij
   assert.equal(u.searchParams.get("access_type"), "online");
   assert.equal(u.searchParams.get("response_type"), "code");
   assert.equal(u.searchParams.get("redirect_uri"), "https://dd.example.workers.dev/oauth/callback");
@@ -265,4 +273,78 @@ test("buildGa4SystemPrompt: Gertjan, GA4, jij-vorm, data ingebed", () => {
   assert.match(s, /ga4_report/);
   assert.match(s, /properties\/123/);
   assert.match(buildGa4SystemPrompt(null), /nog geen data/);
+});
+
+// -------------------------------------------------- Google Ads (DIR-30) ---
+
+test("adsCustomerId: normaliseert customers/<id> en <id>", () => {
+  assert.equal(adsCustomerId("customers/1234567890"), "1234567890");
+  assert.equal(adsCustomerId("1234567890"), "1234567890");
+  assert.equal(adsCustomerId(""), "");
+});
+
+test("buildAdsQuery: GAQL met periode/limiet + rapport-default", () => {
+  const now = Date.parse("2026-08-25T12:00:00Z");
+  const b = buildAdsQuery({ report: "keywords", days: 7, row_limit: 5 }, now);
+  assert.equal(b.report, "keywords");
+  assert.match(b.query, /FROM keyword_view/);
+  assert.match(b.query, /ad_group_criterion\.keyword\.text/);
+  assert.match(b.query, /metrics\.cost_micros/);
+  assert.match(b.query, /BETWEEN '2026-08-18' AND '2026-08-25'/);
+  assert.match(b.query, /LIMIT 5/);
+  assert.deepEqual(b.jsonPath, ["adGroupCriterion", "keyword", "text"]);
+  // onzin-rapport → campaigns; days default 28; limit cap 50
+  const d = buildAdsQuery({ report: "onzin", row_limit: 999 }, now);
+  assert.equal(d.report, "campaigns");
+  assert.match(d.query, /FROM campaign/);
+  assert.match(d.query, /LIMIT 50/);
+  assert.match(d.query, /BETWEEN '2026-07-28' AND '2026-08-25'/);
+});
+
+test("adsTool: naam ads_report + verplicht report", () => {
+  const t = adsTool();
+  assert.equal(t.name, "ads_report");
+  assert.deepEqual(t.input_schema.required, ["report"]);
+  assert.ok(t.input_schema.properties.report.enum.includes("campaigns"));
+  assert.ok(t.input_schema.properties.report.enum.includes("search_terms"));
+});
+
+test("shapeAdsRows: label via jsonPath + cost_micros → euro's", () => {
+  const results = [{
+    campaign: { name: "Merk NL" },
+    metrics: { costMicros: "12340000", clicks: "80", impressions: "2000", conversions: "3.5" },
+  }];
+  assert.deepEqual(shapeAdsRows(results, ["campaign", "name"]), [
+    { label: "Merk NL", kosten: 12.34, clicks: 80, impressies: 2000, conversies: 3.5 },
+  ]);
+  assert.deepEqual(shapeAdsRows(undefined, ["campaign", "name"]), []);
+});
+
+test("sumAdsRows: totalen optellen", () => {
+  const rows = [
+    { kosten: 12.34, clicks: 80, impressies: 2000, conversies: 3.5 },
+    { kosten: 7.66, clicks: 20, impressies: 500, conversies: 1.5 },
+  ];
+  assert.deepEqual(sumAdsRows(rows), { kosten: 20, clicks: 100, impressies: 2500, conversies: 5 });
+  assert.deepEqual(sumAdsRows([]), { kosten: 0, clicks: 0, impressies: 0, conversies: 0 });
+});
+
+test("adsFirstAnalysisPrompt: dashboard-secties + jij-vorm", () => {
+  const p = adsFirstAnalysisPrompt();
+  assert.match(p, /## Samenvatting/);
+  assert.match(p, /## Kosten & rendement/);
+  assert.match(p, /## Top campagnes/);
+  assert.match(p, /## Kansen/);
+  assert.match(p, /jij-vorm/);
+});
+
+test("buildAdsSystemPrompt: Ilona, Google Ads, jij-vorm, data ingebed", () => {
+  const ads = { actief: "customers/123", totalen: { kosten: 20 } };
+  const s = buildAdsSystemPrompt(ads);
+  assert.match(s, /Ilona/);
+  assert.match(s, /Google Ads/);
+  assert.match(s, /jij-vorm/);
+  assert.match(s, /ads_report/);
+  assert.match(s, /customers\/123/);
+  assert.match(buildAdsSystemPrompt(null), /nog geen data/);
 });

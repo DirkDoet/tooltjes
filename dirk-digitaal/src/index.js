@@ -11,11 +11,12 @@
  * De pure helpers onderaan worden geëxporteerd voor unit-tests.
  */
 
-// Eén Google-koppeling dekt zowel GSC (Albert) als GA4 (Gertjan): beide read-only
-// scopes worden samen aangevraagd (DIR-28, AC-1).
+// Eén Google-koppeling dekt GSC (Albert), GA4 (Gertjan) en Google Ads (Ilona):
+// read-only scopes worden samen aangevraagd (DIR-28/DIR-30).
 const SCOPES = [
   "https://www.googleapis.com/auth/webmasters.readonly",
   "https://www.googleapis.com/auth/analytics.readonly",
+  "https://www.googleapis.com/auth/adwords", // Google Ads (Ilona, DIR-30)
 ];
 const SCOPE = SCOPES.join(" ");
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 min inactiviteit
@@ -28,6 +29,8 @@ const REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke";
 const GSC_BASE = "https://searchconsole.googleapis.com/webmasters/v3";
 const GA4_ADMIN_BASE = "https://analyticsadmin.googleapis.com/v1beta";
 const GA4_DATA_BASE = "https://analyticsdata.googleapis.com/v1beta";
+const GADS_VERSION = "v18";
+const GADS_BASE = "https://googleads.googleapis.com/" + GADS_VERSION;
 
 // ---------------------------------------------------------------- helpers ---
 
@@ -223,6 +226,114 @@ export function buildGa4SystemPrompt(ga4) {
     "opgehaalde cijfers, niet op een aanname. Lukt ophalen niet, zeg dat eerlijk.",
     "",
     "GA4-data van deze sessie (overzicht van de gekozen property):",
+    data,
+  ].join("\n");
+}
+
+// ------------------------------------------ Google Ads (Ilona, DIR-30) ---
+
+// Rapport-definities: GAQL-bron + label (GAQL-veld) + JSON-pad (REST camelCase).
+const ADS_REPORTS = {
+  campaigns:    { from: "campaign",         gaqlLabel: "campaign.name",                     jsonPath: ["campaign", "name"] },
+  keywords:     { from: "keyword_view",     gaqlLabel: "ad_group_criterion.keyword.text",   jsonPath: ["adGroupCriterion", "keyword", "text"] },
+  ad_groups:    { from: "ad_group",         gaqlLabel: "ad_group.name",                     jsonPath: ["adGroup", "name"] },
+  search_terms: { from: "search_term_view", gaqlLabel: "search_term_view.search_term",      jsonPath: ["searchTermView", "searchTerm"] },
+};
+
+// "customers/123" → "123".
+export function adsCustomerId(resourceName) {
+  return String(resourceName || "").replace(/^customers\//, "").trim();
+}
+
+// Bouwt een GAQL-query + metadata uit tool-argumenten (met verstandige limieten, AC-3).
+export function buildAdsQuery(args, now) {
+  const a = args || {};
+  const report = ADS_REPORTS[a.report] ? a.report : "campaigns";
+  const conf = ADS_REPORTS[report];
+  const days = clamp(a.days, 1, 365, 28);
+  const { startDate, endDate } = dateRange(days, now);
+  const limit = clamp(a.row_limit, 1, 50, 10);
+  const query =
+    "SELECT " + conf.gaqlLabel + ", metrics.cost_micros, metrics.clicks, metrics.impressions, metrics.conversions " +
+    "FROM " + conf.from + " WHERE segments.date BETWEEN '" + startDate + "' AND '" + endDate + "' " +
+    "ORDER BY metrics.cost_micros DESC LIMIT " + limit;
+  return { query, report, startDate, endDate, jsonPath: conf.jsonPath };
+}
+
+// Tool waarmee Ilona live Google Ads-cijfers ophaalt (AC-4).
+export function adsTool() {
+  return {
+    name: "ads_report",
+    description:
+      "Haal live Google Ads-cijfers op voor het gekozen account. Kies een rapport (campagnes, " +
+      "zoekwoorden, advertentiegroepen of zoektermen); optioneel periode en limiet.",
+    input_schema: {
+      type: "object",
+      properties: {
+        report: { type: "string", enum: Object.keys(ADS_REPORTS), description: "Welk rapport." },
+        days: { type: "integer", description: "Aantal dagen terug (default 28, max 365)." },
+        row_limit: { type: "integer", description: "Max rijen (default 10, max 50)." },
+      },
+      required: ["report"],
+    },
+  };
+}
+
+// GoogleAds search-resultaten (REST) → compact formaat. cost_micros → euro's.
+export function shapeAdsRows(results, jsonPath) {
+  const pad = jsonPath || [];
+  const lees = (o) => pad.reduce((x, k) => (x == null ? undefined : x[k]), o);
+  return (results || []).map((r) => {
+    const m = r.metrics || {};
+    return {
+      label: lees(r) || "",
+      kosten: Math.round((Number(m.costMicros || 0) / 1e6) * 100) / 100,
+      clicks: Math.round(Number(m.clicks || 0)),
+      impressies: Math.round(Number(m.impressions || 0)),
+      conversies: Math.round(Number(m.conversions || 0) * 10) / 10,
+    };
+  });
+}
+
+// Totalen optellen uit een rijenset (voor het eerste overzicht).
+export function sumAdsRows(rows) {
+  return (rows || []).reduce((t, r) => ({
+    kosten: Math.round((t.kosten + (r.kosten || 0)) * 100) / 100,
+    clicks: t.clicks + (r.clicks || 0),
+    impressies: t.impressies + (r.impressies || 0),
+    conversies: Math.round((t.conversies + (r.conversies || 0)) * 10) / 10,
+  }), { kosten: 0, clicks: 0, impressies: 0, conversies: 0 });
+}
+
+const ADS_ANALYSIS_PROMPT =
+  "Maak een Google Ads-analyse van het gekozen account op basis van de data. Gebruik EXACT deze " +
+  "vijf secties, elk met een '## '-kop en '- ' voor opsommingen:\n" +
+  "## Samenvatting\nKort (2-3 zinnen) hoe de advertenties presteren.\n" +
+  "## Kosten & rendement\nTotale kosten, klikken, impressies en conversies; kosten per conversie waar mogelijk.\n" +
+  "## Top campagnes\nDe campagnes met de meeste kosten/conversies, met cijfers.\n" +
+  "## Kansen\nWaar geld beter besteed kan worden (dure campagnes zonder conversies, kansrijke zoekwoorden).\n" +
+  "## Opvallend\nWat springt eruit of verdient aandacht.\n" +
+  "Sluit af met een korte vraag waar ik op wil inzoomen. Schrijf in het Nederlands, jij-vorm.";
+
+export function adsFirstAnalysisPrompt() {
+  return ADS_ANALYSIS_PROMPT;
+}
+
+// Systeemprompt: Ilona, Ads-specialist, NL jij-vorm, gegrond in de sessie-data (AC-4).
+export function buildAdsSystemPrompt(ads) {
+  const data = ads ? JSON.stringify(ads, null, 2) : "(nog geen data geladen)";
+  return [
+    "Je bent Ilona, de advertentie-specialist van Dirk Digitaal (Google Ads; Meta volgt later).",
+    "Schrijf altijd in het Nederlands en in de jij-vorm. Antwoord HELDER: korte zinnen,",
+    "concrete cijfers (kosten in euro's, conversies), geen jargon-brei. Verwijs naar echte",
+    "campagnes, zoekwoorden en getallen. Geef bruikbare, prioriteerbare aanbevelingen; verzin geen data.",
+    "",
+    "Je hebt een tool `ads_report` om LIVE specifieke Google Ads-cijfers op te halen (campagnes,",
+    "zoekwoorden, advertentiegroepen of zoektermen). Gebruik die tool zodra de vraag over data gaat die",
+    "niet in het overzicht hieronder staat. Baseer je antwoord dan op de opgehaalde cijfers, niet op een",
+    "aanname. Lukt ophalen niet, zeg dat eerlijk.",
+    "",
+    "Google Ads-data van deze sessie (overzicht van het gekozen account):",
     data,
   ].join("\n");
 }
@@ -448,6 +559,36 @@ export class SessionDO {
       const bestaand = (await this.state.storage.get("ga4messages")) || [];
       const nieuw = bestaand.concat(messages || []);
       await this.state.storage.put({ ga4messages: nieuw, lastActive: now });
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ ok: true });
+    }
+
+    // Ads/Ilona-sessiestate (DIR-30): aparte keys (ads, adsmessages).
+    if (url.pathname === "/chat/state-ads") {
+      const data = await this.state.storage.get(["token", "lastActive", "adsmessages", "ads"]);
+      const token = data.get("token");
+      if (!token || isExpired(data.get("lastActive"), now)) {
+        await this.state.storage.deleteAll();
+        await this.state.storage.deleteAlarm();
+        return json({ token: null }, 404);
+      }
+      await this.state.storage.put("lastActive", now);
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ token, messages: data.get("adsmessages") || [], ads: data.get("ads") || null });
+    }
+
+    if (url.pathname === "/chat/select-ads") {
+      const { ads } = await request.json();
+      await this.state.storage.put({ ads, adsmessages: [], lastActive: now });
+      await this.state.storage.setAlarm(now + SESSION_TTL_MS);
+      return json({ ok: true });
+    }
+
+    if (url.pathname === "/chat/append-ads") {
+      const { messages } = await request.json();
+      const bestaand = (await this.state.storage.get("adsmessages")) || [];
+      const nieuw = bestaand.concat(messages || []);
+      await this.state.storage.put({ adsmessages: nieuw, lastActive: now });
       await this.state.storage.setAlarm(now + SESSION_TTL_MS);
       return json({ ok: true });
     }
@@ -697,6 +838,62 @@ async function fetchGa4Overview(token, property) {
     trend: computeGa4Trend(curTot, prevTot),
     top_paginas: shapeGa4Rows(pagesRep && pagesRep.rows, "pagePath"),
     kanalen: shapeGa4Rows(chanRep && chanRep.rows, "kanaal"),
+  };
+}
+
+// -------------------------------------------- Google Ads-fetchers (DIR-30) ---
+
+// Headers voor de Google Ads API: Bearer + developer-token (+ login-customer-id).
+function adsHeaders(token, env, loginCid) {
+  const h = {
+    Authorization: "Bearer " + token,
+    "Content-Type": "application/json",
+    "developer-token": env.GOOGLE_ADS_DEVELOPER_TOKEN || "",
+  };
+  if (loginCid) h["login-customer-id"] = adsCustomerId(loginCid);
+  return h;
+}
+
+// Toegankelijke Google Ads-accounts → [{customer, id}].
+async function fetchAdsCustomers(token, env) {
+  const resp = await fetch(GADS_BASE + "/customers:listAccessibleCustomers", { headers: adsHeaders(token, env) });
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  return (data.resourceNames || []).map((rn) => ({ customer: rn, id: adsCustomerId(rn) }));
+}
+
+// Eén GAQL-query uitvoeren (googleAds:search) → JSON of null.
+async function runAdsSearch(token, env, customer, query) {
+  const cid = adsCustomerId(customer);
+  if (!cid) return null;
+  const resp = await fetch(GADS_BASE + "/customers/" + cid + "/googleAds:search", {
+    method: "POST",
+    headers: adsHeaders(token, env, customer),
+    body: JSON.stringify({ query }),
+  });
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+// Tool-call: een rapport live ophalen voor het gekozen account.
+async function fetchAdsReport(token, env, customer, args) {
+  if (!customer) return { error: "Geen account gekozen." };
+  const q = buildAdsQuery(args, Date.now());
+  const data = await runAdsSearch(token, env, customer, q.query);
+  if (!data) return { error: "Kon deze Google Ads-data niet ophalen bij Google." };
+  return { periode: { van: q.startDate, tot: q.endDate }, rapport: q.report, rijen: shapeAdsRows(data.results, q.jsonPath) };
+}
+
+// Eerste-analyse-data: campagne-totalen + top campagnes van de laatste 28 dagen (AC-5).
+async function fetchAdsOverview(token, env, customer) {
+  const q = buildAdsQuery({ report: "campaigns", days: 28, row_limit: 15 }, Date.now());
+  const data = await runAdsSearch(token, env, customer, q.query);
+  if (!data) return null;
+  const rows = shapeAdsRows(data.results, q.jsonPath);
+  return {
+    periode: { van: q.startDate, tot: q.endDate },
+    totalen: sumAdsRows(rows),
+    top_campagnes: rows.slice(0, 10),
   };
 }
 
@@ -1600,6 +1797,105 @@ async function handleGa4Chat(request, env, ctx) {
   return sseResponse(finalText);
 }
 
+// Ads-account kiezen: overzicht laden + in de sessie zetten (ads-historie schoon).
+async function selectAdsCustomer(stub, token, env, customer, alle) {
+  const overview = await fetchAdsOverview(token, env, customer);
+  if (!overview) return null;
+  const ads = { accounts: alle, actief: customer, ...overview };
+  await stub.fetch("https://do/chat/select-ads", { method: "POST", body: JSON.stringify({ ads }) });
+  return ads;
+}
+
+// Ilona-chat (Google Ads). Zelfde vorm als handleChat/handleGa4Chat.
+async function handleAdsChat(request, env, ctx) {
+  if (!env.ANTHROPIC_API_KEY) {
+    return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
+  }
+  if (!env.GOOGLE_ADS_DEVELOPER_TOKEN) {
+    return json({ error: "Google Ads is nog niet geconfigureerd (developer-token ontbreekt)." }, 500);
+  }
+  const cookies = parseCookies(request.headers.get("Cookie"));
+  const id = cookies[COOKIE];
+  if (!id) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account." }, 401);
+
+  const stub = sessionStub(env, id);
+  const stateResp = await stub.fetch("https://do/chat/state-ads");
+  if (!stateResp.ok) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account." }, 401);
+  let { token, messages: history, ads } = await stateResp.json();
+
+  let body = {};
+  try { body = await request.json(); } catch (e) { /* lege body toegestaan */ }
+  const wantCustomer = (body && typeof body.customer === "string") ? body.customer.trim() : "";
+  let userText = (body && typeof body.message === "string") ? body.message.trim() : "";
+
+  let promptText;
+  let storedUser = userText;
+
+  if (wantCustomer) {
+    const accounts = await fetchAdsCustomers(token, env);
+    if (!accounts || !accounts.length) return json({ error: "Geen Google Ads-accounts gevonden in je koppeling." }, 502);
+    if (!accounts.some((a) => a.customer === wantCustomer)) return json({ error: "Dat account staat niet in je koppeling." }, 400);
+    ads = await selectAdsCustomer(stub, token, env, wantCustomer, accounts);
+    if (!ads) return json({ error: "Kon de Google Ads-cijfers van dat account niet laden." }, 502);
+    history = [];
+    promptText = ADS_ANALYSIS_PROMPT;
+    storedUser = "[Analyse van " + wantCustomer + "]";
+  } else if (!ads) {
+    const accounts = await fetchAdsCustomers(token, env);
+    if (!accounts || !accounts.length) return json({ error: "Geen Google Ads-accounts gevonden in je koppeling." }, 502);
+    if (accounts.length > 1) return json({ needAccount: true, accounts });
+    ads = await selectAdsCustomer(stub, token, env, accounts[0].customer, accounts);
+    if (!ads) return json({ error: "Kon de Google Ads-cijfers van je account niet laden." }, 502);
+    history = [];
+    promptText = ADS_ANALYSIS_PROMPT;
+    storedUser = "[Analyse van " + accounts[0].customer + "]";
+  } else {
+    if (!userText) return json({ error: "Stel een vraag over je advertentiecijfers." }, 400);
+    promptText = userText;
+  }
+
+  const system = buildAdsSystemPrompt(ads);
+  const customer = ads && ads.actief;
+  const convo = buildAnthropicMessages(history, promptText);
+
+  let finalText = "";
+  try {
+    for (let i = 0; i < 5; i++) {
+      const resp = await callAnthropic(env, system, convo, [adsTool()]);
+      if (!resp || !resp.content) {
+        return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+      }
+      const parsed = parseAssistant(resp.content);
+      if (resp.stop_reason === "tool_use" && parsed.toolUses.length) {
+        convo.push({ role: "assistant", content: resp.content });
+        const resultaten = [];
+        for (const tu of parsed.toolUses) {
+          let out;
+          try { out = await fetchAdsReport(token, env, customer, tu.input); }
+          catch (e) { out = { error: "kon deze data niet ophalen" }; }
+          resultaten.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out) });
+        }
+        convo.push({ role: "user", content: resultaten });
+        continue;
+      }
+      finalText = parsed.text;
+      break;
+    }
+  } catch (e) {
+    return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
+  }
+  if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
+
+  ctx.waitUntil(
+    stub.fetch("https://do/chat/append-ads", {
+      method: "POST",
+      body: JSON.stringify({ messages: [{ role: "user", content: storedUser }, { role: "assistant", content: finalText }] }),
+    }).catch(() => {})
+  );
+
+  return sseResponse(finalText);
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -1740,6 +2036,37 @@ export default {
     // DIR-28 — Gertjan-agent (GA4): streaming chat met live tool-use (AC-4/AC-5).
     if (path === "/api/ga4/chat" && request.method === "POST") {
       return handleGa4Chat(request, env, ctx);
+    }
+
+    // DIR-30 — Google Ads/Ilona: toegankelijke accounts (AC-2).
+    if (path === "/api/ads/customers") {
+      const token = await huidigeToken(request, env);
+      if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
+      if (!env.GOOGLE_ADS_DEVELOPER_TOKEN) return json({ error: "Google Ads is nog niet geconfigureerd (developer-token ontbreekt)." }, 500);
+      const accounts = await fetchAdsCustomers(token, env);
+      if (!accounts) return json({ error: "Kon je Google Ads-accounts niet ophalen bij Google." }, 502);
+      return json({ accounts });
+    }
+
+    // DIR-30 — Google Ads-rapport voor een account (AC-3).
+    if (path === "/api/ads/report") {
+      const token = await huidigeToken(request, env);
+      if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
+      if (!env.GOOGLE_ADS_DEVELOPER_TOKEN) return json({ error: "Google Ads is nog niet geconfigureerd (developer-token ontbreekt)." }, 500);
+      const customer = url.searchParams.get("customer");
+      if (!customer) return json({ error: "Geef een account op via ?customer=customers/<id>." }, 400);
+      const out = await fetchAdsReport(token, env, customer, {
+        report: url.searchParams.get("report"),
+        days: url.searchParams.get("days"),
+        row_limit: url.searchParams.get("row_limit"),
+      });
+      if (out && out.error) return json(out, 502);
+      return json(out);
+    }
+
+    // DIR-30 — Ilona-agent (Google Ads): streaming chat met live tool-use (AC-4/AC-5).
+    if (path === "/api/ads/chat" && request.method === "POST") {
+      return handleAdsChat(request, env, ctx);
     }
 
     return json({ error: "Onbekende route." }, 404);
