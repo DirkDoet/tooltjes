@@ -1279,11 +1279,15 @@ const OFFICE_HTML = `<!doctype html>
   .dog{ position:absolute; bottom:6%; left:6%; width:9%; pointer-events:none;
     transition:left .6s linear, bottom .6s linear; }
   .dog.links{ transform:scaleX(-1); }
-  .dog.loopt .dogleg-a{ animation:dd-legA .34s steps(1) infinite; }
-  .dog.loopt .dogleg-b{ animation:dd-legB .34s steps(1) infinite; }
-  .dog .dogbody{ transform-origin:bottom center; transition:transform .4s ease; }
-  .dog.zit .dogbody{ transform:translateY(4px) scaleY(.82); }
-  .dog.ligt .dogbody{ transform:translateY(9px) scaleY(.48); }
+  .dog.loopt .dogleg-a{ animation:dd-legA .5s steps(1) infinite; }
+  .dog.loopt .dogleg-b{ animation:dd-legB .5s steps(1) infinite; }
+  .dog .dogbody{ transform-origin:bottom center; transition:transform .5s ease; }
+  .dog .dogleg{ transition:transform .5s ease; }
+  /* Zit: compact op het achterste. Lig: languit + plat (DIR-41). */
+  .dog.zit .dogbody{ transform:translateY(3px) scaleY(.86); }
+  .dog.zit .dogleg{ transform:translateY(4px); }
+  .dog.ligt .dogbody{ transform:translateY(11px) scaleY(.42) scaleX(1.06); }
+  .dog.ligt .dogleg{ transform:translateY(7px) scaleX(1.15); }
   /* Rondlopende agents (DIR-32): benen ALTIJD zichtbaar, alleen orthogonaal, dragen items. */
   .roam{ position:absolute; left:24%; bottom:12%; width:9%; display:none; z-index:4; cursor:pointer; }
   .roam.zichtbaar{ display:block; }
@@ -1544,7 +1548,7 @@ const OFFICE_HTML = `<!doctype html>
       <use href="#plant" x="104" y="182" width="30" height="46"/>
       <!-- Gertjan (GA4-agent), actief + klikbaar (DIR-29) -->
       <!-- Gertjan: links-van-midden, ACHTER (DIR-37) -->
-      <g id="gertjan-desk" role="button" tabindex="0" aria-label="Open de GA4-agent Gertjan" transform="translate(-14,-20)">
+      <g id="gertjan-desk" role="button" tabindex="0" aria-label="Open de GA4-agent Gertjan" transform="translate(-34,-20)">
         <rect x="286" y="204" width="104" height="114" fill="#000" opacity="0"/>
         <g id="gertjan-body" style="transform-origin:332px 288px;animation:dd-albert-idle 6s ease-in-out infinite">
           <use href="#gertjan" x="308" y="234" width="48" height="58"/>
@@ -1566,7 +1570,7 @@ const OFFICE_HTML = `<!doctype html>
       </g>
       <!-- Leeg: rechts-van-midden, ACHTER -->
       <!-- Ilona (Ads-agent), actief + klikbaar (DIR-36) -->
-      <g id="ilona-desk" role="button" tabindex="0" aria-label="Open de Ads-agent Ilona" transform="translate(16,-20)">
+      <g id="ilona-desk" role="button" tabindex="0" aria-label="Open de Ads-agent Ilona" transform="translate(-6,-20)">
         <rect x="410" y="204" width="104" height="114" fill="#000" opacity="0"/>
         <g id="ilona-body" style="transform-origin:448px 288px;animation:dd-albert-idle 6.5s ease-in-out infinite">
           <use href="#ilona" x="424" y="234" width="48" height="58"/>
@@ -1985,7 +1989,7 @@ const OFFICE_HTML = `<!doctype html>
   // geeft planten water; af en toe lopen twee agents naar elkaar om te "overleggen".
   (function(){
     var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    var HOMES={ gsc:{l:20,b:12}, ga4:{l:44,b:24}, ads:{l:66,b:24}, anton:{l:76,b:12} };
+    var HOMES={ gsc:{l:20,b:12}, ga4:{l:41,b:24}, ads:{l:63,b:24}, anton:{l:76,b:12} };
     // Albert/Gertjan: koffie, printje, hond aaien (mand links-achter), rekken.
     var GEWONE=[{l:9,b:16,drag:'koffie'},{l:88,b:16,drag:'papier'},{l:16,b:15,drag:null},{l:34,b:9,drag:null},null];
     // Ilona: planten water geven (rechts + links), en af en toe rekken.
@@ -2068,7 +2072,7 @@ const OFFICE_HTML = `<!doctype html>
   function face(d){ if(d<0) dog.classList.add('links'); else if(d>0) dog.classList.remove('links'); }
   function leg(axis,to,cb){
     var dist=Math.abs((axis==='left'?pos.l:pos.b)-to);
-    var t=Math.max(0.4, dist*0.05); dog.style.transition=axis+' '+t+'s linear';
+    var t=Math.max(0.7, dist*0.09); dog.style.transition=axis+' '+t+'s linear';
     if(axis==='left'){ dog.style.left=to+'%'; pos.l=to; } else { dog.style.bottom=to+'%'; pos.b=to; }
     setTimeout(cb, t*1000+30);
   }
@@ -2076,10 +2080,10 @@ const OFFICE_HTML = `<!doctype html>
     leg('left',to.l,function(){ leg('bottom',to.b,function(){ dog.classList.remove('loopt'); cb(); }); }); }
   function rust(cb){ dog.classList.add('zit');
     setTimeout(function(){ dog.classList.remove('zit'); dog.classList.add('ligt');
-      setTimeout(function(){ dog.classList.remove('ligt'); cb(); }, 3400); }, 2000); }
+      setTimeout(function(){ dog.classList.remove('ligt'); cb(); }, 6500); }, 3500); }
   function loop(){
-    if(Math.random()<0.5){ walk(BED,function(){ rust(function(){ setTimeout(loop,700); }); }); }
-    else { var g=SPOTS[Math.floor(Math.random()*SPOTS.length)]; walk(g,function(){ setTimeout(loop,900+Math.random()*2200); }); }
+    if(Math.random()<0.55){ walk(BED,function(){ rust(function(){ setTimeout(loop,2500); }); }); }
+    else { var g=SPOTS[Math.floor(Math.random()*SPOTS.length)]; walk(g,function(){ setTimeout(loop,2200+Math.random()*3000); }); }
   }
   setTimeout(loop,1500);
 })();
