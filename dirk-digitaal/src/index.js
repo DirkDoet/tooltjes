@@ -29,7 +29,7 @@ const REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke";
 const GSC_BASE = "https://searchconsole.googleapis.com/webmasters/v3";
 const GA4_ADMIN_BASE = "https://analyticsadmin.googleapis.com/v1beta";
 const GA4_DATA_BASE = "https://analyticsdata.googleapis.com/v1beta";
-const GADS_VERSION = "v18";
+const GADS_VERSION = "v25";
 const GADS_BASE = "https://googleads.googleapis.com/" + GADS_VERSION;
 // Meta Ads per klant (magic-link + System User-token, achter admin-beheer) — DIR-30.
 const META_VERSION = "v21.0";
