@@ -1600,16 +1600,16 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="458" y="106" width="14" height="12" fill="#3a2f18"/>
         <rect x="460" y="112" width="10" height="10" fill="#ffb733" style="animation:dd-bulb 3.6s ease-in-out infinite"/>
       </g>
-      <!-- mosterdgele bank: 90° verticaal, tegen de rechtermuur, boven/achter de printer (DIR-44) -->
+      <!-- mosterdgele bank: horizontaal, plat op de vloer in de rechter-hoek, vóór/naast de printer (DIR-46) -->
       <g>
-        <rect x="622" y="176" width="14" height="84" fill="#c99a1e"/>
-        <rect x="622" y="176" width="14" height="6" fill="#d9ab2c"/>
-        <rect x="600" y="176" width="22" height="12" fill="#b8891a"/>
-        <rect x="600" y="248" width="22" height="12" fill="#b8891a"/>
-        <rect x="602" y="188" width="20" height="60" fill="#d9ab2c"/>
-        <rect x="606" y="192" width="14" height="26" fill="#e4b83e"/>
-        <rect x="606" y="220" width="14" height="26" fill="#e4b83e"/>
-        <rect x="600" y="188" width="6" height="60" fill="#7d5c10"/>
+        <rect x="556" y="336" width="80" height="6" fill="#7d5c10"/>       <!-- schaduw onder -->
+        <rect x="556" y="300" width="9" height="22" fill="#b8891a"/>        <!-- armleuning links -->
+        <rect x="627" y="300" width="9" height="22" fill="#b8891a"/>        <!-- armleuning rechts -->
+        <rect x="565" y="304" width="62" height="14" fill="#e4b83e"/>       <!-- rugleuning -->
+        <rect x="568" y="307" width="26" height="9" fill="#d9ab2c"/>        <!-- rugkussen 1 -->
+        <rect x="598" y="307" width="26" height="9" fill="#d9ab2c"/>        <!-- rugkussen 2 -->
+        <rect x="556" y="318" width="80" height="8" fill="#d9ab2c"/>        <!-- zitting bovenkant -->
+        <rect x="556" y="326" width="80" height="12" fill="#c99a1e"/>       <!-- zitting voorkant -->
       </g>
       <use href="#plant" x="500" y="176" width="34" height="52"/>
       <use href="#plant" x="104" y="182" width="30" height="46"/>
@@ -1622,11 +1622,11 @@ const OFFICE_HTML = `<!doctype html>
         </g>
         <use href="#deskEmpty" x="286" y="232" width="104" height="83"/>
         <g class="gertjan-hand" style="transform-origin:320px 297px;animation:dd-type-l .5s steps(2) infinite">
-          <rect x="316" y="283" width="6" height="9" fill="#c7ccd2"/>
+          <rect x="316" y="283" width="6" height="9" fill="#7e8b99"/>
           <rect x="315" y="290" width="9" height="6" fill="#e8b98a"/>
         </g>
         <g class="gertjan-hand" style="transform-origin:337px 297px;animation:dd-type-r .5s steps(2) infinite">
-          <rect x="334" y="283" width="6" height="9" fill="#c7ccd2"/>
+          <rect x="334" y="283" width="6" height="9" fill="#7e8b99"/>
           <rect x="331" y="290" width="9" height="6" fill="#e8b98a"/>
         </g>
         <rect x="290" y="206" width="100" height="24" fill="#0b1219"/>
@@ -1645,11 +1645,11 @@ const OFFICE_HTML = `<!doctype html>
         <use href="#deskEmpty" x="410" y="232" width="104" height="83"/>
         <g class="ilona-hand" style="transform-origin:446px 297px;animation:dd-type-l .5s steps(2) infinite">
           <rect x="442" y="283" width="6" height="9" fill="#2f7f6e"/>
-          <rect x="441" y="290" width="9" height="6" fill="#f0c79a"/>
+          <rect x="441" y="290" width="9" height="6" fill="#e8b98a"/>
         </g>
         <g class="ilona-hand" style="transform-origin:463px 297px;animation:dd-type-r .5s steps(2) infinite">
           <rect x="460" y="283" width="6" height="9" fill="#2f7f6e"/>
-          <rect x="457" y="290" width="9" height="6" fill="#f0c79a"/>
+          <rect x="457" y="290" width="9" height="6" fill="#e8b98a"/>
         </g>
         <rect x="414" y="206" width="100" height="24" fill="#0b1219"/>
         <rect x="414" y="206" width="100" height="24" fill="none" stroke="#e58fa8" stroke-width="1.5"/>
@@ -1666,11 +1666,11 @@ const OFFICE_HTML = `<!doctype html>
         <use href="#deskEmpty" x="452" y="256" width="104" height="83"/>
         <g class="anton-hand" style="transform-origin:498px 305px;animation:dd-type-l .5s steps(2) infinite">
           <rect x="494" y="300" width="6" height="9" fill="#2a2f3a"/>
-          <rect x="493" y="307" width="9" height="6" fill="#d9a878"/>
+          <rect x="493" y="307" width="9" height="6" fill="#e8b98a"/>
         </g>
         <g class="anton-hand" style="transform-origin:514px 305px;animation:dd-type-r .5s steps(2) infinite">
           <rect x="510" y="300" width="6" height="9" fill="#2a2f3a"/>
-          <rect x="507" y="307" width="9" height="6" fill="#d9a878"/>
+          <rect x="507" y="307" width="9" height="6" fill="#e8b98a"/>
         </g>
         <rect x="468" y="228" width="100" height="24" fill="#0b1219"/>
         <rect x="468" y="228" width="100" height="24" fill="none" stroke="#3285D1" stroke-width="1.5"/>
@@ -1721,14 +1721,12 @@ const OFFICE_HTML = `<!doctype html>
         <text x="221" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Albert</text>
         <text x="218" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">GSC / SEO-specialist</text>
       </g>
-      <!-- paars kleed: links-achter (DIR-44) -->
-      <ellipse cx="78" cy="306" rx="46" ry="12" fill="#2a2f34"/>
-      <ellipse cx="78" cy="304" rx="38" ry="9" fill="#6d3b8f" opacity="0.55"/>
-      <ellipse cx="78" cy="303" rx="30" ry="6" fill="#824aa8" opacity="0.5"/>
-      <!-- hondenmand op het kleed (DIR-44) -->
-      <ellipse cx="78" cy="318" rx="34" ry="9" fill="#5b3a1e"/>
-      <ellipse cx="78" cy="316" rx="27" ry="6.5" fill="#7a5330"/>
-      <ellipse cx="78" cy="315" rx="20" ry="4.5" fill="#9c6b3f"/>
+      <!-- hondenmand: één duidelijk mandje in de linker-achterhoek (DIR-46, vervangt kleed + dubbele ovaal) -->
+      <ellipse cx="74" cy="300" rx="33" ry="9" fill="#4a2f18"/>       <!-- grondschaduw onder de mand -->
+      <rect x="43" y="294" width="62" height="11" rx="3" fill="#5b3a1e"/>   <!-- mand-wand (voorkant, geeft 3D-hoogte) -->
+      <ellipse cx="74" cy="294" rx="31" ry="8" fill="#6b4423"/>       <!-- bovenrand van de mand -->
+      <ellipse cx="74" cy="294" rx="23" ry="5.5" fill="#31200f"/>    <!-- binnenkant (diepte) -->
+      <ellipse cx="74" cy="296" rx="20" ry="4.5" fill="#caa06a"/>    <!-- kussen in de mand -->
       <polygon points="0,300 640,300 640,360 0,360" fill="#000" opacity="0.10"/>
     </svg>
 
@@ -2131,7 +2129,7 @@ const OFFICE_HTML = `<!doctype html>
         trip({ l: o.l + (home.l < o.l ? -9 : 9), b: o.b }, { wacht:3000 });
       }
       // Naar de hondenmand links-achter lopen en zichtbaar bukken/aaien (DIR-44 AC-6).
-      function petDog(){ trip({l:15,b:14}, { wacht:1900, bend:true }); }
+      function petDog(){ trip({l:16,b:20}, { wacht:1900, bend:true }); }
       function act(){
         var r=Math.random();
         // Rekken/strekken gebeurt aan het eigen bureau (geen looplock nodig) → mag altijd, dus zichtbaar vaak.
@@ -2164,7 +2162,7 @@ const OFFICE_HTML = `<!doctype html>
 (function(){
   var dog=document.querySelector('.dog'); if(!dog) return;
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var BED={l:13,b:18};   // op de verplaatste hondenmand links-achter (DIR-44 AC-2/3)
+  var BED={l:12,b:24};   // in de hondenmand in de linker-achterhoek (DIR-46 B)
   var SPOTS=[{l:34,b:8},{l:58,b:8},{l:72,b:16},{l:46,b:18},{l:82,b:9}];
   var pos={l:6,b:6};
   dog.style.left=pos.l+'%'; dog.style.bottom=pos.b+'%';
