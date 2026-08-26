@@ -1036,6 +1036,7 @@ const OFFICE_HTML = `<!doctype html>
   .roam .draag{ display:none; }
   .roam.draagt-koffie .draag-koffie{ display:block; }
   .roam.draagt-papier .draag-papier{ display:block; }
+  .roam.draagt-gieter .draag-gieter{ display:block; }
   @keyframes dd-walkbob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
   @keyframes dd-stretch{0%,100%{transform:translateY(0) scaleY(1)}45%{transform:translateY(-3px) scaleY(1.06)}}
   #agent-desk.away #albert-body, #agent-desk.away .albert-hand{ opacity:0; }
@@ -1252,32 +1253,33 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="458" y="106" width="14" height="12" fill="#3a2f18"/>
         <rect x="460" y="112" width="10" height="10" fill="#ffb733" style="animation:dd-bulb 3.6s ease-in-out infinite"/>
       </g>
+      <!-- hondenmand: links-achterin de hoek (DIR-38) -->
       <g>
-        <rect x="470" y="222" width="86" height="20" fill="#c99a1e"/>
-        <rect x="470" y="216" width="86" height="10" fill="#d9ab2c"/>
-        <rect x="470" y="200" width="10" height="24" fill="#b8891a"/>
-        <rect x="546" y="200" width="10" height="24" fill="#b8891a"/>
-        <rect x="482" y="206" width="28" height="14" fill="#e4b83e"/>
-        <rect x="514" y="206" width="28" height="14" fill="#e4b83e"/>
-        <rect x="470" y="240" width="86" height="6" fill="#7d5c10"/>
+        <rect x="100" y="272" width="86" height="20" fill="#c99a1e"/>
+        <rect x="100" y="266" width="86" height="10" fill="#d9ab2c"/>
+        <rect x="100" y="250" width="10" height="24" fill="#b8891a"/>
+        <rect x="176" y="250" width="10" height="24" fill="#b8891a"/>
+        <rect x="112" y="256" width="28" height="14" fill="#e4b83e"/>
+        <rect x="144" y="256" width="28" height="14" fill="#e4b83e"/>
+        <rect x="100" y="290" width="86" height="6" fill="#7d5c10"/>
       </g>
       <use href="#plant" x="500" y="176" width="34" height="52"/>
       <use href="#plant" x="104" y="182" width="30" height="46"/>
       <!-- Gertjan (GA4-agent), actief + klikbaar (DIR-29) -->
       <!-- Gertjan: links-van-midden, ACHTER (DIR-37) -->
-      <g id="gertjan-desk" role="button" tabindex="0" aria-label="Open de GA4-agent Gertjan">
+      <g id="gertjan-desk" role="button" tabindex="0" aria-label="Open de GA4-agent Gertjan" transform="translate(-14,-20)">
         <rect x="286" y="204" width="104" height="114" fill="#000" opacity="0"/>
         <g id="gertjan-body" style="transform-origin:332px 288px;animation:dd-albert-idle 6s ease-in-out infinite">
           <use href="#gertjan" x="308" y="234" width="48" height="58"/>
         </g>
         <use href="#deskEmpty" x="286" y="232" width="104" height="83"/>
-        <g class="gertjan-hand" style="transform-origin:322px 292px;animation:dd-type-l .5s steps(2) infinite">
-          <rect x="319" y="284" width="5" height="8" fill="#c7ccd2"/>
-          <rect x="318" y="291" width="8" height="5" fill="#e8b98a"/>
+        <g class="gertjan-hand" style="transform-origin:320px 297px;animation:dd-type-l .5s steps(2) infinite">
+          <rect x="316" y="283" width="6" height="9" fill="#c7ccd2"/>
+          <rect x="315" y="290" width="9" height="6" fill="#e8b98a"/>
         </g>
-        <g class="gertjan-hand" style="transform-origin:338px 292px;animation:dd-type-r .5s steps(2) infinite">
-          <rect x="335" y="284" width="5" height="8" fill="#c7ccd2"/>
-          <rect x="333" y="291" width="8" height="5" fill="#e8b98a"/>
+        <g class="gertjan-hand" style="transform-origin:337px 297px;animation:dd-type-r .5s steps(2) infinite">
+          <rect x="334" y="283" width="6" height="9" fill="#c7ccd2"/>
+          <rect x="331" y="290" width="9" height="6" fill="#e8b98a"/>
         </g>
         <rect x="290" y="206" width="100" height="24" fill="#0b1219"/>
         <rect x="290" y="206" width="100" height="24" fill="none" stroke="#3fd06a" stroke-width="1.5"/>
@@ -1287,19 +1289,19 @@ const OFFICE_HTML = `<!doctype html>
       </g>
       <!-- Leeg: rechts-van-midden, ACHTER -->
       <!-- Ilona (Ads-agent), actief + klikbaar (DIR-36) -->
-      <g id="ilona-desk" role="button" tabindex="0" aria-label="Open de Ads-agent Ilona">
+      <g id="ilona-desk" role="button" tabindex="0" aria-label="Open de Ads-agent Ilona" transform="translate(16,-20)">
         <rect x="410" y="204" width="104" height="114" fill="#000" opacity="0"/>
         <g id="ilona-body" style="transform-origin:448px 288px;animation:dd-albert-idle 6.5s ease-in-out infinite">
           <use href="#ilona" x="424" y="234" width="48" height="58"/>
         </g>
         <use href="#deskEmpty" x="410" y="232" width="104" height="83"/>
-        <g class="ilona-hand" style="transform-origin:446px 292px;animation:dd-type-l .5s steps(2) infinite">
-          <rect x="443" y="284" width="5" height="8" fill="#2f7f6e"/>
-          <rect x="442" y="291" width="8" height="5" fill="#f0c79a"/>
+        <g class="ilona-hand" style="transform-origin:446px 297px;animation:dd-type-l .5s steps(2) infinite">
+          <rect x="442" y="283" width="6" height="9" fill="#2f7f6e"/>
+          <rect x="441" y="290" width="9" height="6" fill="#f0c79a"/>
         </g>
-        <g class="ilona-hand" style="transform-origin:462px 292px;animation:dd-type-r .5s steps(2) infinite">
-          <rect x="459" y="284" width="5" height="8" fill="#2f7f6e"/>
-          <rect x="457" y="291" width="8" height="5" fill="#f0c79a"/>
+        <g class="ilona-hand" style="transform-origin:463px 297px;animation:dd-type-r .5s steps(2) infinite">
+          <rect x="460" y="283" width="6" height="9" fill="#2f7f6e"/>
+          <rect x="457" y="290" width="9" height="6" fill="#f0c79a"/>
         </g>
         <rect x="414" y="206" width="100" height="24" fill="#0b1219"/>
         <rect x="414" y="206" width="100" height="24" fill="none" stroke="#e58fa8" stroke-width="1.5"/>
@@ -1330,7 +1332,7 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="584" y="280" width="4" height="3" fill="#F18E02"/>
         <rect x="566" y="296" width="44" height="4" fill="#20242a"/>
       </g>
-      <g id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent">
+      <g id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent" transform="translate(-30,0)">
         <rect x="146" y="220" width="150" height="126" fill="#000" opacity="0"/>
         <rect x="196" y="256" width="42" height="46" fill="#111"/>
         <rect x="200" y="260" width="34" height="30" fill="#1c1c1c"/>
@@ -1405,6 +1407,7 @@ const OFFICE_HTML = `<!doctype html>
           <g class="poot poot-b"><rect x="21" y="47" width="5" height="9" fill="#2a3138"/></g>
           <g class="draag draag-koffie"><rect x="30" y="30" width="7" height="8" fill="#e8e2d8"/><rect x="30" y="30" width="7" height="2" fill="#c9c2b4"/><rect x="37" y="32" width="2" height="3" fill="#e8e2d8"/></g>
           <g class="draag draag-papier"><rect x="30" y="28" width="8" height="11" fill="#f4f0e6"/><rect x="32" y="31" width="4" height="1" fill="#9aa2aa"/><rect x="32" y="34" width="4" height="1" fill="#9aa2aa"/></g>
+          <g class="draag draag-gieter"><rect x="29" y="31" width="8" height="7" fill="#3fa06a"/><rect x="30" y="29" width="4" height="2" fill="#2f7f56"/><rect x="37" y="30" width="5" height="2" fill="#3fa06a"/></g>
         </svg>
       </div>
     </div>
@@ -1416,6 +1419,7 @@ const OFFICE_HTML = `<!doctype html>
           <g class="poot poot-b"><rect x="21" y="47" width="5" height="9" fill="#2a3138"/></g>
           <g class="draag draag-koffie"><rect x="30" y="30" width="7" height="8" fill="#e8e2d8"/><rect x="30" y="30" width="7" height="2" fill="#c9c2b4"/><rect x="37" y="32" width="2" height="3" fill="#e8e2d8"/></g>
           <g class="draag draag-papier"><rect x="30" y="28" width="8" height="11" fill="#f4f0e6"/><rect x="32" y="31" width="4" height="1" fill="#9aa2aa"/><rect x="32" y="34" width="4" height="1" fill="#9aa2aa"/></g>
+          <g class="draag draag-gieter"><rect x="29" y="31" width="8" height="7" fill="#3fa06a"/><rect x="30" y="29" width="4" height="2" fill="#2f7f56"/><rect x="37" y="30" width="5" height="2" fill="#3fa06a"/></g>
         </svg>
       </div>
     </div>
@@ -1427,6 +1431,7 @@ const OFFICE_HTML = `<!doctype html>
           <g class="poot poot-b"><rect x="21" y="47" width="5" height="9" fill="#2a3138"/></g>
           <g class="draag draag-koffie"><rect x="30" y="30" width="7" height="8" fill="#e8e2d8"/><rect x="30" y="30" width="7" height="2" fill="#c9c2b4"/><rect x="37" y="32" width="2" height="3" fill="#e8e2d8"/></g>
           <g class="draag draag-papier"><rect x="30" y="28" width="8" height="11" fill="#f4f0e6"/><rect x="32" y="31" width="4" height="1" fill="#9aa2aa"/><rect x="32" y="34" width="4" height="1" fill="#9aa2aa"/></g>
+          <g class="draag draag-gieter"><rect x="29" y="31" width="8" height="7" fill="#3fa06a"/><rect x="30" y="29" width="4" height="2" fill="#2f7f56"/><rect x="37" y="30" width="5" height="2" fill="#3fa06a"/></g>
         </svg>
       </div>
     </div>
@@ -1652,14 +1657,20 @@ const OFFICE_HTML = `<!doctype html>
   sendBtn.addEventListener('click',send);
   input.addEventListener('keydown',function(e){ if(e.key==='Enter') send(); });
 
-  // Kantooracties (DIR-32): elke bezette agent typt, verlaat af en toe zijn plek,
-  // loopt ORTHOGONAAL (eerst horizontaal, dan verticaal) naar een actie en terug —
-  // benen zichtbaar, en draagt iets terug (koffie/papier). Klik op de agent = chat.
+  // Kantooracties (DIR-32/38): elke bezette agent typt, verlaat af en toe zijn plek,
+  // loopt ORTHOGONAAL naar een actie en terug (benen zichtbaar, draagt iets). Ilona
+  // geeft planten water; af en toe lopen twee agents naar elkaar om te "overleggen".
   (function(){
     var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    var SPOTS=[{l:9,b:16,drag:'koffie'},{l:86,b:16,drag:'papier'},{l:15,b:13,drag:null},{l:47,b:7,drag:null},null];
-    function maakRoamer(desk, roam, home, key){
+    var HOMES={ gsc:{l:20,b:12}, ga4:{l:44,b:24}, ads:{l:66,b:24} };
+    // Albert/Gertjan: koffie, printje, hond aaien (mand links-achter), rekken.
+    var GEWONE=[{l:9,b:16,drag:'koffie'},{l:88,b:16,drag:'papier'},{l:16,b:15,drag:null},{l:34,b:9,drag:null},null];
+    // Ilona: planten water geven (rechts + links), en af en toe rekken.
+    var ILONA=[{l:78,b:20,drag:'gieter'},{l:16,b:13,drag:'gieter'},null];
+    var ACTIES={ gsc:GEWONE, ga4:GEWONE, ads:ILONA };
+    function maakRoamer(desk, roam, key){
       if(!desk||!roam) return;
+      var home=HOMES[key], spots=ACTIES[key];
       roam.addEventListener('click',function(){ openAgent(key); });
       roam.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent(key); } });
       if(reduce) return;
@@ -1675,29 +1686,41 @@ const OFFICE_HTML = `<!doctype html>
       function walk(to, cb){ roam.classList.add('loopt'); face(to.l-pos.l);
         leg('left', to.l, function(){ leg('bottom', to.b, function(){ roam.classList.remove('loopt'); cb(); }); }); }
       function stretch(){ desk.classList.add('rekt'); setTimeout(function(){ desk.classList.remove('rekt'); plan(); }, 2300); }
-      function go(spot){
+      // Loop van huis naar een bestemming, wacht daar, en loop terug.
+      function trip(dest, opts){
         busy=true; desk.classList.add('away');
         roam.style.transition='none'; roam.style.left=home.l+'%'; roam.style.bottom=home.b+'%'; pos={l:home.l,b:home.b};
         roam.classList.add('zichtbaar');
         requestAnimationFrame(function(){
-          walk(spot, function(){
+          walk(dest, function(){
+            if(opts.drag) roam.classList.add('draagt-'+opts.drag);
             setTimeout(function(){
-              if(spot.drag) roam.classList.add('draagt-'+spot.drag);
               walk(home, function(){
-                roam.classList.remove('zichtbaar','links','draagt-koffie','draagt-papier');
+                roam.classList.remove('zichtbaar','links','draagt-koffie','draagt-papier','draagt-gieter');
                 desk.classList.remove('away'); busy=false; plan();
               });
-            }, 1700);
+            }, opts.wacht || 1700);
           });
         });
       }
-      function act(){ if(busy){ plan(); return; } var s=SPOTS[Math.floor(Math.random()*SPOTS.length)]; if(s) go(s); else stretch(); }
+      // Overleggen: loop naar de zijkant van een ander bureau, sta daar even, ga terug.
+      function overleg(){
+        var andere=['gsc','ga4','ads'].filter(function(x){ return x!==key; });
+        var o=HOMES[andere[Math.floor(Math.random()*andere.length)]];
+        trip({ l: o.l + (home.l < o.l ? -9 : 9), b: o.b }, { wacht:3000 });
+      }
+      function act(){
+        if(busy){ plan(); return; }
+        if(Math.random()<0.25){ overleg(); return; }
+        var s=spots[Math.floor(Math.random()*spots.length)];
+        if(s) trip(s, { drag:s.drag, wacht:1700 }); else stretch();
+      }
       function plan(){ setTimeout(act, 12000+Math.random()*13000); }
       plan();
     }
-    maakRoamer(agent, document.getElementById('albert-roam'), {l:24,b:12}, 'gsc');
-    maakRoamer(gertjanDesk, document.getElementById('gertjan-roam'), {l:46,b:19}, 'ga4');
-    maakRoamer(ilonaDesk, document.getElementById('ilona-roam'), {l:64,b:19}, 'ads');
+    maakRoamer(agent, document.getElementById('albert-roam'), 'gsc');
+    maakRoamer(gertjanDesk, document.getElementById('gertjan-roam'), 'ga4');
+    maakRoamer(ilonaDesk, document.getElementById('ilona-roam'), 'ads');
   })();
 
   // Bij (her)laden: al gekoppeld? Eén koppeling dekt beide agents. Open de agent die
@@ -1713,8 +1736,8 @@ const OFFICE_HTML = `<!doctype html>
 (function(){
   var dog=document.querySelector('.dog'); if(!dog) return;
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var BED={l:72,b:9};
-  var SPOTS=[{l:8,b:8},{l:40,b:8},{l:40,b:17},{l:20,b:15},{l:60,b:9}];
+  var BED={l:14,b:14};
+  var SPOTS=[{l:34,b:8},{l:58,b:8},{l:72,b:16},{l:46,b:18},{l:82,b:9}];
   var pos={l:6,b:6};
   dog.style.left=pos.l+'%'; dog.style.bottom=pos.b+'%';
   if(reduce){ dog.style.left=BED.l+'%'; dog.style.bottom=BED.b+'%'; dog.classList.add('ligt'); return; }
