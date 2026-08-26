@@ -14,7 +14,7 @@ new_sqlite_classes = ["SessionDO"]
 # KV voor klant-config (DIR-30): sleutel -> { naam, adAccountId }. Alleen config, geen klantdata.
 [[kv_namespaces]]
 binding = "CLIENTS"
-id = "REPLACE_ME"  # wrangler kv namespace create CLIENTS -> id hier plakken (vóór deploy)
+id = "d9d3026f28f24ab38d20080d757fd981"
 
 # Secrets (NIET hier invullen — via `wrangler secret put`):
 #   wrangler secret put GOOGLE_CLIENT_ID
