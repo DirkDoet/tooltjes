@@ -973,17 +973,6 @@ const OFFICE_HTML = `<!doctype html>
   @keyframes dd-legA{0%,49%{transform:translateY(0)}50%,100%{transform:translateY(-2px)}}
   @keyframes dd-legB{0%,49%{transform:translateY(-2px)}50%,100%{transform:translateY(0)}}
   @keyframes dd-tail{0%,100%{transform:rotate(-8deg)}50%{transform:rotate(10deg)}}
-  @keyframes dd-dogwalk{
-    0%{left:5%;bottom:6%;transform:scaleX(1)}
-    16%{left:40%;bottom:6%;transform:scaleX(1)}
-    23%{left:40%;bottom:6%;transform:scaleX(1)}
-    38%{left:71%;bottom:9%;transform:scaleX(1)}
-    54%{left:71%;bottom:9%;transform:scaleX(1)}
-    61%{left:64%;bottom:15%;transform:scaleX(-1)}
-    78%{left:22%;bottom:15%;transform:scaleX(-1)}
-    87%{left:8%;bottom:8%;transform:scaleX(-1)}
-    93%{left:5%;bottom:6%;transform:scaleX(1)}
-    100%{left:5%;bottom:6%;transform:scaleX(1)}}
   @keyframes dd-modal-in{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
   /* Albert idle "aan het werk" (DIR-25) */
   @keyframes dd-type-l{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
@@ -996,23 +985,33 @@ const OFFICE_HTML = `<!doctype html>
   #gertjan-desk{ cursor:pointer; transition:filter .12s; }
   #gertjan-desk:hover, #gertjan-desk:focus{ outline:none;
     filter:drop-shadow(0 0 6px #3fd06a) drop-shadow(0 0 14px rgba(63,208,106,.6)); }
+  /* Hond (DIR-32): JS-gedreven, orthogonaal, zit/ligt bij de mand. */
   .dog{ position:absolute; bottom:6%; left:6%; width:9%; pointer-events:none;
-    animation:dd-dogwalk 26s ease-in-out infinite; }
-  /* Rondlopende Albert (DIR-26) */
-  .albert-roam{ position:absolute; left:27%; bottom:12%; width:9%; display:none; z-index:4;
-    cursor:pointer; transition:left 2.7s linear, bottom 2.7s linear; }
-  .albert-roam.zichtbaar{ display:block; }
-  .albert-roam.links{ transform:scaleX(-1); }
-  .albert-roam .albert-fig{ transform-origin:bottom center; }
-  .albert-roam.loopt .albert-fig{ animation:dd-walkbob .42s steps(2) infinite; }
-  .albert-roam.actie .albert-fig{ animation:dd-albert-idle 1.4s ease-in-out infinite; }
-  .albert-roam .poot{ display:none; }
-  .albert-roam.loopt .poot-a{ display:block; animation:dd-legA .34s steps(1) infinite; }
-  .albert-roam.loopt .poot-b{ display:block; animation:dd-legB .34s steps(1) infinite; }
+    transition:left .6s linear, bottom .6s linear; }
+  .dog.links{ transform:scaleX(-1); }
+  .dog.loopt .dogleg-a{ animation:dd-legA .34s steps(1) infinite; }
+  .dog.loopt .dogleg-b{ animation:dd-legB .34s steps(1) infinite; }
+  .dog .dogbody{ transform-origin:bottom center; transition:transform .4s ease; }
+  .dog.zit .dogbody{ transform:translateY(4px) scaleY(.82); }
+  .dog.ligt .dogbody{ transform:translateY(9px) scaleY(.48); }
+  /* Rondlopende agents (DIR-26/32): benen ALTIJD zichtbaar, alleen orthogonaal, dragen items. */
+  .roam{ position:absolute; left:24%; bottom:12%; width:9%; display:none; z-index:4; cursor:pointer; }
+  .roam.zichtbaar{ display:block; }
+  .roam.links{ transform:scaleX(-1); }
+  .roam .roam-fig{ transform-origin:bottom center; }
+  .roam.loopt .roam-fig{ animation:dd-walkbob .42s steps(2) infinite; }
+  .roam .poot{ display:block; }
+  .roam.loopt .poot-a{ animation:dd-legA .34s steps(1) infinite; }
+  .roam.loopt .poot-b{ animation:dd-legB .34s steps(1) infinite; }
+  .roam .draag{ display:none; }
+  .roam.draagt-koffie .draag-koffie{ display:block; }
+  .roam.draagt-papier .draag-papier{ display:block; }
   @keyframes dd-walkbob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
   @keyframes dd-stretch{0%,100%{transform:translateY(0) scaleY(1)}45%{transform:translateY(-3px) scaleY(1.06)}}
   #agent-desk.away #albert-body, #agent-desk.away .albert-hand{ opacity:0; }
   #agent-desk.rekt #albert-body{ animation:dd-stretch 2.2s ease-in-out; }
+  #gertjan-desk.away #gertjan-body, #gertjan-desk.away .gertjan-hand{ opacity:0; }
+  #gertjan-desk.rekt #gertjan-body{ animation:dd-stretch 2.2s ease-in-out; }
   /* chat-portret naast de chat (AC-2) */
   .chatrow{ display:flex; flex:1; min-height:0; }
   .chatmain{ flex:1; display:flex; flex-direction:column; min-width:0; }
@@ -1217,8 +1216,18 @@ const OFFICE_HTML = `<!doctype html>
       <!-- Gertjan (GA4-agent), actief + klikbaar (DIR-29) -->
       <g id="gertjan-desk" role="button" tabindex="0" aria-label="Open de GA4-agent Gertjan">
         <rect x="290" y="214" width="96" height="118" fill="#000" opacity="0"/>
-        <use href="#gertjan" x="298" y="240" width="48" height="58"/>
+        <g id="gertjan-body" style="transform-origin:322px 296px;animation:dd-albert-idle 6s ease-in-out infinite">
+          <use href="#gertjan" x="298" y="240" width="48" height="58"/>
+        </g>
         <use href="#deskEmpty" x="290" y="256" width="96" height="76"/>
+        <g class="gertjan-hand" style="transform-origin:320px 300px;animation:dd-type-l .5s steps(2) infinite">
+          <rect x="317" y="291" width="5" height="8" fill="#c7ccd2"/>
+          <rect x="316" y="298" width="8" height="5" fill="#e8b98a"/>
+        </g>
+        <g class="gertjan-hand" style="transform-origin:334px 300px;animation:dd-type-r .5s steps(2) infinite">
+          <rect x="333" y="291" width="5" height="8" fill="#c7ccd2"/>
+          <rect x="331" y="298" width="8" height="5" fill="#e8b98a"/>
+        </g>
         <rect x="290" y="214" width="96" height="24" fill="#0b1219"/>
         <rect x="290" y="214" width="96" height="24" fill="none" stroke="#3fd06a" stroke-width="1.5"/>
         <circle cx="300" cy="222" r="3.5" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
@@ -1290,7 +1299,7 @@ const OFFICE_HTML = `<!doctype html>
     </svg>
 
     <div class="dog" aria-hidden="true">
-      <svg viewBox="0 0 60 40" width="100%" shape-rendering="crispEdges" style="image-rendering:pixelated;display:block;">
+      <svg class="dogbody" viewBox="0 0 60 40" width="100%" shape-rendering="crispEdges" style="image-rendering:pixelated;display:block;">
         <g style="transform-origin:8px 16px;animation:dd-tail .5s ease-in-out infinite">
           <rect x="2" y="14" width="8" height="4" fill="#c99a4e"/>
         </g>
@@ -1303,24 +1312,37 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="56" y="17" width="3" height="3" fill="#1a1a1a"/>
         <rect x="47" y="13" width="3" height="3" fill="#2a1c0c"/>
         <rect x="40" y="20" width="4" height="6" fill="#F18E02"/>
-        <g style="animation:dd-legA .34s steps(1) infinite">
+        <g class="dogleg dogleg-a">
           <rect x="12" y="26" width="5" height="9" fill="#b8842f"/>
           <rect x="34" y="26" width="5" height="9" fill="#b8842f"/>
         </g>
-        <g style="animation:dd-legB .34s steps(1) infinite">
+        <g class="dogleg dogleg-b">
           <rect x="20" y="26" width="5" height="9" fill="#c99a4e"/>
           <rect x="42" y="26" width="5" height="9" fill="#c99a4e"/>
         </g>
       </svg>
     </div>
 
-    <!-- Rondlopende Albert (DIR-26): verborgen tot een kantooractie; klik opent chat. -->
-    <div class="albert-roam" id="albert-roam" role="button" tabindex="0" aria-label="Open de GSC-agent (Albert)">
-      <div class="albert-fig">
+    <!-- Rondlopende agents (DIR-26/32): verborgen tot een kantooractie; klik opent chat. -->
+    <div class="roam" id="albert-roam" role="button" tabindex="0" aria-label="Open de GSC-agent (Albert)">
+      <div class="roam-fig">
         <svg viewBox="0 0 40 56" width="100%" shape-rendering="crispEdges" style="image-rendering:pixelated;display:block;">
           <use href="#albert" x="0" y="0" width="40" height="48"/>
           <g class="poot poot-a"><rect x="14" y="47" width="5" height="9" fill="#2a3138"/></g>
           <g class="poot poot-b"><rect x="21" y="47" width="5" height="9" fill="#2a3138"/></g>
+          <g class="draag draag-koffie"><rect x="30" y="30" width="7" height="8" fill="#e8e2d8"/><rect x="30" y="30" width="7" height="2" fill="#c9c2b4"/><rect x="37" y="32" width="2" height="3" fill="#e8e2d8"/></g>
+          <g class="draag draag-papier"><rect x="30" y="28" width="8" height="11" fill="#f4f0e6"/><rect x="32" y="31" width="4" height="1" fill="#9aa2aa"/><rect x="32" y="34" width="4" height="1" fill="#9aa2aa"/></g>
+        </svg>
+      </div>
+    </div>
+    <div class="roam" id="gertjan-roam" role="button" tabindex="0" aria-label="Open de GA4-agent (Gertjan)">
+      <div class="roam-fig">
+        <svg viewBox="0 0 40 56" width="100%" shape-rendering="crispEdges" style="image-rendering:pixelated;display:block;">
+          <use href="#gertjan" x="0" y="0" width="40" height="48"/>
+          <g class="poot poot-a"><rect x="14" y="47" width="5" height="9" fill="#2a3138"/></g>
+          <g class="poot poot-b"><rect x="21" y="47" width="5" height="9" fill="#2a3138"/></g>
+          <g class="draag draag-koffie"><rect x="30" y="30" width="7" height="8" fill="#e8e2d8"/><rect x="30" y="30" width="7" height="2" fill="#c9c2b4"/><rect x="37" y="32" width="2" height="3" fill="#e8e2d8"/></g>
+          <g class="draag draag-papier"><rect x="30" y="28" width="8" height="11" fill="#f4f0e6"/><rect x="32" y="31" width="4" height="1" fill="#9aa2aa"/><rect x="32" y="34" width="4" height="1" fill="#9aa2aa"/></g>
         </svg>
       </div>
     </div>
@@ -1536,36 +1558,51 @@ const OFFICE_HTML = `<!doctype html>
   sendBtn.addEventListener('click',send);
   input.addEventListener('keydown',function(e){ if(e.key==='Enter') send(); });
 
-  // Albert-kantooracties (DIR-26): af en toe weg van bureau, korte actie, terug. Klik op Albert = chat.
+  // Kantooracties (DIR-26/32): elke bezette agent typt, verlaat af en toe zijn plek,
+  // loopt ORTHOGONAAL (eerst horizontaal, dan verticaal) naar een actie en terug —
+  // benen zichtbaar, en draagt iets terug (koffie/papier). Klik op de agent = chat.
   (function(){
-    var roam=document.getElementById('albert-roam'); if(!roam) return;
-    roam.addEventListener('click',function(){ openAgent('gsc'); });
-    roam.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent('gsc'); } });
     var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if(reduce) return;
-    var HOME={l:27,b:12};
-    var SPOTS=[{l:11,b:16},{l:82,b:16},{l:14,b:14},{l:46,b:8},null];
-    function setPos(l,b){ roam.style.left=l+'%'; roam.style.bottom=b+'%'; }
-    function face(delta){ if(delta<0) roam.classList.add('links'); else roam.classList.remove('links'); }
-    var busyRoam=false;
-    function stretch(){ agent.classList.add('rekt'); setTimeout(function(){ agent.classList.remove('rekt'); plan(); }, 2300); }
-    function go(spot){
-      busyRoam=true; agent.classList.add('away');
-      setPos(HOME.l,HOME.b); roam.classList.add('zichtbaar'); face(spot.l-HOME.l);
-      requestAnimationFrame(function(){ roam.classList.add('loopt'); setPos(spot.l,spot.b); });
-      setTimeout(function(){
-        roam.classList.remove('loopt'); roam.classList.add('actie');
-        setTimeout(function(){
-          roam.classList.remove('actie'); roam.classList.add('loopt'); face(HOME.l-spot.l); setPos(HOME.l,HOME.b);
-          setTimeout(function(){
-            roam.classList.remove('loopt','zichtbaar','links'); agent.classList.remove('away'); busyRoam=false; plan();
-          }, 2900);
-        }, 2200);
-      }, 2900);
+    var SPOTS=[{l:9,b:16,drag:'koffie'},{l:86,b:16,drag:'papier'},{l:15,b:13,drag:null},{l:47,b:7,drag:null},null];
+    function maakRoamer(desk, roam, home, key){
+      if(!desk||!roam) return;
+      roam.addEventListener('click',function(){ openAgent(key); });
+      roam.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent(key); } });
+      if(reduce) return;
+      var pos={l:home.l,b:home.b}, busy=false;
+      function face(d){ if(d<0) roam.classList.add('links'); else if(d>0) roam.classList.remove('links'); }
+      function leg(axis, to, cb){
+        var dist=Math.abs((axis==='left'?pos.l:pos.b)-to);
+        var t=Math.max(0.5, dist*0.06);
+        roam.style.transition=axis+' '+t+'s linear';
+        if(axis==='left'){ roam.style.left=to+'%'; pos.l=to; } else { roam.style.bottom=to+'%'; pos.b=to; }
+        setTimeout(cb, t*1000+30);
+      }
+      function walk(to, cb){ roam.classList.add('loopt'); face(to.l-pos.l);
+        leg('left', to.l, function(){ leg('bottom', to.b, function(){ roam.classList.remove('loopt'); cb(); }); }); }
+      function stretch(){ desk.classList.add('rekt'); setTimeout(function(){ desk.classList.remove('rekt'); plan(); }, 2300); }
+      function go(spot){
+        busy=true; desk.classList.add('away');
+        roam.style.transition='none'; roam.style.left=home.l+'%'; roam.style.bottom=home.b+'%'; pos={l:home.l,b:home.b};
+        roam.classList.add('zichtbaar');
+        requestAnimationFrame(function(){
+          walk(spot, function(){
+            setTimeout(function(){
+              if(spot.drag) roam.classList.add('draagt-'+spot.drag);
+              walk(home, function(){
+                roam.classList.remove('zichtbaar','links','draagt-koffie','draagt-papier');
+                desk.classList.remove('away'); busy=false; plan();
+              });
+            }, 1700);
+          });
+        });
+      }
+      function act(){ if(busy){ plan(); return; } var s=SPOTS[Math.floor(Math.random()*SPOTS.length)]; if(s) go(s); else stretch(); }
+      function plan(){ setTimeout(act, 12000+Math.random()*13000); }
+      plan();
     }
-    function act(){ if(busyRoam){ plan(); return; } var s=SPOTS[Math.floor(Math.random()*SPOTS.length)]; if(s) go(s); else stretch(); }
-    function plan(){ setTimeout(act, 13000+Math.random()*12000); }
-    plan();
+    maakRoamer(agent, document.getElementById('albert-roam'), {l:24,b:12}, 'gsc');
+    maakRoamer(gertjanDesk, document.getElementById('gertjan-roam'), {l:47,b:18}, 'ga4');
   })();
 
   // Bij (her)laden: al gekoppeld? Eén koppeling dekt beide agents. Open de agent die
@@ -1576,25 +1613,31 @@ const OFFICE_HTML = `<!doctype html>
     else{ setConnected(false); } }).catch(function(){ setConnected(false); });
 })();
 
-// Kantoorhond: loopt rond en gaat af en toe bij de mand liggen (AC-4).
-// Respecteert prefers-reduced-motion: dan ligt de hond stil in de mand (AC-5).
+// Kantoorhond (DIR-32): loopt ORTHOGONAAL over de vloer en gaat zichtbaar zitten én
+// liggen bij de mand, daarna weer verder. prefers-reduced-motion → stil in de mand.
 (function(){
-  var hond=document.getElementById('hond'); if(!hond) return;
+  var dog=document.querySelector('.dog'); if(!dog) return;
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  // Vloercoördinaten (binnen de 340x340 iso-vloer). Mand ligt rechtsvoor.
-  var MIN=30, MAX=300, BED={x:246,y:250};
-  var x=120, y=150;
-  function place(px,py){ hond.style.left=px+'px'; hond.style.top=py+'px'; }
-  function faceDir(fx,tx){ if(tx<fx) hond.classList.add('links'); else hond.classList.remove('links'); }
-  place(x,y);
-  if(reduce){ hond.classList.add('ligt'); place(BED.x,BED.y); return; }
-  function walkTo(tx,ty,cb){ faceDir(x,tx); hond.classList.remove('ligt'); hond.classList.add('loopt');
-    x=tx; y=ty; place(tx,ty); setTimeout(function(){ hond.classList.remove('loopt'); if(cb) cb(); }, 2600); }
-  function lie(cb){ hond.classList.add('ligt'); setTimeout(function(){ hond.classList.remove('ligt'); if(cb) cb(); }, 4000); }
-  function rnd(){ return Math.floor(Math.random()*(MAX-MIN))+MIN; }
+  var BED={l:72,b:9};
+  var SPOTS=[{l:8,b:8},{l:40,b:8},{l:40,b:17},{l:20,b:15},{l:60,b:9}];
+  var pos={l:6,b:6};
+  dog.style.left=pos.l+'%'; dog.style.bottom=pos.b+'%';
+  if(reduce){ dog.style.left=BED.l+'%'; dog.style.bottom=BED.b+'%'; dog.classList.add('ligt'); return; }
+  function face(d){ if(d<0) dog.classList.add('links'); else if(d>0) dog.classList.remove('links'); }
+  function leg(axis,to,cb){
+    var dist=Math.abs((axis==='left'?pos.l:pos.b)-to);
+    var t=Math.max(0.4, dist*0.05); dog.style.transition=axis+' '+t+'s linear';
+    if(axis==='left'){ dog.style.left=to+'%'; pos.l=to; } else { dog.style.bottom=to+'%'; pos.b=to; }
+    setTimeout(cb, t*1000+30);
+  }
+  function walk(to,cb){ dog.classList.add('loopt'); face(to.l-pos.l);
+    leg('left',to.l,function(){ leg('bottom',to.b,function(){ dog.classList.remove('loopt'); cb(); }); }); }
+  function rust(cb){ dog.classList.add('zit');
+    setTimeout(function(){ dog.classList.remove('zit'); dog.classList.add('ligt');
+      setTimeout(function(){ dog.classList.remove('ligt'); cb(); }, 3400); }, 2000); }
   function loop(){
-    if(Math.random()<0.4){ walkTo(BED.x,BED.y,function(){ lie(function(){ setTimeout(loop,600); }); }); }
-    else { walkTo(rnd(),rnd(),function(){ setTimeout(loop,1000+Math.random()*2200); }); }
+    if(Math.random()<0.5){ walk(BED,function(){ rust(function(){ setTimeout(loop,700); }); }); }
+    else { var g=SPOTS[Math.floor(Math.random()*SPOTS.length)]; walk(g,function(){ setTimeout(loop,900+Math.random()*2200); }); }
   }
   setTimeout(loop,1500);
 })();
