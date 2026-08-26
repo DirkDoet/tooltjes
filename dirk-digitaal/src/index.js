@@ -1336,11 +1336,11 @@ const OFFICE_HTML = `<!doctype html>
   .dog.loopt .dogleg-b{ animation:dd-legB .5s steps(1) infinite; }
   .dog .dogbody{ transform-origin:bottom center; transition:transform .5s ease; }
   .dog .dogleg{ transition:transform .5s ease; }
-  /* Zit: compact op het achterste. Lig: languit + plat (DIR-41). */
-  .dog.zit .dogbody{ transform:translateY(3px) scaleY(.86); }
-  .dog.zit .dogleg{ transform:translateY(4px); }
-  .dog.ligt .dogbody{ transform:translateY(11px) scaleY(.42) scaleX(1.06); }
-  .dog.ligt .dogleg{ transform:translateY(7px) scaleX(1.15); }
+  /* Zit: achterlijf ingezakt, kop omhoog (duidelijke zit-pose). Lig: plat/languit (DIR-44). */
+  .dog.zit .dogbody{ transform:translateY(2px) rotate(-13deg); transform-origin:82% bottom; }
+  .dog.zit .dogleg{ transform:translateY(6px) scaleY(.5); }
+  .dog.ligt .dogbody{ transform:translateY(15px) scaleY(.32) scaleX(1.12); }
+  .dog.ligt .dogleg{ transform:translateY(10px) scaleY(.4) scaleX(1.18); }
   /* Rondlopende agents (DIR-32): benen ALTIJD zichtbaar, alleen orthogonaal, dragen items. */
   .roam{ position:absolute; left:24%; bottom:12%; width:9%; display:none; z-index:4; cursor:pointer; }
   .roam.zichtbaar{ display:block; }
@@ -1356,6 +1356,9 @@ const OFFICE_HTML = `<!doctype html>
   .roam.draagt-gieter .draag-gieter{ display:block; }
   @keyframes dd-walkbob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
   @keyframes dd-stretch{0%,100%{transform:translateY(0) scaleY(1)}45%{transform:translateY(-3px) scaleY(1.06)}}
+  /* Hond aaien: bukken bij de mand (DIR-44 AC-6). */
+  @keyframes dd-bend{0%,100%{transform:translateY(0) scaleY(1)}45%,60%{transform:translateY(7px) scaleY(.88)}}
+  .roam.aait .roam-fig{ animation:dd-bend 1s ease-in-out infinite; }
   #agent-desk.away #albert-body, #agent-desk.away .albert-hand{ opacity:0; }
   #agent-desk.rekt #albert-body{ animation:dd-stretch 2.2s ease-in-out; }
   #gertjan-desk.away #gertjan-body, #gertjan-desk.away .gertjan-hand{ opacity:0; }
@@ -1597,15 +1600,16 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="458" y="106" width="14" height="12" fill="#3a2f18"/>
         <rect x="460" y="112" width="10" height="10" fill="#ffb733" style="animation:dd-bulb 3.6s ease-in-out infinite"/>
       </g>
-      <!-- mosterdgele bank: rechts-voor in de hoek -->
-      <g transform="translate(454,52)">
-        <rect x="100" y="272" width="86" height="20" fill="#c99a1e"/>
-        <rect x="100" y="266" width="86" height="10" fill="#d9ab2c"/>
-        <rect x="100" y="250" width="10" height="24" fill="#b8891a"/>
-        <rect x="176" y="250" width="10" height="24" fill="#b8891a"/>
-        <rect x="112" y="256" width="28" height="14" fill="#e4b83e"/>
-        <rect x="144" y="256" width="28" height="14" fill="#e4b83e"/>
-        <rect x="100" y="290" width="86" height="6" fill="#7d5c10"/>
+      <!-- mosterdgele bank: 90° verticaal, tegen de rechtermuur, boven/achter de printer (DIR-44) -->
+      <g>
+        <rect x="622" y="176" width="14" height="84" fill="#c99a1e"/>
+        <rect x="622" y="176" width="14" height="6" fill="#d9ab2c"/>
+        <rect x="600" y="176" width="22" height="12" fill="#b8891a"/>
+        <rect x="600" y="248" width="22" height="12" fill="#b8891a"/>
+        <rect x="602" y="188" width="20" height="60" fill="#d9ab2c"/>
+        <rect x="606" y="192" width="14" height="26" fill="#e4b83e"/>
+        <rect x="606" y="220" width="14" height="26" fill="#e4b83e"/>
+        <rect x="600" y="188" width="6" height="60" fill="#7d5c10"/>
       </g>
       <use href="#plant" x="500" y="176" width="34" height="52"/>
       <use href="#plant" x="104" y="182" width="30" height="46"/>
@@ -1653,7 +1657,7 @@ const OFFICE_HTML = `<!doctype html>
         <text x="464" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Ilona</text>
         <text x="464" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">Google Ads-specialist</text>
       </g>
-      <!-- Anton (content-agent), actief + klikbaar (DIR-39) — rechts-voor -->
+      <!-- Anton (content-agent), actief + klikbaar (DIR-39) — front-rechts (paar met Albert, DIR-44 AC-7) -->
       <g id="anton-desk" role="button" tabindex="0" aria-label="Open de content-agent Anton">
         <rect x="458" y="222" width="120" height="130" fill="#000" opacity="0"/>
         <g id="anton-body" style="transform-origin:504px 300px;animation:dd-albert-idle 6.2s ease-in-out infinite">
@@ -1697,24 +1701,11 @@ const OFFICE_HTML = `<!doctype html>
       </g>
       <g id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent" transform="translate(-30,0)">
         <rect x="146" y="220" width="150" height="126" fill="#000" opacity="0"/>
-        <rect x="196" y="256" width="42" height="46" fill="#111"/>
-        <rect x="200" y="260" width="34" height="30" fill="#1c1c1c"/>
         <g id="albert-body" style="transform-origin:218px 300px;animation:dd-albert-idle 5.5s ease-in-out infinite">
           <use href="#albert" x="186" y="238" width="64" height="77"/>
         </g>
-        <rect x="180" y="304" width="104" height="10" fill="#2b2b2b"/>
-        <rect x="180" y="314" width="104" height="34" fill="#141414"/>
-        <rect x="186" y="314" width="5" height="34" fill="#0c0c0c"/>
-        <rect x="273" y="314" width="5" height="34" fill="#0c0c0c"/>
-        <rect x="252" y="298" width="8" height="8" fill="#0c0c0c"/>
-        <rect x="246" y="278" width="36" height="24" fill="#0a0a0a"/>
-        <rect x="250" y="282" width="28" height="16" fill="#3a2400"/>
-        <rect x="252" y="284" width="14" height="2" fill="#F18E02"/>
-        <rect x="252" y="288" width="20" height="2" fill="#c97400"/>
-        <rect x="252" y="292" width="10" height="2" fill="#F18E02"/>
-        <rect x="196" y="306" width="34" height="7" fill="#3a3f47"/>
-        <rect x="198" y="307" width="30" height="2" fill="#20242a"/>
-        <rect x="198" y="310" width="30" height="2" fill="#20242a"/>
+        <!-- zelfde bureau-template (#deskEmpty 104x83) als de andere drie: even groot (DIR-44 AC-7) -->
+        <use href="#deskEmpty" x="166" y="256" width="104" height="83"/>
         <!-- typende handen/armen (DIR-25) -->
         <g class="albert-hand" style="transform-origin:210px 303px;animation:dd-type-l .5s steps(2) infinite">
           <rect x="205" y="293" width="6" height="9" fill="#e58fa8"/>
@@ -1730,9 +1721,14 @@ const OFFICE_HTML = `<!doctype html>
         <text x="221" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Albert</text>
         <text x="218" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">GSC / SEO-specialist</text>
       </g>
-      <ellipse cx="86" cy="336" rx="46" ry="12" fill="#2a2f34"/>
-      <ellipse cx="86" cy="334" rx="38" ry="9" fill="#6d3b8f" opacity="0.55"/>
-      <ellipse cx="86" cy="333" rx="30" ry="6" fill="#824aa8" opacity="0.5"/>
+      <!-- paars kleed: links-achter (DIR-44) -->
+      <ellipse cx="78" cy="306" rx="46" ry="12" fill="#2a2f34"/>
+      <ellipse cx="78" cy="304" rx="38" ry="9" fill="#6d3b8f" opacity="0.55"/>
+      <ellipse cx="78" cy="303" rx="30" ry="6" fill="#824aa8" opacity="0.5"/>
+      <!-- hondenmand op het kleed (DIR-44) -->
+      <ellipse cx="78" cy="318" rx="34" ry="9" fill="#5b3a1e"/>
+      <ellipse cx="78" cy="316" rx="27" ry="6.5" fill="#7a5330"/>
+      <ellipse cx="78" cy="315" rx="20" ry="4.5" fill="#9c6b3f"/>
       <polygon points="0,300 640,300 640,360 0,360" fill="#000" opacity="0.10"/>
     </svg>
 
@@ -1813,7 +1809,6 @@ const OFFICE_HTML = `<!doctype html>
     <div style="position:absolute;top:0;left:0;right:0;height:30%;background:linear-gradient(to bottom, rgba(8,11,15,.82) 0%, rgba(8,11,15,.5) 55%, rgba(8,11,15,0) 100%);pointer-events:none;"></div>
     <div style="position:absolute;top:5%;left:0;right:0;text-align:center;pointer-events:none;">
       <div style="font-family:'Press Start 2P',monospace;color:#F18E02;font-size:clamp(18px,4.4vw,52px);letter-spacing:2px;text-shadow:4px 4px 0 #015092,8px 8px 0 rgba(0,0,0,.35);">DIRK DIGITAAL</div>
-      <div style="margin-top:14px;font-family:'VT323',monospace;color:#e8e2d8;font-size:clamp(16px,2.4vw,30px);letter-spacing:3px;text-shadow:2px 2px 0 #000;">Verwarrend duidelijk</div>
     </div>
     <div style="position:absolute;bottom:4%;left:0;right:0;text-align:center;pointer-events:none;">
       <span style="display:inline-block;font-family:'VT323',monospace;font-size:clamp(15px,2.1vw,26px);letter-spacing:1px;color:#e8e2d8;background:rgba(11,18,25,.72);border:1px solid #F18E02;padding:6px 16px;text-shadow:1px 1px 0 #000;animation:dd-cta 2.4s ease-in-out infinite;">
@@ -2083,10 +2078,10 @@ const OFFICE_HTML = `<!doctype html>
   (function(){
     var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     var HOMES={ gsc:{l:20,b:12}, ga4:{l:41,b:24}, ads:{l:63,b:24}, anton:{l:76,b:12} };
-    // Albert/Gertjan: koffie, printje, hond aaien (mand links-achter), rekken.
-    var GEWONE=[{l:9,b:16,drag:'koffie'},{l:88,b:16,drag:'papier'},{l:16,b:15,drag:null},{l:34,b:9,drag:null},null];
-    // Ilona: planten water geven (rechts + links), en af en toe rekken.
-    var ILONA=[{l:78,b:20,drag:'gieter'},{l:16,b:13,drag:'gieter'},null];
+    // Albert/Gertjan/Anton: koffie, printje, wat rondlopen. Hond aaien + rekken lopen via act().
+    var GEWONE=[{l:9,b:16,drag:'koffie'},{l:88,b:16,drag:'papier'},{l:34,b:9,drag:null},null];
+    // Ilona: de twee planten water geven (rechts-achter ~x500, links-achter ~x104), en af en toe rekken.
+    var ILONA=[{l:78,b:20,drag:'gieter'},{l:18,b:20,drag:'gieter'},null];
     var ACTIES={ gsc:GEWONE, ga4:GEWONE, ads:ILONA, anton:GEWONE };
     var actief=false;   // gedeelde lock: er mag maar ÉÉN agent tegelijk rondlopen (DIR-41)
     function maakRoamer(desk, roam, key){
@@ -2110,19 +2105,24 @@ const OFFICE_HTML = `<!doctype html>
       // Loop van huis naar een bestemming, wacht daar, en loop terug.
       function trip(dest, opts){
         busy=true; actief=true; desk.classList.add('away');
+        // Zet de roamer eerst zonder animatie op zijn werkplek en forceer een reflow, zodat de
+        // startpositie vaststaat vóór de eerste stap — geen zichtbare teleport (DIR-44 AC-5).
         roam.style.transition='none'; roam.style.left=home.l+'%'; roam.style.bottom=home.b+'%'; pos={l:home.l,b:home.b};
         roam.classList.add('zichtbaar');
-        requestAnimationFrame(function(){
+        void roam.getBoundingClientRect();
+        requestAnimationFrame(function(){ requestAnimationFrame(function(){
           walk(dest, function(){
             if(opts.drag) roam.classList.add('draagt-'+opts.drag);
+            if(opts.bend) roam.classList.add('aait');
             setTimeout(function(){
+              roam.classList.remove('aait');
               walk(home, function(){
                 roam.classList.remove('zichtbaar','links','draagt-koffie','draagt-papier','draagt-gieter');
                 desk.classList.remove('away'); busy=false; actief=false; plan();
               });
             }, opts.wacht || 1700);
           });
-        });
+        }); });
       }
       // Overleggen: loop naar de zijkant van een ander bureau, sta daar even, ga terug.
       function overleg(){
@@ -2130,13 +2130,19 @@ const OFFICE_HTML = `<!doctype html>
         var o=HOMES[andere[Math.floor(Math.random()*andere.length)]];
         trip({ l: o.l + (home.l < o.l ? -9 : 9), b: o.b }, { wacht:3000 });
       }
+      // Naar de hondenmand links-achter lopen en zichtbaar bukken/aaien (DIR-44 AC-6).
+      function petDog(){ trip({l:15,b:14}, { wacht:1900, bend:true }); }
       function act(){
-        if(busy||actief){ plan(); return; }   // iemand anders loopt al → wacht tot vrij
-        if(Math.random()<0.25){ overleg(); return; }
+        var r=Math.random();
+        // Rekken/strekken gebeurt aan het eigen bureau (geen looplock nodig) → mag altijd, dus zichtbaar vaak.
+        if(r<0.30){ stretch(); return; }
+        if(busy||actief){ plan(); return; }   // roamen: er loopt al iemand → wacht tot vrij (max 1)
+        if(r<0.45){ overleg(); return; }
+        if(key!=='ads' && r<0.72){ petDog(); return; }   // Ilona watert planten i.p.v. hond aaien
         var s=spots[Math.floor(Math.random()*spots.length)];
         if(s) trip(s, { drag:s.drag, wacht:1700 }); else stretch();
       }
-      function plan(){ setTimeout(act, 12000+Math.random()*13000); }
+      function plan(){ setTimeout(act, 8000+Math.random()*9000); }
       plan();
     }
     maakRoamer(agent, document.getElementById('albert-roam'), 'gsc');
@@ -2158,7 +2164,7 @@ const OFFICE_HTML = `<!doctype html>
 (function(){
   var dog=document.querySelector('.dog'); if(!dog) return;
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var BED={l:14,b:14};
+  var BED={l:13,b:18};   // op de verplaatste hondenmand links-achter (DIR-44 AC-2/3)
   var SPOTS=[{l:34,b:8},{l:58,b:8},{l:72,b:16},{l:46,b:18},{l:82,b:9}];
   var pos={l:6,b:6};
   dog.style.left=pos.l+'%'; dog.style.bottom=pos.b+'%';
