@@ -1095,19 +1095,22 @@ const OFFICE_HTML = `<!doctype html>
           <rect width="14" height="6" x="1" y="9" fill="#7d3125"/>
           <rect width="14" height="6" x="17" y="9" fill="#7d3125"/>
         </pattern>
+        <!-- Compact bureau (DIR-31): monitor rechts, smaller blad, zichtbaar keyboard. -->
         <symbol id="deskEmpty" viewBox="0 0 100 80">
-          <rect x="46" y="30" width="8" height="12" fill="#0c0c0c"/>
-          <rect x="40" y="42" width="20" height="4" fill="#0c0c0c"/>
-          <rect x="30" y="6" width="40" height="26" fill="#0a0a0a"/>
-          <rect x="34" y="10" width="32" height="18" fill="#14202b"/>
-          <rect x="37" y="13" width="12" height="2" fill="#22384a"/>
-          <rect x="37" y="18" width="20" height="2" fill="#1d2f3e"/>
-          <rect x="37" y="23" width="8" height="2" fill="#1d2f3e"/>
-          <rect x="8" y="46" width="84" height="8" fill="#2b2b2b"/>
-          <rect x="8" y="54" width="84" height="22" fill="#141414"/>
-          <rect x="14" y="54" width="4" height="22" fill="#0c0c0c"/>
-          <rect x="82" y="54" width="4" height="22" fill="#0c0c0c"/>
-          <rect x="36" y="48" width="28" height="4" fill="#333"/>
+          <rect x="76" y="30" width="8" height="12" fill="#0c0c0c"/>
+          <rect x="70" y="42" width="20" height="4" fill="#0c0c0c"/>
+          <rect x="60" y="6" width="36" height="26" fill="#0a0a0a"/>
+          <rect x="64" y="10" width="28" height="18" fill="#14202b"/>
+          <rect x="67" y="13" width="12" height="2" fill="#22384a"/>
+          <rect x="67" y="18" width="18" height="2" fill="#1d2f3e"/>
+          <rect x="67" y="23" width="8" height="2" fill="#1d2f3e"/>
+          <rect x="16" y="46" width="78" height="8" fill="#2b2b2b"/>
+          <rect x="16" y="54" width="78" height="22" fill="#141414"/>
+          <rect x="22" y="54" width="4" height="22" fill="#0c0c0c"/>
+          <rect x="84" y="54" width="4" height="22" fill="#0c0c0c"/>
+          <rect x="26" y="47" width="30" height="7" fill="#3a3f47"/>
+          <rect x="28" y="48" width="26" height="2" fill="#20242a"/>
+          <rect x="28" y="51" width="26" height="2" fill="#20242a"/>
         </symbol>
         <symbol id="plant" viewBox="0 0 40 60">
           <rect x="10" y="40" width="20" height="18" fill="#8a4a2b"/>
@@ -1213,17 +1216,17 @@ const OFFICE_HTML = `<!doctype html>
       <use href="#plant" x="104" y="182" width="30" height="46"/>
       <!-- Gertjan (GA4-agent), actief + klikbaar (DIR-29) -->
       <g id="gertjan-desk" role="button" tabindex="0" aria-label="Open de GA4-agent Gertjan">
-        <rect x="284" y="224" width="110" height="120" fill="#000" opacity="0"/>
-        <use href="#gertjan" x="306" y="250" width="52" height="63"/>
-        <use href="#deskEmpty" x="286" y="266" width="96" height="76"/>
-        <rect x="284" y="224" width="108" height="26" fill="#0b1219"/>
-        <rect x="284" y="224" width="108" height="26" fill="none" stroke="#3fd06a" stroke-width="1.5"/>
-        <circle cx="295" cy="235" r="4" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
-        <text x="305" y="239" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="10" fill="#f4f0e6">Gertjan</text>
-        <text x="289" y="248" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="7" fill="#c2ccd4">GA4-data-specialist</text>
+        <rect x="290" y="214" width="96" height="118" fill="#000" opacity="0"/>
+        <use href="#gertjan" x="298" y="240" width="48" height="58"/>
+        <use href="#deskEmpty" x="290" y="256" width="96" height="76"/>
+        <rect x="290" y="214" width="96" height="24" fill="#0b1219"/>
+        <rect x="290" y="214" width="96" height="24" fill="none" stroke="#3fd06a" stroke-width="1.5"/>
+        <circle cx="300" cy="222" r="3.5" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
+        <text x="341" y="224" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Gertjan</text>
+        <text x="338" y="233" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">GA4-data-specialist</text>
       </g>
-      <use href="#deskEmpty" x="392" y="250" width="80" height="64"/>
-      <use href="#deskEmpty" x="466" y="298" width="126" height="98"/>
+      <use href="#deskEmpty" x="404" y="250" width="76" height="61"/>
+      <use href="#deskEmpty" x="470" y="300" width="104" height="83"/>
       <!-- koffieautomaat (DIR-26) -->
       <g>
         <rect x="40" y="250" width="30" height="52" fill="#2b2f36"/>
@@ -1252,17 +1255,19 @@ const OFFICE_HTML = `<!doctype html>
         <g id="albert-body" style="transform-origin:218px 300px;animation:dd-albert-idle 5.5s ease-in-out infinite">
           <use href="#albert" x="186" y="238" width="64" height="77"/>
         </g>
-        <rect x="150" y="304" width="132" height="10" fill="#2b2b2b"/>
-        <rect x="150" y="314" width="132" height="34" fill="#141414"/>
-        <rect x="156" y="314" width="5" height="34" fill="#0c0c0c"/>
-        <rect x="271" y="314" width="5" height="34" fill="#0c0c0c"/>
+        <rect x="180" y="304" width="104" height="10" fill="#2b2b2b"/>
+        <rect x="180" y="314" width="104" height="34" fill="#141414"/>
+        <rect x="186" y="314" width="5" height="34" fill="#0c0c0c"/>
+        <rect x="273" y="314" width="5" height="34" fill="#0c0c0c"/>
         <rect x="252" y="298" width="8" height="8" fill="#0c0c0c"/>
         <rect x="246" y="278" width="36" height="24" fill="#0a0a0a"/>
         <rect x="250" y="282" width="28" height="16" fill="#3a2400"/>
         <rect x="252" y="284" width="14" height="2" fill="#F18E02"/>
         <rect x="252" y="288" width="20" height="2" fill="#c97400"/>
         <rect x="252" y="292" width="10" height="2" fill="#F18E02"/>
-        <rect x="176" y="306" width="46" height="5" fill="#333"/>
+        <rect x="196" y="306" width="34" height="7" fill="#3a3f47"/>
+        <rect x="198" y="307" width="30" height="2" fill="#20242a"/>
+        <rect x="198" y="310" width="30" height="2" fill="#20242a"/>
         <!-- typende handen/armen (DIR-25) -->
         <g class="albert-hand" style="transform-origin:210px 303px;animation:dd-type-l .5s steps(2) infinite">
           <rect x="205" y="293" width="6" height="9" fill="#e58fa8"/>
@@ -1272,11 +1277,11 @@ const OFFICE_HTML = `<!doctype html>
           <rect x="226" y="293" width="6" height="9" fill="#e58fa8"/>
           <rect x="223" y="300" width="9" height="6" fill="#e8b98a"/>
         </g>
-        <rect x="146" y="204" width="122" height="32" fill="#0b1219"/>
-        <rect x="146" y="204" width="122" height="32" fill="none" stroke="#F18E02" stroke-width="1.5"/>
-        <circle cx="158" cy="216" r="4" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
-        <text x="168" y="220" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="11" fill="#f4f0e6">Albert</text>
-        <text x="153" y="232" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="8" fill="#c2ccd4">GSC / SEO-specialist</text>
+        <rect x="170" y="206" width="96" height="24" fill="#0b1219"/>
+        <rect x="170" y="206" width="96" height="24" fill="none" stroke="#F18E02" stroke-width="1.5"/>
+        <circle cx="180" cy="214" r="3.5" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
+        <text x="221" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Albert</text>
+        <text x="218" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">GSC / SEO-specialist</text>
       </g>
       <ellipse cx="86" cy="336" rx="46" ry="12" fill="#2a2f34"/>
       <ellipse cx="86" cy="334" rx="38" ry="9" fill="#6d3b8f" opacity="0.55"/>
