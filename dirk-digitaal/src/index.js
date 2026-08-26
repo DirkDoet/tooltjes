@@ -1441,6 +1441,8 @@ const OFFICE_HTML = `<!doctype html>
         </symbol>
         <!-- Gertjan (GA4): bril, korte baard, licht overhemd (DIR-29) -->
         <symbol id="gertjan" viewBox="0 0 40 48">
+          <rect x="6" y="31" width="4" height="16" fill="#aeb4bb"/>
+          <rect x="30" y="31" width="4" height="16" fill="#aeb4bb"/>
           <rect x="9" y="30" width="22" height="18" fill="#c7ccd2"/>
           <rect x="9" y="30" width="22" height="4" fill="#aeb4bb"/>
           <rect x="19" y="30" width="2" height="18" fill="#aeb4bb"/>
@@ -1534,8 +1536,8 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="458" y="106" width="14" height="12" fill="#3a2f18"/>
         <rect x="460" y="112" width="10" height="10" fill="#ffb733" style="animation:dd-bulb 3.6s ease-in-out infinite"/>
       </g>
-      <!-- hondenmand: links-achterin de hoek (DIR-38) -->
-      <g>
+      <!-- mosterdgele bank: rechts-voor in de hoek -->
+      <g transform="translate(454,52)">
         <rect x="100" y="272" width="86" height="20" fill="#c99a1e"/>
         <rect x="100" y="266" width="86" height="10" fill="#d9ab2c"/>
         <rect x="100" y="250" width="10" height="24" fill="#b8891a"/>
@@ -1570,7 +1572,7 @@ const OFFICE_HTML = `<!doctype html>
       </g>
       <!-- Leeg: rechts-van-midden, ACHTER -->
       <!-- Ilona (Ads-agent), actief + klikbaar (DIR-36) -->
-      <g id="ilona-desk" role="button" tabindex="0" aria-label="Open de Ads-agent Ilona" transform="translate(-6,-20)">
+      <g id="ilona-desk" role="button" tabindex="0" aria-label="Open de Ads-agent Ilona" transform="translate(-44,-20)">
         <rect x="410" y="204" width="104" height="114" fill="#000" opacity="0"/>
         <g id="ilona-body" style="transform-origin:448px 288px;animation:dd-albert-idle 6.5s ease-in-out infinite">
           <use href="#ilona" x="424" y="234" width="48" height="58"/>
@@ -1596,7 +1598,7 @@ const OFFICE_HTML = `<!doctype html>
         <g id="anton-body" style="transform-origin:504px 300px;animation:dd-albert-idle 6.2s ease-in-out infinite">
           <use href="#anton" x="478" y="254" width="52" height="63"/>
         </g>
-        <use href="#deskEmpty" x="458" y="250" width="120" height="96"/>
+        <use href="#deskEmpty" x="452" y="256" width="104" height="83"/>
         <g class="anton-hand" style="transform-origin:498px 305px;animation:dd-type-l .5s steps(2) infinite">
           <rect x="494" y="300" width="6" height="9" fill="#2a2f3a"/>
           <rect x="493" y="307" width="9" height="6" fill="#d9a878"/>
