@@ -1138,41 +1138,94 @@ function adsHeaders(token, env, loginCid) {
   return h;
 }
 
-// Toegankelijke Google Ads-accounts → [{customer, id}].
-async function fetchAdsCustomers(token, env) {
-  const resp = await fetch(GADS_BASE + "/customers:listAccessibleCustomers", { headers: adsHeaders(token, env) });
-  if (!resp.ok) return null;
-  const data = await resp.json();
-  return (data.resourceNames || []).map((rn) => ({ customer: rn, id: adsCustomerId(rn) }));
+// Leest een Google Ads-foutrespons uit → korte NL-melding (DIR-43, AC-3).
+// Slikt niets meer in: status + api-message tonen, ruwe body server-side loggen.
+async function adsErrorMessage(resp) {
+  let body = "";
+  try { body = await resp.text(); } catch (e) { /* body niet leesbaar */ }
+  console.log("Google Ads API-fout", resp.status, body);
+  let apiMsg = "";
+  try {
+    const j = JSON.parse(body);
+    const err = j && j.error;
+    apiMsg = (err && err.message) ||
+      (err && err.details && err.details[0] && err.details[0].errors &&
+        err.details[0].errors[0] && err.details[0].errors[0].message) || "";
+  } catch (e) { /* geen JSON-body */ }
+  const s = resp.status;
+  if (s === 401) return "Google Ads gaf een fout (401): je toegang is verlopen — koppel je Google-account opnieuw.";
+  if (s === 403) return "Google Ads gaf een fout (403): " + (apiMsg || "geen toegang of de vereiste rechten/scope ontbreken.");
+  return "Google Ads gaf een fout (" + s + "): " + (apiMsg || "onbekende fout.");
 }
 
-// Eén GAQL-query uitvoeren (googleAds:search) → JSON of null.
-async function runAdsSearch(token, env, customer, query) {
+// GAQL om (sub)accounts onder een (MCC-)account te vinden (DIR-43, AC-1).
+const ADS_CLIENT_QUERY =
+  "SELECT customer_client.id, customer_client.descriptive_name, customer_client.manager, customer_client.level " +
+  "FROM customer_client WHERE customer_client.level <= 1";
+
+// Toegankelijke Google Ads-accounts → { accounts:[{customer,id,naam,loginCid}] } of { error }.
+// Traverseert elke toegankelijke (MCC-)account via customer_client en geeft de niet-manager
+// subaccounts terug, met loginCid = de MCC-id waaronder ze hangen. Losse accounts blijven werken.
+async function fetchAdsCustomers(token, env) {
+  const resp = await fetch(GADS_BASE + "/customers:listAccessibleCustomers", { headers: adsHeaders(token, env) });
+  if (!resp.ok) return { error: await adsErrorMessage(resp) };
+  const data = await resp.json();
+  const managers = data.resourceNames || [];
+  if (!managers.length) return { error: "Google Ads vond geen toegankelijke accounts in je koppeling." };
+
+  const clients = [];
+  const seen = new Set();
+  let anyOk = false, lastErr = null;
+  for (const rn of managers) {
+    const mccId = adsCustomerId(rn);
+    const res = await runAdsSearch(token, env, rn, ADS_CLIENT_QUERY, mccId);
+    if (!res || res.error) { lastErr = (res && res.error) || lastErr; continue; }
+    anyOk = true;
+    for (const row of res.results || []) {
+      const cc = row.customerClient || {};
+      if (cc.manager === true) continue;                 // MCC's/managers overslaan — geen ad-account
+      const cid = String(cc.id || "").trim();
+      if (!cid || seen.has(cid)) continue;               // ontdubbelen op client-id
+      seen.add(cid);
+      clients.push({ customer: "customers/" + cid, id: cid, naam: cc.descriptiveName || "", loginCid: mccId });
+    }
+  }
+  if (!clients.length) {
+    if (!anyOk && lastErr) return { error: lastErr };     // echte API-fout, niet "geen accounts"
+    return { error: "Google Ads vond geen advertentie-accounts onder je koppeling." };
+  }
+  return { accounts: clients };
+}
+
+// Eén GAQL-query uitvoeren (googleAds:search) → JSON, of { error } bij een API-fout.
+// loginCid = de manager/MCC-id die als login-customer-id mee moet (AC-2); valt terug op het account zelf.
+async function runAdsSearch(token, env, customer, query, loginCid) {
   const cid = adsCustomerId(customer);
-  if (!cid) return null;
+  if (!cid) return { error: "Geen geldig Google Ads-account-id." };
   const resp = await fetch(GADS_BASE + "/customers/" + cid + "/googleAds:search", {
     method: "POST",
-    headers: adsHeaders(token, env, customer),
+    headers: adsHeaders(token, env, loginCid || customer),
     body: JSON.stringify({ query }),
   });
-  if (!resp.ok) return null;
+  if (!resp.ok) return { error: await adsErrorMessage(resp) };
   return resp.json();
 }
 
 // Tool-call: een rapport live ophalen voor het gekozen account.
-async function fetchAdsReport(token, env, customer, args) {
+async function fetchAdsReport(token, env, customer, args, loginCid) {
   if (!customer) return { error: "Geen account gekozen." };
   const q = buildAdsQuery(args, Date.now());
-  const data = await runAdsSearch(token, env, customer, q.query);
+  const data = await runAdsSearch(token, env, customer, q.query, loginCid);
   if (!data) return { error: "Kon deze Google Ads-data niet ophalen bij Google." };
+  if (data.error) return { error: data.error };
   return { periode: { van: q.startDate, tot: q.endDate }, rapport: q.report, rijen: shapeAdsRows(data.results, q.jsonPath) };
 }
 
 // Eerste-analyse-data: campagne-totalen + top campagnes van de laatste 28 dagen (AC-5).
-async function fetchAdsOverview(token, env, customer) {
+async function fetchAdsOverview(token, env, customer, loginCid) {
   const q = buildAdsQuery({ report: "campaigns", days: 28, row_limit: 15 }, Date.now());
-  const data = await runAdsSearch(token, env, customer, q.query);
-  if (!data) return null;
+  const data = await runAdsSearch(token, env, customer, q.query, loginCid);
+  if (!data || data.error) return null;
   const rows = shapeAdsRows(data.results, q.jsonPath);
   return {
     periode: { van: q.startDate, tot: q.endDate },
@@ -1319,7 +1372,15 @@ const OFFICE_HTML = `<!doctype html>
   .portret .avatar{ width:72px; height:72px; background:#0b1219; border:2px solid var(--accent);
     display:flex; align-items:center; justify-content:center; font-size:2.2rem; }
   .portret .pnaam{ margin-top:.4rem; font-size:.85rem; letter-spacing:1px; color:#3fd06a; }
-  @media (prefers-reduced-motion: reduce){ .scene-wrap *{ animation:none !important; } }
+  /* portret dynamisch (DIR-40): af en toe knipperen + 'typen' terwijl er een reactie binnenkomt */
+  .portret .avatar svg{ display:block; width:100%; height:100%; }
+  .portret .avatar .ooglid{ opacity:0; animation:dd-eyelid 5s steps(1,end) infinite; }
+  @keyframes dd-eyelid{ 0%,92%,100%{ opacity:0; } 94%,97%{ opacity:1; } }
+  .portret .avatar.aantypen svg{ animation:dd-portret-typ .5s ease-in-out infinite; transform-origin:50% 100%; }
+  .portret .avatar.aantypen .ooglid{ animation:dd-eyelid 1.4s steps(1,end) infinite; }
+  @keyframes dd-portret-typ{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-2px); } }
+  @media (prefers-reduced-motion: reduce){ .scene-wrap *{ animation:none !important; }
+    .portret .avatar .ooglid, .portret .avatar.aantypen svg{ animation:none !important; } }
   @media (max-width:640px){ .portret{ flex-basis:60px; }
     .portret .avatar{ width:48px; height:48px; font-size:1.5rem; } }
 
@@ -1767,7 +1828,7 @@ const OFFICE_HTML = `<!doctype html>
     <header><b id="chat-title">GSC-agent</b><button class="x" id="chat-close" aria-label="Sluiten">X</button></header>
     <div class="chatrow">
       <div class="portret" aria-hidden="true">
-        <div class="avatar" id="chat-avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#albert"/></svg></div>
+        <div class="avatar" id="chat-avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#albert"/><rect class="ooglid" x="14" y="17" width="12" height="4" fill="#e8b98a"/></svg></div>
         <div class="pnaam" id="chat-pnaam">&#9679; Albert</div>
       </div>
       <div class="chatmain">
@@ -1812,25 +1873,33 @@ const OFFICE_HTML = `<!doctype html>
 
   // Agent-config: welke agent je aanklikt bepaalt portret, persona en endpoints (DIR-29).
   var AGENTS={
-    gsc:{ key:'gsc', naam:'Albert', titel:'GSC-agent', sym:'albert', chat:'/api/chat', bron:'/api/gsc/sites',
+    gsc:{ key:'gsc', naam:'Albert', titel:'GSC-agent', sym:'albert', huid:'#e8b98a', chat:'/api/chat', bron:'/api/gsc/sites',
       needKey:'needSite', listKey:'sites', selKey:'site', switchLabel:'Andere site',
       vraag:'Welke website wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je zoekcijfers...',
       intro:'Hoi! Ik ben Albert, je GSC-agent. Koppel je Google-account, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.',
       itemValue:function(x){return x;}, itemLabel:function(x){return x;} },
-    ga4:{ key:'ga4', naam:'Gertjan', titel:'GA4-agent (Gertjan)', sym:'gertjan', chat:'/api/ga4/chat', bron:'/api/ga4/properties',
+    ga4:{ key:'ga4', naam:'Gertjan', titel:'GA4-agent (Gertjan)', sym:'gertjan', huid:'#e8b98a', chat:'/api/ga4/chat', bron:'/api/ga4/properties',
       needKey:'needProperty', listKey:'properties', selKey:'property', switchLabel:'Andere property',
       vraag:'Welke GA4-property wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je GA4-cijfers...',
       intro:'Hoi! Ik ben Gertjan, je GA4-data-specialist. Koppel je Google-account, dan geef ik je meteen een overzicht van je verkeer en kun je me alles vragen.',
       itemValue:function(x){return x&&x.property;}, itemLabel:function(x){return (x&&(x.displayName||x.property))||'';} },
-    ads:{ key:'ads', naam:'Ilona', titel:'Ads-agent (Ilona)', sym:'ilona', chat:'/api/ads/chat', bron:'/api/ads/customers',
+    ads:{ key:'ads', naam:'Ilona', titel:'Ads-agent (Ilona)', sym:'ilona', huid:'#f0c79a', chat:'/api/ads/chat', bron:'/api/ads/customers',
       needKey:'needAccount', listKey:'accounts', selKey:'customer', switchLabel:'Ander account', connectLabel:'Koppel Google Ads',
       vraag:'Welk Google Ads-account wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je advertentiecijfers...',
       intro:'Hoi! Ik ben Ilona, je advertentie-specialist. Kies een platform: "Koppel Google Ads" voor je Google-campagnes, of "Meta Ads" voor je Facebook/Instagram-cijfers (die komen via je persoonlijke klant-link).',
-      itemValue:function(x){return x&&x.customer;}, itemLabel:function(x){return (x&&(x.id||x.customer))||'';} },
-    anton:{ key:'anton', naam:'Anton', titel:'Content-specialist (Anton)', sym:'anton', chat:'/api/content/chat',
+      itemValue:function(x){return x&&x.customer;}, itemLabel:function(x){return (x&&(x.naam?x.naam+' ('+x.id+')':(x.id||x.customer)))||'';} },
+    anton:{ key:'anton', naam:'Anton', titel:'Content-specialist (Anton)', sym:'anton', huid:'#d9a878', chat:'/api/content/chat',
       geenKoppeling:true, ph:'Plak je tekst of vraag een bewerking...',
       intro:'Hoi! Ik ben Anton, je content-specialist. Plak een tekst en vraag me te schrijven, vertalen, spellingchecken, in te korten, te verlengen, SEO-optimaliseren of te herschrijven.' } };
   var cur=AGENTS.gsc;
+
+  // Portret-SVG: agent-symbool + knipperend ooglid (huidskleur over de ogen). DIR-40.
+  function avatarSVG(a){
+    return '<svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true">'
+      +'<use href="#'+a.sym+'"/>'
+      +'<rect class="ooglid" x="14" y="17" width="12" height="4" fill="'+(a.huid||'#e8b98a')+'"/>'
+      +'</svg>';
+  }
 
   function openChat(key){ if(key) useAgent(key); overlay.style.display='flex'; }
   function closeChat(){ overlay.style.display='none'; }
@@ -1838,7 +1907,7 @@ const OFFICE_HTML = `<!doctype html>
     if(cur.key===key) return;              // zelfde agent → gesprek behouden
     cur=AGENTS[key];
     titleEl.textContent=cur.titel;
-    avatarEl.innerHTML='<svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#'+cur.sym+'"/></svg>';
+    avatarEl.innerHTML=avatarSVG(cur);
     pnaamEl.innerHTML='&#9679; '+cur.naam;
     input.placeholder=cur.ph; switchBtn.textContent=cur.switchLabel;
     if(connectBtn) connectBtn.textContent=cur.connectLabel||'Koppel Google';
@@ -1939,6 +2008,7 @@ const OFFICE_HTML = `<!doctype html>
 
   async function streamChat(payload, dashboard){
     if(busy) return; busy=true; sendBtn.disabled=true;
+    if(avatarEl) avatarEl.classList.add('aantypen');   // portret 'typt' terwijl antwoord binnenkomt (DIR-40)
     var bubble=addBubble('agent',''); setTyping(bubble); var got='';
     try{
       var r=await fetch(cur.chat,{ method:'POST', headers:{'Content-Type':'application/json'},
@@ -1946,10 +2016,10 @@ const OFFICE_HTML = `<!doctype html>
       var ct=r.headers.get('Content-Type')||'';
       if(!r.ok||ct.indexOf('application/json')!==-1){
         var j={}; try{ j=await r.json(); }catch(e){}
-        if(j&&j[cur.needKey]){ bubble.remove(); renderPicker(j[cur.listKey]); busy=false; sendBtn.disabled=false; return; }
+        if(j&&j[cur.needKey]){ bubble.remove(); renderPicker(j[cur.listKey]); busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen'); return; }
         bubble.textContent=(j&&j.error)||'Er ging iets mis. Probeer het opnieuw.';
         if(r.status===401){ setConnected(false); setActive(false); started=false; }
-        busy=false; sendBtn.disabled=false; return;
+        busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen'); return;
       }
       var reader=r.body.getReader(); var dec=new TextDecoder(); var buf='';
       while(true){ var c=await reader.read(); if(c.done) break;
@@ -1968,7 +2038,7 @@ const OFFICE_HTML = `<!doctype html>
         setActive(true);
       }
     }catch(e){ bubble.textContent='Kon de agent niet bereiken. Probeer het opnieuw.'; }
-    busy=false; sendBtn.disabled=false;
+    busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen');
   }
 
   // Startpunt na koppelen: backend beslist tussen site-keuze (meerdere) of directe analyse (één).
@@ -2018,6 +2088,7 @@ const OFFICE_HTML = `<!doctype html>
     // Ilona: planten water geven (rechts + links), en af en toe rekken.
     var ILONA=[{l:78,b:20,drag:'gieter'},{l:16,b:13,drag:'gieter'},null];
     var ACTIES={ gsc:GEWONE, ga4:GEWONE, ads:ILONA, anton:GEWONE };
+    var actief=false;   // gedeelde lock: er mag maar ÉÉN agent tegelijk rondlopen (DIR-41)
     function maakRoamer(desk, roam, key){
       if(!desk||!roam) return;
       var home=HOMES[key], spots=ACTIES[key];
@@ -2038,7 +2109,7 @@ const OFFICE_HTML = `<!doctype html>
       function stretch(){ desk.classList.add('rekt'); setTimeout(function(){ desk.classList.remove('rekt'); plan(); }, 2300); }
       // Loop van huis naar een bestemming, wacht daar, en loop terug.
       function trip(dest, opts){
-        busy=true; desk.classList.add('away');
+        busy=true; actief=true; desk.classList.add('away');
         roam.style.transition='none'; roam.style.left=home.l+'%'; roam.style.bottom=home.b+'%'; pos={l:home.l,b:home.b};
         roam.classList.add('zichtbaar');
         requestAnimationFrame(function(){
@@ -2047,7 +2118,7 @@ const OFFICE_HTML = `<!doctype html>
             setTimeout(function(){
               walk(home, function(){
                 roam.classList.remove('zichtbaar','links','draagt-koffie','draagt-papier','draagt-gieter');
-                desk.classList.remove('away'); busy=false; plan();
+                desk.classList.remove('away'); busy=false; actief=false; plan();
               });
             }, opts.wacht || 1700);
           });
@@ -2060,7 +2131,7 @@ const OFFICE_HTML = `<!doctype html>
         trip({ l: o.l + (home.l < o.l ? -9 : 9), b: o.b }, { wacht:3000 });
       }
       function act(){
-        if(busy){ plan(); return; }
+        if(busy||actief){ plan(); return; }   // iemand anders loopt al → wacht tot vrij
         if(Math.random()<0.25){ overleg(); return; }
         var s=spots[Math.floor(Math.random()*spots.length)];
         if(s) trip(s, { drag:s.drag, wacht:1700 }); else stretch();
@@ -2422,10 +2493,10 @@ async function handleGa4Chat(request, env, ctx) {
 }
 
 // Ads-account kiezen: overzicht laden + in de sessie zetten (ads-historie schoon).
-async function selectAdsCustomer(stub, token, env, customer, alle) {
-  const overview = await fetchAdsOverview(token, env, customer);
+async function selectAdsCustomer(stub, token, env, customer, alle, loginCid) {
+  const overview = await fetchAdsOverview(token, env, customer, loginCid);
   if (!overview) return null;
-  const ads = { accounts: alle, actief: customer, ...overview };
+  const ads = { accounts: alle, actief: customer, ...overview, loginCid: loginCid || adsCustomerId(customer) };
   await stub.fetch("https://do/chat/select-ads", { method: "POST", body: JSON.stringify({ ads }) });
   return ads;
 }
@@ -2463,23 +2534,25 @@ async function handleAdsChat(request, env, ctx) {
   let storedUser = userText;
 
   if (googleAds && wantCustomer) {
-    const accounts = await fetchAdsCustomers(token, env);
-    if (!accounts || !accounts.length) return json({ error: "Geen Google Ads-accounts gevonden in je koppeling." }, 502);
-    if (!accounts.some((a) => a.customer === wantCustomer)) return json({ error: "Dat account staat niet in je koppeling." }, 400);
-    ads = await selectAdsCustomer(stub, token, env, wantCustomer, accounts);
+    const res = await fetchAdsCustomers(token, env);
+    if (res.error) return json({ error: res.error }, 502);
+    const acct = res.accounts.find((a) => a.customer === wantCustomer);
+    if (!acct) return json({ error: "Dat account staat niet in je koppeling." }, 400);
+    ads = await selectAdsCustomer(stub, token, env, acct.customer, res.accounts, acct.loginCid);
     if (!ads) return json({ error: "Kon de Google Ads-cijfers van dat account niet laden." }, 502);
     history = [];
     promptText = ADS_ANALYSIS_PROMPT;
-    storedUser = "[Analyse van " + wantCustomer + "]";
+    storedUser = "[Analyse van " + (acct.naam || acct.customer) + "]";
   } else if (googleAds && !ads && !userText) {
-    const accounts = await fetchAdsCustomers(token, env);
-    if (!accounts || !accounts.length) return json({ error: "Geen Google Ads-accounts gevonden in je koppeling." }, 502);
+    const res = await fetchAdsCustomers(token, env);
+    if (res.error) return json({ error: res.error }, 502);
+    const accounts = res.accounts;
     if (accounts.length > 1) return json({ needAccount: true, accounts });
-    ads = await selectAdsCustomer(stub, token, env, accounts[0].customer, accounts);
+    ads = await selectAdsCustomer(stub, token, env, accounts[0].customer, accounts, accounts[0].loginCid);
     if (!ads) return json({ error: "Kon de Google Ads-cijfers van je account niet laden." }, 502);
     history = [];
     promptText = ADS_ANALYSIS_PROMPT;
-    storedUser = "[Analyse van " + accounts[0].customer + "]";
+    storedUser = "[Analyse van " + (accounts[0].naam || accounts[0].customer) + "]";
   } else if (userText) {
     promptText = userText;
   } else if (metaOn) {
@@ -2500,6 +2573,7 @@ async function handleAdsChat(request, env, ctx) {
   if (!googleAds) system += "\n\nGoogle Ads is voor deze bezoeker niet gekoppeld; als daarnaar gevraagd wordt, zeg dat vriendelijk.";
 
   const customer = ads && ads.actief;
+  const loginCid = ads && ads.loginCid;   // MCC-id als login-customer-id voor subaccounts (AC-2)
   const convo = buildAnthropicMessages(history, promptText);
 
   let finalText = "";
@@ -2517,7 +2591,7 @@ async function handleAdsChat(request, env, ctx) {
           let out;
           try {
             if (tu.name === "meta_report") out = metaOn ? await fetchMetaInsights(env, metaacct, tu.input) : { error: "Meta niet beschikbaar in deze sessie." };
-            else out = await fetchAdsReport(token, env, customer, tu.input);
+            else out = await fetchAdsReport(token, env, customer, tu.input, loginCid);
           } catch (e) { out = { error: "kon deze data niet ophalen" }; }
           resultaten.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out) });
         }
@@ -2790,9 +2864,9 @@ export default {
       const token = await huidigeToken(request, env);
       if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
       if (!env.GOOGLE_ADS_DEVELOPER_TOKEN) return json({ error: "Google Ads is nog niet geconfigureerd (developer-token ontbreekt)." }, 500);
-      const accounts = await fetchAdsCustomers(token, env);
-      if (!accounts) return json({ error: "Kon je Google Ads-accounts niet ophalen bij Google." }, 502);
-      return json({ accounts });
+      const res = await fetchAdsCustomers(token, env);
+      if (res.error) return json({ error: res.error }, 502);
+      return json({ accounts: res.accounts });
     }
 
     // DIR-30 — Google Ads-rapport voor een account (AC-3).
@@ -2802,11 +2876,12 @@ export default {
       if (!env.GOOGLE_ADS_DEVELOPER_TOKEN) return json({ error: "Google Ads is nog niet geconfigureerd (developer-token ontbreekt)." }, 500);
       const customer = url.searchParams.get("customer");
       if (!customer) return json({ error: "Geef een account op via ?customer=customers/<id>." }, 400);
+      const loginCustomer = url.searchParams.get("login_customer") || customer;   // MCC-id voor subaccounts (AC-2)
       const out = await fetchAdsReport(token, env, customer, {
         report: url.searchParams.get("report"),
         days: url.searchParams.get("days"),
         row_limit: url.searchParams.get("row_limit"),
-      });
+      }, loginCustomer);
       if (out && out.error) return json(out, 502);
       return json(out);
     }
