@@ -1415,12 +1415,18 @@ function isoRoomInner() {
   // Baksteen-textuur op beide muren (subtiel, blauw blijft doorschijnen).
   sWall += '<g transform="' + MR + '" opacity="0.45"><rect x="0" y="0" width="180" height="72" fill="url(#brick)"/></g>';
   sWall += '<g transform="' + ML + '" opacity="0.45"><rect x="0" y="0" width="180" height="72" fill="url(#brick)"/></g>';
-  // Graffiti op de rechter muur — arcade/pixel, huisstijlkleuren.
+  // Graffiti op de rechter muur — arcade/pixel, huisstijlkleuren. Ruimer gespreid
+  // (DIR-59-bijlage): NO PAIN NO GAIN verhuist naar de linkermuur → minder gedrukt.
   sWall += '<g transform="' + MR + '" font-family="\'Press Start 2P\',monospace">'
-    + '<text x="12" y="18" font-size="8" fill="#F18E02">CREATIVITY</text>'
+    + '<text x="12" y="16" font-size="8" fill="#F18E02">CREATIVITY</text>'
     + '<text x="8" y="30" font-size="8" fill="#F18E02">NEVER DIES</text>'
-    + '<text x="30" y="46" font-size="10" fill="#3285D1">DREAM BIG</text>'
-    + '<text x="14" y="60" font-size="6.5" fill="#e8e2d8">NO PAIN NO GAIN</text>'
+    + '<text x="26" y="54" font-size="10" fill="#3285D1">DREAM BIG</text>'
+    + '</g>';
+  // NO PAIN NO GAIN op het LINKER muur-vlak — geschoren (matrix 1,-0.5 laat de
+  // tekst mee-hellen met de down-left-recessie én leesbaar, glyphs niet gespiegeld),
+  // in de voor-onderhoek, vrij van de hex-wandkunst.
+  sWall += '<g transform="matrix(1,-0.5,0,1,150,196)" font-family="\'Press Start 2P\',monospace">'
+    + '<text x="0" y="0" font-size="7" fill="#e8e2d8">NO PAIN NO GAIN</text>'
     + '</g>';
   // Hex-wandkunst op de linker muur — honingraat met kleurvlakken + oranje rand.
   const hexPts = [[38, 10], [60, 10], [49, 26], [71, 26], [38, 42], [60, 42]];
