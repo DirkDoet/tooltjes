@@ -43,6 +43,8 @@ import {
   schoonKlantRecord,
   normaliseerGebruikersnaam,
   hashKlantWachtwoord,
+  agentStandaard,
+  samenAgent,
 } from "../src/index.js";
 import { createHmac } from "node:crypto";
 
@@ -485,4 +487,40 @@ test("hashKlantWachtwoord: PBKDF2-SHA256, salted, herhaalbaar met dezelfde salt"
   const andereSalt = await hashKlantWachtwoord("geheim12345");
   assert.notEqual(andereSalt.salt, a.salt);
   assert.notEqual(andereSalt.hash, a.hash);
+});
+
+// DIR-80: de code-tekst blijft de standaard; een override legt er alleen bovenop.
+test("agentStandaard: vaste sleutel + databron, teksten uit de code", () => {
+  const a = agentStandaard("gsc");
+  assert.equal(a.key, "gsc");
+  assert.equal(a.naam, "Albert");
+  assert.match(a.bron, /Search Console/);
+  assert.ok(a.persona.length > 200);
+  assert.ok(a.analyse.length > 100);
+  assert.equal(agentStandaard("bestaatniet"), null);
+});
+
+test("samenAgent: leeg of blanco override laat de code-tekst staan", () => {
+  const st = agentStandaard("ga4");
+  assert.equal(samenAgent(st, null).naam, "Gertjan");
+  assert.equal(samenAgent(st, {}).persona, st.persona);
+  assert.equal(samenAgent(st, { naam: "   " }).naam, "Gertjan");
+  assert.deepEqual(samenAgent(st, {}).aangepast, {});
+});
+
+test("samenAgent: ingevulde velden winnen en worden gemarkeerd als aangepast", () => {
+  const st = agentStandaard("ads");
+  const uit = samenAgent(st, { naam: "Ilse", persona: "Wees kort." });
+  assert.equal(uit.naam, "Ilse");
+  assert.equal(uit.persona, "Wees kort.");
+  assert.equal(uit.rol, st.rol);                    // niet meegegeven → standaard
+  assert.deepEqual(uit.aangepast, { naam: true, persona: true });
+  assert.equal(uit.key, "ads");                     // sleutel blijft vast
+  assert.equal(uit.bron, st.bron);
+});
+
+test("samenAgent: een override wordt afgekapt op de maximale lengte", () => {
+  const st = agentStandaard("anton");
+  const uit = samenAgent(st, { persona: "x".repeat(9000) });
+  assert.equal(uit.persona.length, 8000);
 });
