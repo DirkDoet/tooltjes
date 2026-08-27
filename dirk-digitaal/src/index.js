@@ -479,13 +479,69 @@ function metaConfigured(env) {
   return !!(env.META_SYSTEM_TOKEN && env.META_APP_SECRET);
 }
 
-// ---- Klant-config in KV: sleutel -> { naam, adAccountId } (AC-1). ----
-async function kvAddClient(env, naam, adAccountId) {
-  if (!env.CLIENTS) return null;
-  const key = randomKey();
-  const rec = { naam: String(naam || "").slice(0, 120), adAccountId: metaActId(adAccountId) };
+// ---- Klant-config in KV: sleutel -> { naam, adAccountId, ... } (AC-1). ----
+// DIR-78: het record is uitgebreid met optionele Google-koppelingen en een
+// klant-login. Alle velden zijn optioneel en oude records blijven geldig — er wordt
+// nooit iets weggegooid, alleen aangevuld.
+
+// Klant-sleutels zijn 36 hex-tekens (randomKey). Config-sleutels zoals `config:model`
+// wonen in dezelfde KV-namespace, dus filteren we de lijst daarop (DIR-77/78).
+const KLANT_SLEUTEL = /^[0-9a-f]{36}$/;
+
+export function normaliseerGebruikersnaam(naam) {
+  return String(naam || "").trim().toLowerCase();
+}
+
+// Alles wat de admin-UI mag zien: nooit salt of hash, alleen of er een login staat.
+export function schoonKlantRecord(key, rec) {
+  const r = rec || {};
+  const login = r.login || null;
+  return {
+    key,
+    naam: r.naam || "",
+    adAccountId: r.adAccountId || "",
+    gscSite: r.gscSite || "",
+    ga4Property: r.ga4Property || "",
+    adsCustomerId: r.adsCustomerId || "",
+    adsLoginCustomerId: r.adsLoginCustomerId || "",
+    gebruikersnaam: (login && login.gebruikersnaam) || "",
+    heeftWachtwoord: !!(login && login.hash),
+  };
+}
+
+// PBKDF2-SHA256 met een random salt per klant. Bewust geen enkelvoudige SHA-256:
+// die is te snel om een wachtwoord mee te beschermen als de KV ooit uitlekt.
+const KLANT_PBKDF2_RONDES = 210000;
+function bytesNaarHex(bytes) {
+  let s = "";
+  for (const b of bytes) s += b.toString(16).padStart(2, "0");
+  return s;
+}
+function hexNaarBytes(hex) {
+  const uit = new Uint8Array(Math.floor(String(hex || "").length / 2));
+  for (let i = 0; i < uit.length; i++) uit[i] = parseInt(hex.substr(i * 2, 2), 16);
+  return uit;
+}
+export async function hashKlantWachtwoord(wachtwoord, saltHex) {
+  const salt = saltHex ? hexNaarBytes(saltHex) : crypto.getRandomValues(new Uint8Array(16));
+  const sleutel = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(String(wachtwoord)), "PBKDF2", false, ["deriveBits"],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: KLANT_PBKDF2_RONDES, hash: "SHA-256" }, sleutel, 256,
+  );
+  return {
+    salt: bytesNaarHex(salt),
+    hash: bytesNaarHex(new Uint8Array(bits)),
+    rondes: KLANT_PBKDF2_RONDES,
+    alg: "PBKDF2-SHA256",
+  };
+}
+
+async function kvPutClient(env, key, rec) {
+  if (!env.CLIENTS || !key) return null;
   await env.CLIENTS.put(key, JSON.stringify(rec));
-  return { key, ...rec };
+  return rec;
 }
 async function kvGetClient(env, key) {
   if (!env.CLIENTS || !key) return null;
@@ -498,10 +554,22 @@ async function kvListClients(env) {
   const uit = [];
   const list = await env.CLIENTS.list({ limit: 1000 });
   for (const k of list.keys || []) {
+    if (!KLANT_SLEUTEL.test(k.name)) continue;      // config-sleutels overslaan
     const rec = await kvGetClient(env, k.name);
-    if (rec) uit.push({ key: k.name, naam: rec.naam, adAccountId: rec.adAccountId });
+    if (rec) uit.push(schoonKlantRecord(k.name, rec));
   }
   return uit;
+}
+// Gebruikersnaam moet uniek zijn over alle klanten (case-insensitief), anders kan
+// een latere klant-login niet bepalen wélke klant inlogt.
+async function gebruikersnaamBezet(env, gebruikersnaam, eigenKey) {
+  const wil = normaliseerGebruikersnaam(gebruikersnaam);
+  if (!wil) return false;
+  for (const c of await kvListClients(env)) {
+    if (c.key === eigenKey) continue;
+    if (normaliseerGebruikersnaam(c.gebruikersnaam) === wil) return true;
+  }
+  return false;
 }
 async function kvDeleteClient(env, key) {
   if (!env.CLIENTS || !key) return false;
@@ -2121,7 +2189,7 @@ const OFFICE_HTML = `<!doctype html>
   </form>
   <div class="zm-blok verborgen" id="zm-admin">
     <h2 class="zm-kop">Admin</h2>
-    <label class="zm-label" for="zm-model">Motor voor alle agents</label>
+    <label class="zm-label" for="zm-model">Kies AI-model</label>
     <select class="zm-invoer" id="zm-model"></select>
     <p class="zm-actief">Actief: <b id="zm-actief">…</b></p>
     <p class="zm-fout verborgen" id="zm-model-fout" role="alert"></p>
@@ -2191,7 +2259,7 @@ const OFFICE_HTML = `<!doctype html>
           <rect x="22" y="18" width="3" height="3" fill="#2a1c0c"/>
           <rect x="18" y="23" width="5" height="2" fill="#c98a5a"/>
         </symbol>
-        <!-- Gertjan (GA4): bril, korte baard, licht overhemd (DIR-29) -->
+        <!-- Gertjan (GA4): kaal (DIR-79), bril + baard blijven, licht overhemd (DIR-29) -->
         <symbol id="gertjan" viewBox="0 0 40 48">
           <rect x="9" y="30" width="22" height="18" fill="#c7ccd2"/>
           <rect x="9" y="30" width="22" height="4" fill="#aeb4bb"/>
@@ -2199,7 +2267,10 @@ const OFFICE_HTML = `<!doctype html>
           <rect x="17" y="26" width="6" height="5" fill="#d99a63"/>
           <rect x="13" y="12" width="14" height="16" fill="#e8b98a"/>
           <rect x="12" y="24" width="16" height="4" fill="#8a7050"/>
-          <rect x="12" y="8" width="16" height="6" fill="#6a4e2a"/>
+          <rect x="14" y="8" width="12" height="5" fill="#e8b98a"/>
+          <rect x="15" y="7" width="10" height="1" fill="#d9a878"/>
+          <rect x="14" y="8" width="1" height="5" fill="#f0c79a"/>
+          <rect x="25" y="8" width="1" height="5" fill="#d9a878"/>
           <rect x="14" y="17" width="6" height="5" fill="#1a1a1a"/>
           <rect x="15" y="18" width="4" height="3" fill="#bfe0ec"/>
           <rect x="20" y="18" width="2" height="1" fill="#1a1a1a"/>
@@ -2904,24 +2975,61 @@ const ADMIN_HTML = `<!doctype html>
   .rij b{ display:block; } .muted{ color:#666; font-size:.85rem; }
   .link{ width:100%; box-sizing:border-box; }
   #fout{ color:#b3402f; } .verborgen{ display:none; }
+  /* DIR-78 · klantbeheer met koppelingen + klant-login */
+  body{ max-width:860px; }
+  .badge{ display:inline-block; font-size:.78rem; padding:.1rem .45rem; margin:0 .25rem .25rem 0;
+    border-radius:3px; background:#e3e7ea; color:#4a5259; }
+  .badge.ja{ background:#d8f0dd; color:#1d6b34; }
+  .veld{ margin:.45rem 0; }
+  .veld label{ display:block; font-size:.85rem; color:#4a5259; margin-bottom:.1rem; }
+  .veld .hint{ display:block; font-size:.78rem; color:#777; margin-top:.1rem; }
+  .knoppen{ margin-top:.9rem; display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; }
+  select{ font:inherit; padding:.5rem; }
+  .melding{ font-size:.85rem; color:#1d6b34; }
+  /* dashboard: klantlijst links, detail rechts */
+  .balk{ background:#fff; border:1px solid #ccc; border-radius:4px; padding:.6rem .8rem; margin:.8rem 0 1rem; }
+  .balk-label{ font-size:.85rem; color:#4a5259; display:block; margin-bottom:.2rem; }
+  .balk .muted{ margin:.35rem 0 0; }
+  .dash{ display:grid; grid-template-columns:300px 1fr; gap:1rem; align-items:start; }
+  .kolom h2{ margin:1.2rem 0 .3rem; }
+  .kolom-kop{ display:flex; justify-content:space-between; align-items:center; gap:.5rem; margin-top:.5rem; }
+  .kolom-kop h2{ margin:0; }
+  .paneel{ background:#fff; border:1px solid #ccc; border-radius:4px; padding:.9rem 1rem; min-height:220px; }
+  .paneel h2{ margin:0 0 .2rem; } .paneel h3{ font-size:.9rem; margin:1.1rem 0 .2rem; color:#4a5259; }
+  .klant{ width:100%; text-align:left; background:#fff; color:#171717; border:1px solid #ccc;
+    border-radius:4px; padding:.5rem .6rem; margin:.3rem 0; cursor:pointer; }
+  .klant:hover{ border-color:#015092; }
+  .klant.actief{ border-color:#015092; box-shadow:0 0 0 2px rgba(1,80,146,.15); }
+  .klant b{ display:block; margin-bottom:.25rem; }
+  .leeg{ color:#666; }
+  @media (max-width:760px){ .dash{ grid-template-columns:1fr; } }
 </style></head><body>
-  <h1>Dirk Digitaal — klantbeheer (Meta)</h1>
-  <p class="muted">Voeg per klant een naam + Meta ad-account-id toe. Je krijgt een unieke link die je de klant stuurt; die link toont alleen zijn eigen Meta-data.</p>
+  <h1>Dirk Digitaal — klantbeheer</h1>
+  <p class="muted">Per klant leg je hier de koppelingen vast: Meta, Search Console, GA4 en Google Ads. Alles is optioneel — een klant hoeft niet alles te hebben. De magic-link toont die klant alleen zijn eigen data.</p>
   <div id="login">
     <h2>Inloggen</h2>
     <input id="pw" type="password" placeholder="Admin-wachtwoord" autocomplete="current-password">
     <button id="loginBtn">Inloggen</button>
   </div>
   <div id="beheer" class="verborgen">
-    <h2>Je Meta-accounts</h2>
-    <p class="muted">Automatisch opgehaald via het system-token. Klik "Magic-link maken" bij een account om de klant te koppelen.</p>
-    <div id="accounts"></div>
-    <h2>Gekoppelde klanten</h2>
-    <div id="lijst"></div>
-    <h2>Handmatig toevoegen (optioneel)</h2>
-    <input id="naam" type="text" placeholder="Naam (bijv. Bas van Genderen)">
-    <input id="acct" type="text" placeholder="Meta ad-account-id (bijv. act_1234567890 of 1234567890)">
-    <button id="addBtn">Toevoegen + link maken</button>
+    <div class="balk">
+      <div>
+        <label class="balk-label" for="model">Kies AI-model</label>
+        <select id="model"></select>
+        <span class="melding" id="modelMelding"></span>
+      </div>
+      <p class="muted">Geldt voor iedere agent en iedere bezoeker. Opus is fors duurder dan Sonnet.</p>
+    </div>
+    <div class="dash">
+      <aside class="kolom">
+        <div class="kolom-kop"><h2>Klanten</h2><button id="nieuwBtn">+ Nieuwe klant</button></div>
+        <div id="lijst"></div>
+        <h2>Je Meta-accounts</h2>
+        <p class="muted">Automatisch opgehaald via het system-token.</p>
+        <div id="accounts"></div>
+      </aside>
+      <section class="paneel" id="detail"></section>
+    </div>
   </div>
   <p id="fout"></p>
 <script>
@@ -2933,20 +3041,109 @@ const ADMIN_HTML = `<!doctype html>
     if(data) opt.body=JSON.stringify(data);
     return fetch(path, opt).then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); });
   }
+  // DIR-78 · velddefinities: één plek voor label, uitleg en voorbeeld per veld.
+  // groep = kopje in het detailpaneel, zodat het paneel leesbaar blijft.
+  var VELDEN=[
+    { id:'naam', label:'Naam', hint:'Bijv. Bas van Genderen', groep:'Basis' },
+    { id:'adAccountId', label:'Meta ad-account', hint:'Bijv. act_1234567890 of 1234567890', groep:'Basis' },
+    { id:'gscSite', label:'Search Console-site', hint:'Bijv. sc-domain:klant.nl of https://klant.nl/', groep:'Google-koppelingen' },
+    { id:'ga4Property', label:'GA4-property', hint:'Bijv. properties/123456789', groep:'Google-koppelingen' },
+    { id:'adsCustomerId', label:'Google Ads-account', hint:'Customer-id, bijv. 123-456-7890', groep:'Google-koppelingen' },
+    { id:'adsLoginCustomerId', label:'Google Ads login-customer-id (MCC)', hint:'Alleen nodig bij een subaccount onder een MCC', groep:'Google-koppelingen' },
+    { id:'gebruikersnaam', label:'Gebruikersnaam', hint:'Waarmee de klant straks zelf inlogt; moet uniek zijn', groep:'Klant-login' },
+    { id:'wachtwoord', label:'Wachtwoord', hint:'Minstens 8 tekens. Leeg laten = ongewijzigd. Wordt versleuteld opgeslagen en nooit teruggetoond.', type:'password', groep:'Klant-login' }
+  ];
+  var gekozenKlant=null;   // sleutel van de klant die in het paneel staat ('' = nieuw)
+  function veld(def, waarde){
+    var w=document.createElement('div'); w.className='veld';
+    var l=document.createElement('label'); l.textContent=def.label; w.appendChild(l);
+    var i=document.createElement('input'); i.type=def.type||'text'; i.value=waarde||'';
+    if(def.type==='password') i.autocomplete='new-password';
+    w.appendChild(i);
+    var h=document.createElement('span'); h.className='hint'; h.textContent=def.hint; w.appendChild(h);
+    w.invoer=i; return w;
+  }
+  function badge(tekst, ja){
+    var s=document.createElement('span'); s.className='badge'+(ja?' ja':'');
+    s.textContent=tekst+(ja?' ✓':' —'); return s;
+  }
+  // Klantlijst links: één knop per klant met zijn koppel-vinkjes.
   function render(clients){
     var lijst=document.getElementById('lijst'); lijst.textContent='';
-    if(!clients || !clients.length){ var p=document.createElement('p'); p.className='muted'; p.textContent='Nog geen klanten.'; lijst.appendChild(p); return; }
+    if(!clients || !clients.length){
+      var p=document.createElement('p'); p.className='muted'; p.textContent='Nog geen klanten. Klik "+ Nieuwe klant".';
+      lijst.appendChild(p); return;
+    }
     clients.forEach(function(c){
-      var d=document.createElement('div'); d.className='rij';
-      var b=document.createElement('b'); b.textContent=c.naam+'  ('+c.adAccountId+')'; d.appendChild(b);
+      var k=document.createElement('button'); k.className='klant'+(c.key===gekozenKlant?' actief':'');
+      var b=document.createElement('b'); b.textContent=c.naam || '(naamloos)'; k.appendChild(b);
+      k.appendChild(badge('Meta', !!c.adAccountId));
+      k.appendChild(badge('GSC', !!c.gscSite));
+      k.appendChild(badge('GA4', !!c.ga4Property));
+      k.appendChild(badge('Ads', !!c.adsCustomerId));
+      k.appendChild(badge('Login', !!(c.gebruikersnaam && c.heeftWachtwoord)));
+      k.addEventListener('click',function(){ gekozenKlant=c.key; render(clients); toonDetail(c); });
+      lijst.appendChild(k);
+    });
+  }
+  // Detailpaneel rechts: alle koppel-informatie van één klant (of een lege nieuwe).
+  function toonDetail(c){
+    var doel=document.getElementById('detail'); doel.textContent=''; meld('');
+    var h=document.createElement('h2'); h.textContent = c ? (c.naam || '(naamloos)') : 'Nieuwe klant'; doel.appendChild(h);
+    if(c){
+      var uitleg=document.createElement('p'); uitleg.className='muted';
+      uitleg.textContent='Magic-link voor deze klant:'; doel.appendChild(uitleg);
       var inp=document.createElement('input'); inp.className='link'; inp.type='text'; inp.readOnly=true;
       inp.value=location.origin+'/?k='+c.key; inp.addEventListener('focus',function(){ inp.select(); });
-      d.appendChild(inp);
-      var del=document.createElement('button'); del.className='rood'; del.textContent='Verwijderen';
-      del.addEventListener('click',function(){ api('DELETE','/api/admin/clients?key='+encodeURIComponent(c.key)).then(laad); });
-      d.appendChild(del);
-      lijst.appendChild(d);
+      doel.appendChild(inp);
+    }
+    var invoeren={}, groep='';
+    VELDEN.forEach(function(def){
+      if(def.groep!==groep){
+        groep=def.groep;
+        var kop=document.createElement('h3'); kop.textContent=groep; doel.appendChild(kop);
+        if(groep==='Klant-login'){
+          var st=document.createElement('p'); st.className='muted';
+          st.textContent = (c && c.heeftWachtwoord)
+            ? 'Wachtwoord is ingesteld. Vul alleen iets in als je het wilt vervangen.'
+            : 'Nog geen wachtwoord ingesteld.';
+          doel.appendChild(st);
+        }
+      }
+      var w=veld(def, c ? c[def.id] : ''); invoeren[def.id]=w.invoer; doel.appendChild(w);
     });
+    var knoppen=document.createElement('div'); knoppen.className='knoppen';
+    var opslaan=document.createElement('button'); opslaan.textContent = c ? 'Opslaan' : 'Klant toevoegen';
+    var melding=document.createElement('span'); melding.className='melding';
+    opslaan.addEventListener('click',function(){
+      meld(''); melding.textContent='';
+      var body={}; VELDEN.forEach(function(def){ body[def.id]=invoeren[def.id].value; });
+      api(c?'PUT':'POST', '/api/admin/clients'+(c?'?key='+encodeURIComponent(c.key):''), body).then(function(res){
+        if(!res.ok){ meld((res.j&&res.j.error)||'Opslaan mislukt.'); return; }
+        invoeren.wachtwoord.value='';
+        melding.textContent = c ? 'Opgeslagen.' : 'Klant toegevoegd.';
+        gekozenKlant = (res.j && res.j.client && res.j.client.key) || gekozenKlant;
+        laad(true);
+      });
+    });
+    knoppen.appendChild(opslaan); knoppen.appendChild(melding);
+    if(c){
+      var del=document.createElement('button'); del.className='rood'; del.textContent='Verwijderen';
+      del.addEventListener('click',function(){
+        if(!confirm('Klant "'+(c.naam||'')+'" verwijderen? De magic-link werkt daarna niet meer.')) return;
+        api('DELETE','/api/admin/clients?key='+encodeURIComponent(c.key)).then(function(){
+          gekozenKlant=null; leegDetail(); laad();
+        });
+      });
+      knoppen.appendChild(del);
+    }
+    doel.appendChild(knoppen);
+  }
+  function leegDetail(){
+    var doel=document.getElementById('detail'); doel.textContent='';
+    var p=document.createElement('p'); p.className='leeg';
+    p.textContent='Kies links een klant om zijn koppelingen te bekijken of aan te passen — of klik "+ Nieuwe klant".';
+    doel.appendChild(p);
   }
   function renderAccounts(accounts, clients){
     var box=document.getElementById('accounts'); box.textContent='';
@@ -2957,7 +3154,7 @@ const ADMIN_HTML = `<!doctype html>
       var b=document.createElement('b'); b.textContent=a.name+'  ('+a.act+')'; d.appendChild(b);
       if(gekoppeld[a.act]){ var s=document.createElement('span'); s.className='muted'; s.textContent='Al gekoppeld'; d.appendChild(s); }
       else {
-        var mk=document.createElement('button'); mk.textContent='Magic-link maken';
+        var mk=document.createElement('button'); mk.textContent='Klant maken';
         mk.addEventListener('click',function(){ meld(''); api('POST','/api/admin/clients',{ naam:a.name, adAccountId:a.act }).then(function(res){ if(!res.ok){ meld(res.j.error||'Koppelen mislukt.'); return; } laad(); }); });
         d.appendChild(mk);
       }
@@ -2971,26 +3168,46 @@ const ADMIN_HTML = `<!doctype html>
       renderAccounts(res.j.accounts||[], clients);
     });
   }
-  function laad(){
+  // DIR-78: dezelfde server-side model-instelling als het menu in de tool (DIR-77) —
+  // geen tweede opslag. Zetten kan alleen met een geldige admin-sessie.
+  function laadModel(){
+    var sel=document.getElementById('model'), melding=document.getElementById('modelMelding');
+    api('GET','/api/admin/model').then(function(res){
+      if(!res.ok) return;
+      sel.textContent='';
+      (res.j.keuzes||[]).forEach(function(k){
+        var o=document.createElement('option'); o.value=k.id; o.textContent=k.label; sel.appendChild(o);
+      });
+      sel.value=res.j.model;
+    });
+    sel.addEventListener('change',function(){
+      melding.textContent='';
+      api('POST','/api/admin/model',{ model:sel.value }).then(function(res){
+        if(!res.ok){ meld((res.j&&res.j.error)||'Model opslaan mislukt.'); return; }
+        melding.textContent='Opgeslagen.';
+      });
+    });
+  }
+  function laad(behoudDetail){
     api('GET','/api/admin/clients').then(function(res){
       if(!res.ok){ toon(document.getElementById('beheer'),false); toon(document.getElementById('login'),true); return; }
       toon(document.getElementById('login'),false); toon(document.getElementById('beheer'),true);
       var clients=res.j.clients||[]; render(clients); laadAccounts(clients);
+      if(!behoudDetail && !gekozenKlant) leegDetail();
     });
   }
   document.getElementById('loginBtn').addEventListener('click',function(){
     meld(''); api('POST','/api/admin/login',{ password:document.getElementById('pw').value }).then(function(res){
-      if(!res.ok){ meld(res.j.error||'Inloggen mislukt.'); return; } laad();
+      if(!res.ok){ meld(res.j.error||'Inloggen mislukt.'); return; }
+      document.getElementById('pw').value=''; laadModel(); laad();
     });
   });
-  document.getElementById('addBtn').addEventListener('click',function(){
-    meld(''); var naam=document.getElementById('naam').value, acct=document.getElementById('acct').value;
-    api('POST','/api/admin/clients',{ naam:naam, adAccountId:acct }).then(function(res){
-      if(!res.ok){ meld(res.j.error||'Toevoegen mislukt.'); return; }
-      document.getElementById('naam').value=''; document.getElementById('acct').value=''; laad();
-    });
+  document.getElementById('nieuwBtn').addEventListener('click',function(){
+    gekozenKlant=null;
+    var knoppen=document.querySelectorAll('.klant'); for(var i=0;i<knoppen.length;i++) knoppen[i].className='klant';
+    toonDetail(null);
   });
-  laad();
+  laadModel(); laad();
 </script>
 </body></html>`;
 
@@ -3393,13 +3610,49 @@ export default {
       if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
       if (!env.CLIENTS) return json({ error: "KV (CLIENTS) is nog niet geconfigureerd." }, 500);
       if (request.method === "GET") return json({ clients: await kvListClients(env) });
-      if (request.method === "POST") {
+      // DIR-78: aanmaken/bijwerken met naam + Meta + Google-koppelingen + klant-login.
+      // Alleen de naam is verplicht; de rest mag een klant (nog) niet hebben.
+      if (request.method === "POST" || request.method === "PUT") {
         let b = {}; try { b = await request.json(); } catch (e) { /* leeg */ }
-        const naam = (b && b.naam || "").trim();
-        const acct = (b && b.adAccountId || "").trim();
-        if (!naam || !acct) return json({ error: "Naam en ad-account-id zijn verplicht." }, 400);
-        const rec = await kvAddClient(env, naam, acct);
-        return json({ client: rec, link: origin + "/?k=" + rec.key });
+        const bewerken = request.method === "PUT";
+        const key = bewerken ? (url.searchParams.get("key") || "") : "";
+        let rec = null;
+        if (bewerken) {
+          if (!KLANT_SLEUTEL.test(key)) return json({ error: "Geef een geldige ?key=<sleutel>." }, 400);
+          rec = await kvGetClient(env, key);
+          if (!rec) return json({ error: "Onbekende klant." }, 404);
+        }
+        const tekst = (v, max) => String(v == null ? "" : v).trim().slice(0, max || 200);
+        const naam = tekst(b && b.naam, 120);
+        if (!bewerken && !naam) return json({ error: "Naam is verplicht." }, 400);
+
+        const gebruikersnaam = tekst(b && b.gebruikersnaam, 80);
+        const wachtwoord = String((b && b.wachtwoord) || "");
+        if (gebruikersnaam && await gebruikersnaamBezet(env, gebruikersnaam, key)) {
+          return json({ error: "Die gebruikersnaam is al in gebruik bij een andere klant." }, 409);
+        }
+        if (wachtwoord && wachtwoord.length < 8) {
+          return json({ error: "Kies een wachtwoord van minstens 8 tekens." }, 400);
+        }
+
+        const uit = Object.assign({}, rec || {});
+        if (naam || !bewerken) uit.naam = naam;
+        if (b && b.adAccountId !== undefined) uit.adAccountId = b.adAccountId ? metaActId(b.adAccountId) : "";
+        if (b && b.gscSite !== undefined) uit.gscSite = tekst(b.gscSite, 300);
+        if (b && b.ga4Property !== undefined) uit.ga4Property = tekst(b.ga4Property, 120);
+        if (b && b.adsCustomerId !== undefined) uit.adsCustomerId = tekst(b.adsCustomerId, 40);
+        if (b && b.adsLoginCustomerId !== undefined) uit.adsLoginCustomerId = tekst(b.adsLoginCustomerId, 40);
+
+        // Login: gebruikersnaam mag los worden bijgewerkt; het wachtwoord komt er
+        // alleen bij als er een nieuw wachtwoord is ingevuld — en dan als salted hash.
+        const login = Object.assign({}, uit.login || {});
+        if (gebruikersnaam) login.gebruikersnaam = gebruikersnaam;
+        if (wachtwoord) Object.assign(login, await hashKlantWachtwoord(wachtwoord));
+        if (login.gebruikersnaam || login.hash) uit.login = login;
+
+        const bewaardeKey = bewerken ? key : randomKey();
+        await kvPutClient(env, bewaardeKey, uit);
+        return json({ client: schoonKlantRecord(bewaardeKey, uit), link: origin + "/?k=" + bewaardeKey });
       }
       if (request.method === "DELETE") {
         const key = url.searchParams.get("key");
