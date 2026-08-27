@@ -1524,11 +1524,12 @@ function isoRoomInner() {
     + '<text x="26" y="54" font-size="10" fill="#3285D1">DREAM BIG</text>'
     + '</g>';
   // NO PAIN NO GAIN op het LINKER muur-vlak — geschoren (matrix 1,-0.5 helt mee met
-  // de down-left-recessie, glyphs niet gespiegeld = leesbaar). DIR-63: HOGER in de
-  // bovenste band + op twee regels, vrij van de hex-wandkunst en de plant.
-  sWall += '<g transform="matrix(1,-0.5,0,1,168,86)" font-family="\'Press Start 2P\',monospace">'
-    + '<text x="0" y="0" font-size="7" fill="#e8e2d8">NO PAIN</text>'
-    + '<text x="0" y="13" font-size="7" fill="#e8e2d8">NO GAIN</text>'
+  // de down-left-recessie, glyphs niet gespiegeld = leesbaar). DIR-63 (fix): op de
+  // BAKSTEEN net onder de bovenrand (baseline volgt de top-trim -0.5, offset omlaag),
+  // niet in de donkere driehoek boven de muur; 2 regels, vrij van de hex.
+  sWall += '<g transform="matrix(1,-0.5,0,1,182,138)" font-family="\'Press Start 2P\',monospace">'
+    + '<text x="0" y="0" font-size="7" fill="#f4f0e6">NO PAIN</text>'
+    + '<text x="0" y="12" font-size="7" fill="#f4f0e6">NO GAIN</text>'
     + '</g>';
   // Hex-wandkunst op de linker muur — honingraat met kleurvlakken + oranje rand.
   const hexPts = [[38, 10], [60, 10], [49, 26], [71, 26], [38, 42], [60, 42]];
