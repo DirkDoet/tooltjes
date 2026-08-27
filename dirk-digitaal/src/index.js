@@ -331,9 +331,11 @@ export function ga4FirstAnalysisPrompt() {
 }
 
 // Systeemprompt: Gertjan (GA4). Instructie-tekst staat bovenin bij AGENT_INSTRUCTIES.
-export function buildGa4SystemPrompt(ga4) {
+// DIR-80: `persona` mag de door de admin aangepaste tekst zijn; leeg = code-standaard.
+export function buildGa4SystemPrompt(ga4, persona) {
   const data = ga4 ? JSON.stringify(ga4, null, 2) : "(nog geen data geladen)";
-  return AGENT_INSTRUCTIES.gertjan.persona.concat([data]).join("\n");
+  const basis = persona || AGENT_INSTRUCTIES.gertjan.persona.join("\n");
+  return [basis, data].join("\n");
 }
 
 // ------------------------------------------ Google Ads (Ilona, DIR-30) ---
@@ -418,14 +420,15 @@ export function adsFirstAnalysisPrompt() {
 }
 
 // Systeemprompt: Ilona (Google Ads). Instructie-tekst staat bovenin bij AGENT_INSTRUCTIES.
-export function buildAdsSystemPrompt(ads) {
+export function buildAdsSystemPrompt(ads, persona) {
   const data = ads ? JSON.stringify(ads, null, 2) : "(nog geen data geladen)";
-  return AGENT_INSTRUCTIES.ilona.persona.concat([data]).join("\n");
+  const basis = persona || AGENT_INSTRUCTIES.ilona.persona.join("\n");
+  return [basis, data].join("\n");
 }
 
 // Systeemprompt: Anton (content/tekst). Geen databron — puur de persona (DIR-39).
-export function buildContentSystemPrompt() {
-  return AGENT_INSTRUCTIES.anton.persona.join("\n");
+export function buildContentSystemPrompt(persona) {
+  return persona || AGENT_INSTRUCTIES.anton.persona.join("\n");
 }
 
 // -------------------- Meta Ads + admin + klanten (KV, DIR-30) ---
@@ -681,6 +684,62 @@ async function fetchMetaInsights(env, act, args) {
   return { rijen: shapeMetaInsights(data.data) };
 }
 
+// ── DIR-80 · agents beheerbaar vanuit /admin ───────────────────────────────
+// De SLEUTEL (gsc/ga4/ads/anton) ligt vast: dat is de koppeling naar de databron
+// en naar de bijbehorende tools. Alleen de weergave (naam, rol, intro) en de twee
+// prompt-teksten zijn aanpasbaar. Overrides staan in KV (`agent:<sleutel>`); wat
+// niet is ingevuld komt uit de code hieronder, zodat de standaard nooit weg is.
+const AGENT_BRON = {
+  gsc: { instr: "albert", bron: "Google Search Console", kort: "GSC/SEO" },
+  ga4: { instr: "gertjan", bron: "Google Analytics 4", kort: "GA4" },
+  ads: { instr: "ilona", bron: "Google Ads", kort: "Google Ads" },
+  anton: { instr: "anton", bron: "Geen databron — werkt met je eigen tekst", kort: "Content" },
+};
+// Introteksten (het welkomstbericht in de chat) stonden in de pagina zelf; ze staan
+// hier zodat ze net als de rest via /admin aanpasbaar zijn.
+const AGENT_INTRO = {
+  gsc: "Hoi! Ik ben Albert, je GSC-agent. Koppel je Google-account, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.",
+  ga4: "Hoi! Ik ben Gertjan, je GA4-data-specialist. Koppel je Google-account, dan geef ik je meteen een overzicht van je verkeer en kun je me alles vragen.",
+  ads: "Hoi! Ik ben Ilona, je advertentie-specialist. Kies een platform: \"Koppel Google Ads\" voor je Google-campagnes, of \"Meta Ads\" voor je Facebook/Instagram-cijfers (die komen via je persoonlijke klant-link).",
+  anton: "Hoi! Ik ben Anton, je content-specialist. Plak een tekst en vraag me te schrijven, vertalen, spellingchecken, in te korten, te verlengen, SEO-optimaliseren of te herschrijven.",
+};
+const AGENT_VELDEN = ["naam", "rol", "intro", "persona", "analyse"];
+const AGENT_MAX = 8000;   // per veld, zodat een plaktekst de API-aanroep niet opblaast
+
+export function agentStandaard(key) {
+  const m = AGENT_BRON[key];
+  if (!m) return null;
+  const d = ISO_DESKS.find((x) => x.key === key);
+  const instr = AGENT_INSTRUCTIES[m.instr];
+  return {
+    key, bron: m.bron, kort: m.kort,
+    naam: d.naam, rol: d.spec, intro: AGENT_INTRO[key],
+    persona: instr.persona.join("\n"),
+    analyse: instr.analyse || "",
+  };
+}
+// Override over de standaard leggen: alleen niet-lege tekstvelden tellen, de rest
+// blijft de code-tekst. Zo herstelt een leeg veld vanzelf naar standaard.
+export function samenAgent(standaard, override) {
+  const uit = Object.assign({}, standaard, { aangepast: {} });
+  for (const v of AGENT_VELDEN) {
+    const w = override && typeof override[v] === "string" ? override[v].trim() : "";
+    if (w) { uit[v] = w.slice(0, AGENT_MAX); uit.aangepast[v] = true; }
+  }
+  return uit;
+}
+async function actieveAgent(env, key) {
+  const st = agentStandaard(key);
+  if (!st) return null;
+  try {
+    if (env.CLIENTS) {
+      const raw = await env.CLIENTS.get("agent:" + key);
+      if (raw) return samenAgent(st, JSON.parse(raw));
+    }
+  } catch (e) { /* KV onbereikbaar → code-standaard */ }
+  return samenAgent(st, null);
+}
+
 // ------------------------------------------------------------------ agent ---
 
 const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
@@ -725,9 +784,10 @@ export function firstAnalysisPrompt() {
 }
 
 // Systeemprompt: Albert (GSC). Instructie-tekst staat bovenin bij AGENT_INSTRUCTIES.
-export function buildSystemPrompt(gsc) {
+export function buildSystemPrompt(gsc, persona) {
   const data = gsc ? JSON.stringify(gsc, null, 2) : "(nog geen data geladen)";
-  return AGENT_INSTRUCTIES.albert.persona.concat([data]).join("\n");
+  const basis = persona || AGENT_INSTRUCTIES.albert.persona.join("\n");
+  return [basis, data].join("\n");
 }
 
 // Bouwt de messages-array voor de Messages API uit de sessie-historie + nieuwe vraag.
@@ -1919,11 +1979,13 @@ function isoAgentsOverlay() {
     const lx = fx - lw / 2, ly = headY - lh - 3;
     const deskFrontY = isoY(d.i0 + 2.4, d.j0 + 1.4, 0);   // voorrand bureau
     const hitH = Math.max(40, deskFrontY - ly + 8);
+    // DIR-80: id's op label + kaders, zodat een hernoemde agent zijn label meteen
+    // meekrijgt (de pagina-JS herberekent dan ook de breedte van het kadertje).
     s += '<g id="' + d.id + '" class="iso-agent" role="button" tabindex="0" aria-label="Open ' + d.label + ' (' + d.naam + ', ' + d.spec + ')">';
     s += '<rect x="' + (fx - 42) + '" y="' + ly + '" width="84" height="' + hitH + '" fill="#000" opacity="0"/>'; // klik-hitzone
-    s += '<rect x="' + lx + '" y="' + ly + '" width="' + lw + '" height="' + lh + '" rx="2" fill="#0b1219" opacity="0.92"/>';
-    s += '<rect x="' + lx + '" y="' + ly + '" width="' + lw + '" height="' + lh + '" rx="2" fill="none" stroke="' + d.tag + '" stroke-width="1"/>';
-    s += '<text x="' + fx + '" y="' + (ly + 8.6) + '" text-anchor="middle" font-family="\'Segoe UI\',system-ui,Arial,sans-serif" font-weight="700" font-size="7" fill="#f4f0e6">' + label + '</text>';
+    s += '<rect id="iso-labelbg-' + d.key + '" x="' + lx + '" y="' + ly + '" width="' + lw + '" height="' + lh + '" rx="2" fill="#0b1219" opacity="0.92"/>';
+    s += '<rect id="iso-labelrand-' + d.key + '" x="' + lx + '" y="' + ly + '" width="' + lw + '" height="' + lh + '" rx="2" fill="none" stroke="' + d.tag + '" stroke-width="1"/>';
+    s += '<text id="iso-label-' + d.key + '" x="' + fx + '" y="' + (ly + 8.6) + '" text-anchor="middle" font-family="\'Segoe UI\',system-ui,Arial,sans-serif" font-weight="700" font-size="7" fill="#f4f0e6">' + label + '</text>';
     s += '</g>';
   }
   return s;
@@ -2410,6 +2472,9 @@ const OFFICE_HTML = `<!doctype html>
   }
 
   // Agent-config: welke agent je aanklikt bepaalt portret, persona en endpoints (DIR-29).
+  // DIR-80: naam/rol/intro komen van de server (KV-override of code-standaard).
+  // Alleen deze drie — prompts blijven server-side en komen nooit in de pagina.
+  var DD_AGENTS=__DD_AGENTS__;
   var AGENTS={
     gsc:{ key:'gsc', naam:'Albert', titel:'GSC-agent', sym:'albert', huid:'#e8b98a', chat:'/api/chat', bron:'/api/gsc/sites',
       needKey:'needSite', listKey:'sites', selKey:'site', switchLabel:'Andere site',
@@ -2429,6 +2494,43 @@ const OFFICE_HTML = `<!doctype html>
     anton:{ key:'anton', naam:'Anton', titel:'Content-specialist (Anton)', sym:'anton', huid:'#d9a878', chat:'/api/content/chat',
       geenKoppeling:true, ph:'Plak je tekst of vraag een bewerking...',
       intro:'Hoi! Ik ben Anton, je content-specialist. Plak een tekst en vraag me te schrijven, vertalen, spellingchecken, in te korten, te verlengen, SEO-optimaliseren of te herschrijven.' } };
+  // Server-waarden erover: naam, rol, intro en de daarvan afgeleide chat-titel.
+  Object.keys(DD_AGENTS||{}).forEach(function(k){
+    var a=AGENTS[k], o=DD_AGENTS[k]; if(!a||!o) return;
+    if(o.naam) a.naam=o.naam;
+    if(o.rol) a.rol=o.rol;
+    if(o.intro) a.intro=o.intro;
+    if(o.naam && o.rol) a.titel=o.rol+' ('+o.naam+')';
+  });
+  // Label boven het hoofd: naam + de vaste korte databron-tag (die blijft compact,
+  // ook als de rol-tekst lang is); het kadertje schaalt mee met de nieuwe naam.
+  (function(){
+    Object.keys(DD_AGENTS||{}).forEach(function(k){
+      var t=document.getElementById('iso-label-'+k), o=DD_AGENTS[k];
+      if(!t||!o||!o.naam) return;
+      var tekst=o.naam+' · '+(o.kort||'');
+      t.textContent=tekst;
+      var fx=parseFloat(t.getAttribute('x'));
+      var lw=Math.max(44, Math.round(tekst.length*4.3)+10);
+      ['iso-labelbg-','iso-labelrand-'].forEach(function(pre){
+        var r=document.getElementById(pre+k);
+        if(r){ r.setAttribute('x', (fx-lw/2).toFixed(1)); r.setAttribute('width', lw); }
+      });
+      var g=t.parentNode;
+      if(g && g.setAttribute) g.setAttribute('aria-label','Open '+o.naam+' ('+(o.rol||'')+')');
+    });
+    // Het chatvenster staat bij het laden op de eerste agent; die staat nog met zijn
+    // standaardtekst in de HTML, dus die zetten we hier gelijk.
+    var eerste=DD_AGENTS && DD_AGENTS.gsc;
+    if(eerste){
+      var bub=document.querySelector('#chat-msgs .bubble.agent');
+      if(bub && eerste.intro) bub.textContent=eerste.intro;
+      var pn=document.getElementById('chat-pnaam');
+      if(pn && eerste.naam) pn.innerHTML='&#9679; '+eerste.naam;
+      var ti=document.getElementById('chat-title');
+      if(ti && eerste.naam && eerste.rol) ti.textContent=eerste.rol+' ('+eerste.naam+')';
+    }
+  })();
   var cur=AGENTS.gsc;
 
   // Portret-SVG: agent-symbool + knipperend ooglid (huidskleur over de ogen). DIR-40.
@@ -2958,6 +3060,18 @@ const OFFICE_HTML = `<!doctype html>
 </script>
 </body></html>`;
 
+// DIR-80: de pagina krijgt alleen naam/rol/intro van elke agent mee — nooit de
+// prompts. `<` wordt ontsnapt zodat de JSON een </script> in een tekstveld niet kan
+// afbreken.
+async function officeHtml(env) {
+  const publiek = {};
+  for (const key of Object.keys(AGENT_BRON)) {
+    const a = await actieveAgent(env, key);
+    publiek[key] = { naam: a.naam, rol: a.rol, kort: a.kort, intro: a.intro };
+  }
+  return OFFICE_HTML.replace("__DD_AGENTS__", JSON.stringify(publiek).replace(/</g, "\u003c"));
+}
+
 // Admin-beheer klanten (DIR-30): simpele, functionele pagina achter ADMIN_PASSWORD.
 // NB: geen ${}/backticks/backslash-escapes in de inline JS (template-literal-veiligheid).
 const ADMIN_HTML = `<!doctype html>
@@ -3003,6 +3117,18 @@ const ADMIN_HTML = `<!doctype html>
   .klant b{ display:block; margin-bottom:.25rem; }
   .leeg{ color:#666; }
   @media (max-width:760px){ .dash{ grid-template-columns:1fr; } }
+  /* DIR-80 · secties + agent-velden */
+  .tabs{ display:flex; gap:.4rem; margin:1.2rem 0 .2rem; border-bottom:1px solid #ccc; }
+  .tab{ background:#e3e7ea; color:#4a5259; border:1px solid #ccc; border-bottom:0;
+    border-radius:4px 4px 0 0; padding:.45rem .9rem; cursor:pointer; }
+  .tab.actief{ background:#fff; color:#171717; font-weight:600; }
+  .paneel textarea{ font:inherit; font-size:.92rem; width:100%; box-sizing:border-box;
+    border:1px solid #999; padding:.5rem; min-height:150px; resize:vertical; line-height:1.45; }
+  .bron{ display:inline-block; background:#e3e7ea; color:#4a5259; font-size:.8rem;
+    padding:.15rem .5rem; border-radius:3px; }
+  .veldkop{ display:flex; justify-content:space-between; align-items:baseline; gap:.5rem; }
+  .herstel{ background:none; border:0; color:#015092; cursor:pointer; font-size:.8rem; padding:0; }
+  .aangepast{ font-size:.78rem; color:#8a6d1d; }
 </style></head><body>
   <h1>Dirk Digitaal — klantbeheer</h1>
   <p class="muted">Per klant leg je hier de koppelingen vast: Meta, Search Console, GA4 en Google Ads. Alles is optioneel — een klant hoeft niet alles te hebben. De magic-link toont die klant alleen zijn eigen data.</p>
@@ -3020,15 +3146,31 @@ const ADMIN_HTML = `<!doctype html>
       </div>
       <p class="muted">Geldt voor iedere agent en iedere bezoeker. Opus is fors duurder dan Sonnet.</p>
     </div>
-    <div class="dash">
-      <aside class="kolom">
-        <div class="kolom-kop"><h2>Klanten</h2><button id="nieuwBtn">+ Nieuwe klant</button></div>
-        <div id="lijst"></div>
-        <h2>Je Meta-accounts</h2>
-        <p class="muted">Automatisch opgehaald via het system-token.</p>
-        <div id="accounts"></div>
-      </aside>
-      <section class="paneel" id="detail"></section>
+    <div class="tabs">
+      <button id="tabKlanten" class="tab actief">Klantbeheer</button>
+      <button id="tabAgents" class="tab">Agents</button>
+    </div>
+    <div id="sectieKlanten">
+      <div class="dash">
+        <aside class="kolom">
+          <div class="kolom-kop"><h2>Klanten</h2><button id="nieuwBtn">+ Nieuwe klant</button></div>
+          <div id="lijst"></div>
+          <h2>Je Meta-accounts</h2>
+          <p class="muted">Automatisch opgehaald via het system-token.</p>
+          <div id="accounts"></div>
+        </aside>
+        <section class="paneel" id="detail"></section>
+      </div>
+    </div>
+    <div id="sectieAgents" class="verborgen">
+      <p class="muted">Pas hier aan hoe je agents heten en hoe ze antwoorden. Wijzigingen gelden direct, zonder deploy. De databron per agent ligt vast — alleen de weergave en de teksten zijn aanpasbaar.</p>
+      <div class="dash">
+        <aside class="kolom">
+          <div class="kolom-kop"><h2>Agents</h2></div>
+          <div id="agentLijst"></div>
+        </aside>
+        <section class="paneel" id="agentDetail"></section>
+      </div>
     </div>
   </div>
   <p id="fout"></p>
@@ -3207,6 +3349,110 @@ const ADMIN_HTML = `<!doctype html>
     var knoppen=document.querySelectorAll('.klant'); for(var i=0;i<knoppen.length;i++) knoppen[i].className='klant';
     toonDetail(null);
   });
+
+  // ── DIR-80 · Agents-sectie ────────────────────────────────────────────────
+  // Zelfde dashboard-vorm: lijst links, detail rechts. De sleutel/databron staat
+  // er grijs bij en is niet te wijzigen; per veld kun je terug naar de code-tekst.
+  var AGENTVELDEN=[
+    { id:'naam', label:'Weergavenaam', hint:'Zoals hij heet in de scène en de chat' },
+    { id:'rol', label:'Functie / rol', hint:'Bijv. GSC / SEO-specialist' },
+    { id:'intro', label:'Introtekst', hint:'Het welkomstbericht in de chat', groot:true },
+    { id:'persona', label:'Persona-prompt', hint:'De systeeminstructie: wie hij is, hoe hij antwoordt, hoe hij zijn tools gebruikt', groot:true },
+    { id:'analyse', label:'Analyse-prompt', hint:'De opdracht voor de eerste analyse (de kopjes met ##)', groot:true }
+  ];
+  var agents=[], gekozenAgent=null;
+  function renderAgents(){
+    var lijst=document.getElementById('agentLijst'); lijst.textContent='';
+    agents.forEach(function(a){
+      var k=document.createElement('button'); k.className='klant'+(a.key===gekozenAgent?' actief':'');
+      var b=document.createElement('b'); b.textContent=a.naam; k.appendChild(b);
+      var r=document.createElement('span'); r.className='muted'; r.textContent=a.rol; k.appendChild(r);
+      var br=document.createElement('div');
+      br.appendChild(badge('Aangepast', Object.keys(a.aangepast||{}).length>0));
+      k.appendChild(br);
+      k.addEventListener('click',function(){ gekozenAgent=a.key; renderAgents(); toonAgent(a); });
+      lijst.appendChild(k);
+    });
+  }
+  function toonAgent(a, bevestiging){
+    var doel=document.getElementById('agentDetail'); doel.textContent=''; meld('');
+    var h=document.createElement('h2'); h.textContent=a.naam; doel.appendChild(h);
+    var bron=document.createElement('p');
+    var sp=document.createElement('span'); sp.className='bron';
+    sp.textContent='Databron: '+a.bron+' — sleutel "'+a.key+'" (vast)'; bron.appendChild(sp);
+    doel.appendChild(bron);
+    var invoeren={};
+    AGENTVELDEN.forEach(function(def){
+      var w=document.createElement('div'); w.className='veld';
+      var kop=document.createElement('div'); kop.className='veldkop';
+      var l=document.createElement('label'); l.textContent=def.label; kop.appendChild(l);
+      if(a.aangepast && a.aangepast[def.id]){
+        var mrk=document.createElement('span'); mrk.className='aangepast'; mrk.textContent='aangepast'; kop.appendChild(mrk);
+      }
+      var herstel=document.createElement('button'); herstel.className='herstel'; herstel.textContent='terug naar standaard';
+      herstel.addEventListener('click',function(){
+        api('DELETE','/api/admin/agents?key='+encodeURIComponent(a.key)+'&veld='+def.id).then(function(res){
+          if(!res.ok){ meld((res.j&&res.j.error)||'Herstellen mislukt.'); return; }
+          laadAgents(a.key);
+        });
+      });
+      kop.appendChild(herstel); w.appendChild(kop);
+      var i=def.groot ? document.createElement('textarea') : document.createElement('input');
+      if(!def.groot) i.type='text';
+      i.value=a[def.id]||'';
+      if(def.id==='persona'||def.id==='analyse') i.style.minHeight='220px';
+      w.appendChild(i);
+      var hint=document.createElement('span'); hint.className='hint'; hint.textContent=def.hint; w.appendChild(hint);
+      invoeren[def.id]=i; doel.appendChild(w);
+    });
+    var knoppen=document.createElement('div'); knoppen.className='knoppen';
+    var opslaan=document.createElement('button'); opslaan.textContent='Opslaan';
+    var melding=document.createElement('span'); melding.className='melding';
+    opslaan.addEventListener('click',function(){
+      meld(''); melding.textContent='';
+      var body={}; AGENTVELDEN.forEach(function(def){ body[def.id]=invoeren[def.id].value; });
+      api('PUT','/api/admin/agents?key='+encodeURIComponent(a.key), body).then(function(res){
+        if(!res.ok){ meld((res.j&&res.j.error)||'Opslaan mislukt.'); return; }
+        // Het paneel wordt hierna opnieuw opgebouwd, dus de bevestiging gaat mee.
+        laadAgents(a.key, 'Opgeslagen — direct actief.');
+      });
+    });
+    knoppen.appendChild(opslaan); knoppen.appendChild(melding);
+    if(bevestiging) melding.textContent=bevestiging;
+    var alles=document.createElement('button'); alles.className='rood'; alles.textContent='Hele agent terug naar standaard';
+    alles.addEventListener('click',function(){
+      if(!confirm('Alle teksten van '+a.naam+' terugzetten naar de standaard uit de code?')) return;
+      api('DELETE','/api/admin/agents?key='+encodeURIComponent(a.key)).then(function(){ laadAgents(a.key); });
+    });
+    knoppen.appendChild(alles);
+    doel.appendChild(knoppen);
+  }
+  function laadAgents(kies, bevestiging){
+    api('GET','/api/admin/agents').then(function(res){
+      if(!res.ok) return;
+      agents=res.j.agents||[];
+      if(kies) gekozenAgent=kies;
+      renderAgents();
+      var a=null; for(var i=0;i<agents.length;i++) if(agents[i].key===gekozenAgent) a=agents[i];
+      if(a) toonAgent(a, bevestiging);
+      else {
+        var doel=document.getElementById('agentDetail'); doel.textContent='';
+        var p=document.createElement('p'); p.className='leeg';
+        p.textContent='Kies links een agent om zijn naam, rol en prompts aan te passen.';
+        doel.appendChild(p);
+      }
+    });
+  }
+  function kiesTab(agentsAan){
+    document.getElementById('tabKlanten').className='tab'+(agentsAan?'':' actief');
+    document.getElementById('tabAgents').className='tab'+(agentsAan?' actief':'');
+    toon(document.getElementById('sectieKlanten'), !agentsAan);
+    toon(document.getElementById('sectieAgents'), agentsAan);
+    if(agentsAan && !agents.length) laadAgents();
+  }
+  document.getElementById('tabKlanten').addEventListener('click',function(){ kiesTab(false); });
+  document.getElementById('tabAgents').addEventListener('click',function(){ kiesTab(true); });
+
   laadModel(); laad();
 </script>
 </body></html>`;
@@ -3240,6 +3486,8 @@ async function handleChat(request, env, ctx) {
   const wantSite = (body && typeof body.site === "string") ? body.site.trim() : "";
   let userText = (body && typeof body.message === "string") ? body.message.trim() : "";
 
+  // DIR-80: naam/rol/prompts komen uit KV met de code-tekst als standaard.
+  const agentTekst = await actieveAgent(env, "gsc");
   let promptText;              // wat naar het model gaat
   let storedUser = userText;   // wat in de historie komt
 
@@ -3251,7 +3499,7 @@ async function handleChat(request, env, ctx) {
     gsc = await selectSite(stub, token, wantSite, sites.map((s) => s.siteUrl));
     if (!gsc) return json({ error: "Kon de prestaties van die site niet laden." }, 502);
     history = [];
-    promptText = ANALYSIS_PROMPT;
+    promptText = agentTekst.analyse;
     storedUser = "[Analyse van " + wantSite + "]";
   } else if (!gsc) {
     // Nog geen site gekozen: 1 site → automatisch analyseren; meerdere → vraag welke.
@@ -3263,7 +3511,7 @@ async function handleChat(request, env, ctx) {
     gsc = await selectSite(stub, token, sites[0].siteUrl, sites.map((s) => s.siteUrl));
     if (!gsc) return json({ error: "Kon de prestaties van je site niet laden." }, 502);
     history = [];
-    promptText = ANALYSIS_PROMPT;
+    promptText = agentTekst.analyse;
     storedUser = "[Analyse van " + sites[0].siteUrl + "]";
   } else {
     // Site al gekozen → vervolgvraag.
@@ -3276,7 +3524,7 @@ async function handleChat(request, env, ctx) {
 
   // DIR-62: aanhakende collega's → extra tools + persona-notities + team-antwoord.
   const col = await buildCollegas(env, stub, token, "gsc", body);
-  const system = buildSystemPrompt(gsc) + col.note;
+  const system = buildSystemPrompt(gsc, agentTekst.persona) + col.note;
   const tools = [gscTool(), ...col.tools];
   const dispatch = Object.assign({ gsc_query: (input) => fetchGscQuery(token, site, input) }, col.dispatch);
 
@@ -3324,6 +3572,7 @@ async function handleGa4Chat(request, env, ctx) {
   const wantProp = (body && typeof body.property === "string") ? body.property.trim() : "";
   let userText = (body && typeof body.message === "string") ? body.message.trim() : "";
 
+  const agentTekst = await actieveAgent(env, "ga4");   // DIR-80
   let promptText;
   let storedUser = userText;
 
@@ -3334,7 +3583,7 @@ async function handleGa4Chat(request, env, ctx) {
     ga4 = await selectGa4Property(stub, token, wantProp, props);
     if (!ga4) return json({ error: "Kon de GA4-cijfers van die property niet laden." }, 502);
     history = [];
-    promptText = GA4_ANALYSIS_PROMPT;
+    promptText = agentTekst.analyse;
     storedUser = "[Analyse van " + wantProp + "]";
   } else if (!ga4) {
     const props = await fetchGa4Properties(token);
@@ -3343,7 +3592,7 @@ async function handleGa4Chat(request, env, ctx) {
     ga4 = await selectGa4Property(stub, token, props[0].property, props);
     if (!ga4) return json({ error: "Kon de GA4-cijfers van je property niet laden." }, 502);
     history = [];
-    promptText = GA4_ANALYSIS_PROMPT;
+    promptText = agentTekst.analyse;
     storedUser = "[Analyse van " + props[0].property + "]";
   } else {
     if (!userText) return json({ error: "Stel een vraag over je GA4-cijfers." }, 400);
@@ -3355,7 +3604,7 @@ async function handleGa4Chat(request, env, ctx) {
 
   // DIR-62: aanhakende collega's (bv. Albert/GSC) erbij.
   const col = await buildCollegas(env, stub, token, "ga4", body);
-  const system = buildGa4SystemPrompt(ga4) + col.note;
+  const system = buildGa4SystemPrompt(ga4, agentTekst.persona) + col.note;
   const tools = [ga4Tool(), ...col.tools];
   const dispatch = Object.assign({ ga4_report: (input) => fetchGa4Query(token, property, input) }, col.dispatch);
 
@@ -3413,6 +3662,7 @@ async function handleAdsChat(request, env, ctx) {
   const wantCustomer = (body && typeof body.customer === "string") ? body.customer.trim() : "";
   let userText = (body && typeof body.message === "string") ? body.message.trim() : "";
 
+  const agentTekst = await actieveAgent(env, "ads");   // DIR-80
   let promptText;
   let storedUser = userText;
 
@@ -3424,7 +3674,7 @@ async function handleAdsChat(request, env, ctx) {
     ads = await selectAdsCustomer(stub, token, env, acct.customer, res.accounts, acct.loginCid);
     if (!ads) return json({ error: "Kon de Google Ads-cijfers van dat account niet laden." }, 502);
     history = [];
-    promptText = ADS_ANALYSIS_PROMPT;
+    promptText = agentTekst.analyse;
     storedUser = "[Analyse van " + (acct.naam || acct.customer) + "]";
   } else if (googleAds && !ads && !userText) {
     const res = await fetchAdsCustomers(token, env);
@@ -3434,7 +3684,7 @@ async function handleAdsChat(request, env, ctx) {
     ads = await selectAdsCustomer(stub, token, env, accounts[0].customer, accounts, accounts[0].loginCid);
     if (!ads) return json({ error: "Kon de Google Ads-cijfers van je account niet laden." }, 502);
     history = [];
-    promptText = ADS_ANALYSIS_PROMPT;
+    promptText = agentTekst.analyse;
     storedUser = "[Analyse van " + (accounts[0].naam || accounts[0].customer) + "]";
   } else if (userText) {
     promptText = userText;
@@ -3445,7 +3695,7 @@ async function handleAdsChat(request, env, ctx) {
     return json({ error: "Stel een vraag over je advertentiecijfers." }, 400);
   }
 
-  let system = buildAdsSystemPrompt(ads);
+  let system = buildAdsSystemPrompt(ads, agentTekst.persona);
   const tools = [];
   if (googleAds) tools.push(adsTool());
   if (metaOn) {
@@ -3509,7 +3759,8 @@ async function handleContentChat(request, env, ctx) {
   // ingelogd via Google (token in dezelfde sessie). Zonder token → geen data-tools.
   let token = null; try { const s = await (await stub.fetch("https://do/chat/state")).json(); token = s && s.token; } catch (e) {}
   const col = await buildCollegas(env, stub, token, "anton", body);
-  const system = buildContentSystemPrompt() + col.note;
+  const antonTekst = await actieveAgent(env, "anton");   // DIR-80
+  const system = buildContentSystemPrompt(antonTekst.persona) + col.note;
 
   let finalText = "";
   try { finalText = await chatLoop(env, system, convo, col.tools, col.dispatch); }
@@ -3552,13 +3803,13 @@ export default {
         }
         // Onbekende/ongeldige sleutel → gewoon het kantoor, zonder Meta-scoping (AC-6).
       }
-      return new Response(OFFICE_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      return new Response(await officeHtml(env), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
     // Iso-scène preview (DIR-49, WIP): alias van de echte scène `/` zodat de
     // critics de geïntegreerde iso-scène (agents + hond + chat) zien.
     if (path === "/iso" && request.method === "GET") {
-      return new Response(OFFICE_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      return new Response(await officeHtml(env), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
     // Admin-beheer klanten (DIR-30) — achter ADMIN_PASSWORD.
@@ -3584,6 +3835,50 @@ export default {
     // zijn eigen cookie al, en de modellenlijst blijft achter de admin-check.
     if (path === "/api/admin/status" && request.method === "GET") {
       return json({ admin: await isAdmin(request, env) });
+    }
+    // DIR-80 — agents beheren: lezen, opslaan en terugzetten naar de code-standaard.
+    // Ook lezen zit achter de admin-sessie: de prompts zijn niets voor bezoekers.
+    if (path === "/api/admin/agents") {
+      if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
+      if (request.method === "GET") {
+        const agents = [];
+        for (const key of Object.keys(AGENT_BRON)) agents.push(await actieveAgent(env, key));
+        return json({ agents });
+      }
+      const key = url.searchParams.get("key") || "";
+      if (!AGENT_BRON[key]) return json({ error: "Onbekende agent." }, 400);
+      if (!env.CLIENTS) return json({ error: "KV (CLIENTS) is nog niet geconfigureerd." }, 500);
+      if (request.method === "PUT") {
+        let b = {}; try { b = await request.json(); } catch (e) { /* leeg */ }
+        const st = agentStandaard(key);
+        const over = {};
+        for (const v of AGENT_VELDEN) {
+          const w = String((b && b[v]) || "").trim();
+          if (w.length > AGENT_MAX) return json({ error: "Veld '" + v + "' is te lang (max " + AGENT_MAX + " tekens)." }, 400);
+          // Alleen echte afwijkingen bewaren: een veld dat gelijk is aan de code-tekst
+          // hoort geen override te worden, anders bevriest een latere verbetering in
+          // de code achter een kopie in KV.
+          if (w && w !== String(st[v] || "").trim()) over[v] = w;
+        }
+        // Alles leeg = alles terug naar standaard: dan hoeft er niets in KV te staan.
+        if (Object.keys(over).length) await env.CLIENTS.put("agent:" + key, JSON.stringify(over));
+        else await env.CLIENTS.delete("agent:" + key);
+        return json({ agent: await actieveAgent(env, key) });
+      }
+      if (request.method === "DELETE") {
+        const veld = url.searchParams.get("veld") || "";
+        if (!veld) await env.CLIENTS.delete("agent:" + key);        // hele agent terug naar standaard
+        else {
+          if (AGENT_VELDEN.indexOf(veld) < 0) return json({ error: "Onbekend veld." }, 400);
+          let over = {};
+          try { over = JSON.parse(await env.CLIENTS.get("agent:" + key)) || {}; } catch (e) { over = {}; }
+          delete over[veld];
+          if (Object.keys(over).length) await env.CLIENTS.put("agent:" + key, JSON.stringify(over));
+          else await env.CLIENTS.delete("agent:" + key);
+        }
+        return json({ agent: await actieveAgent(env, key) });
+      }
+      return json({ error: "Methode niet toegestaan." }, 405);
     }
     if (path === "/api/admin/model") {
       if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
