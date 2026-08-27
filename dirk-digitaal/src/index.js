@@ -1285,6 +1285,254 @@ function sseResponse(text, extraHeaders) {
   });
 }
 
+// ── DIR-47/48/49 · Gedeelde iso-scène (Habbo-lat): kamer-shell + meubels +
+// agents + hond. Stuk 3 (DIR-49) integreert deze iso-scène als de ECHTE scène
+// op route `/` (OFFICE_HTML); alle bestaande chat/OAuth/portret-logica blijft.
+// Echte 2:1 iso-projectie, vloer-dominant, één lichtrichting (links-boven),
+// vlakke kleuren, crispe randen, back-to-front.
+const ISO = { Ox: 320, Oy: 120, TW: 40, TH: 20, N: 9, H: 72 };
+const isoX = (i, j) => ISO.Ox + (i - j) * (ISO.TW / 2);
+const isoY = (i, j, z) => ISO.Oy + (i + j) * (ISO.TH / 2) - z;
+// Tegel → %-positie binnen de 16:9 scène-wrap (voor de hond-overlay in OFFICE).
+const isoPct = (i, j) => ({
+  l: +(isoX(i, j) / 640 * 100).toFixed(2),
+  b: +(((360 - isoY(i, j, 0)) / 360 * 100).toFixed(2)),
+});
+// 4 agents: bureau-tegel (i0,j0) + sta-tegel achter het bureau, sprite + kleuren.
+// De id's blijven gelijk aan de front-scène zodat de bestaande klik/keyboard-
+// binding (openAgent gsc/ga4/ads/anton) ongewijzigd blijft werken.
+const ISO_DESKS = [
+  { id: "agent-desk", key: "gsc", naam: "Albert", spec: "GSC / SEO-specialist", sym: "albert", i0: 1.5, j0: 1.3, tag: "#F18E02", dot: "#3fd06a", label: "de GSC-agent" },
+  { id: "gertjan-desk", key: "ga4", naam: "Gertjan", spec: "GA4-data-specialist", sym: "gertjan", i0: 1.5, j0: 4.8, tag: "#3fd06a", dot: "#3fd06a", label: "de GA4-agent Gertjan" },
+  { id: "ilona-desk", key: "ads", naam: "Ilona", spec: "Google Ads-specialist", sym: "ilona", i0: 5.0, j0: 1.3, tag: "#e58fa8", dot: "#e58fa8", label: "de Ads-agent Ilona" },
+  { id: "anton-desk", key: "anton", naam: "Anton", spec: "Content-specialist", sym: "anton", i0: 5.0, j0: 4.8, tag: "#3285D1", dot: "#3fd06a", label: "de content-agent Anton" },
+];
+const ISO_MAND = { i0: 5.6, j0: 7.4 };            // hondenmand-tegel (hond BED-doel)
+const isoAgentFeet = (d) => ({ i: d.i0 + 0.9, j: d.j0 - 0.6 }); // sta-tegel achter bureau
+
+function isoRoomInner() {
+  // Vloer-dominant + warme chunky tegels, lage muren; 4 bureaus in strak 2×2
+  // blok met gangpad; agents op hun sta-tegel (achter het bureau, occlusie via
+  // back-to-front). 2:1 iso, achter-hoek, licht links-boven, crispe randen.
+  const Ox = ISO.Ox, Oy = ISO.Oy, TW = ISO.TW, TH = ISO.TH, N = ISO.N, H = ISO.H;
+  const X = isoX, Y = isoY;
+  const P = (i, j, z) => X(i, j) + "," + Y(i, j, z);
+  const poly = (pts, fill, extra) =>
+    '<polygon points="' + pts.join(" ") + '" fill="' + fill + '"' + (extra || "") + "/>";
+  const pline = (pts, stroke, w) =>
+    '<polyline points="' + pts.join(" ") + '" fill="none" stroke="' + stroke +
+    '" stroke-width="' + w + '"/>';
+  const line = (x1, y1, x2, y2, stroke, w, op) =>
+    '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 +
+    '" stroke="' + stroke + '" stroke-width="' + w + '" opacity="' + op + '"/>';
+
+  // Palet — warme vloer (hoofdvlak) + blauwe muren (huisstijl-contrast). Eén
+  // lichtrichting links-boven: bevel licht op noord/west-tegelranden, donker
+  // op zuid/oost. Vlakke kleuren, geen gradients.
+  const tileA = "#c9a978", tileB = "#bf9d6a", tilePop = "#d3b485"; // warm hout-dambord
+  const bevelL = "#e4cb9d", bevelD = "#93794f";                    // tegel-volume
+  const wallLit = "#3a6ea0", wallDark = "#29517a";                 // muur-vlakken
+  const capLit = "#cdd9e4", capDark = "#bcc9d6";                   // muur-bovenkant
+  const skirtL = "#1c3a58", skirtR = "#173049";                    // plint
+  const brick = "#20456a";                                         // baksteen-voegen
+  const ORANJE = "#F18E02", ORANJE_D = "#c9760a";                  // huisstijl-accent
+
+  let sFloor = "", sWall = "";
+
+  // VLOER — groot ruit-grid van chunky warme tegels met per-tegel bevel:
+  // noord/west-randen licht (vangen top-links licht), zuid/oost-randen donker.
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      let col = ((i + j) % 2 === 0) ? tileA : tileB;
+      if ((i * 7 + j * 5) % 6 === 0) col = tilePop; // subtiele warme toon-variatie
+      const T = P(i, j, 0), R = P(i + 1, j, 0), B = P(i + 1, j + 1, 0), L = P(i, j + 1, 0);
+      sFloor += poly([T, R, B, L], col);
+      sFloor += pline([L, T, R], bevelL, 1.5); // noord/west-randen — licht
+      sFloor += pline([R, B, L], bevelD, 1.5); // zuid/oost-randen — schaduw
+    }
+  }
+  // Vloer-rand (diamant-omtrek) crisp warm-donker kader.
+  sFloor += poly([P(0, 0, 0), P(N, 0, 0), P(N, N, 0), P(0, N, 0)],
+    "none", ' stroke="#6f5a35" stroke-width="2"');
+
+  // RECHTER MUUR (vlak j=0) — schaduw.
+  sWall += poly([P(0, 0, 0), P(N, 0, 0), P(N, 0, H), P(0, 0, H)], wallDark);
+  // LINKER MUUR (vlak i=0) — verlicht.
+  sWall += poly([P(0, 0, 0), P(0, N, 0), P(0, N, H), P(0, 0, H)], wallLit);
+
+  // Baksteen-voegen (subtiele horizontale iso-lijnen per muur).
+  for (let k = 1; k <= 2; k++) {
+    const z = k * 24;
+    sWall += line(X(0, 0), Y(0, 0, z), X(0, N), Y(0, N, z), brick, 1, 0.35); // links
+    sWall += line(X(0, 0), Y(0, 0, z), X(N, 0), Y(N, 0, z), "#12365a", 1, 0.35); // rechts
+  }
+
+  // Plint (donkere band onderaan elke muur) — Habbo-detail, diepte-anker.
+  sWall += poly([P(0, 0, 0), P(0, N, 0), P(0, N, 6), P(0, 0, 6)], skirtL);
+  sWall += poly([P(0, 0, 0), P(N, 0, 0), P(N, 0, 6), P(0, 0, 6)], skirtR);
+
+  // Oranje huisstijl-accentstrip net onder de muur-bovenkant.
+  sWall += poly([P(0, 0, H - 10), P(0, N, H - 10), P(0, N, H - 5), P(0, 0, H - 5)], ORANJE);
+  sWall += poly([P(0, 0, H - 10), P(N, 0, H - 10), P(N, 0, H - 5), P(0, 0, H - 5)], ORANJE_D);
+
+  // Muur-bovenkant (dikte) — top-vlakken, lichtst.
+  sWall += poly([
+    X(0, 0) + "," + Y(0, 0, H), X(0, N) + "," + Y(0, N, H),
+    (X(0, N) - 7) + "," + (Y(0, N, H) - 3.5), (X(0, 0) - 7) + "," + (Y(0, 0, H) - 3.5)
+  ], capLit); // linker cap (extrude -eX)
+  sWall += poly([
+    X(0, 0) + "," + Y(0, 0, H), X(N, 0) + "," + Y(N, 0, H),
+    (X(N, 0) + 7) + "," + (Y(N, 0, H) - 3.5), (X(0, 0) + 7) + "," + (Y(0, 0, H) - 3.5)
+  ], capDark); // rechter cap (extrude -eY)
+
+  // Achter-hoek — verticale naad waar de 2 muren samenkomen, crisp benadrukt.
+  sWall += line(X(0, 0), Y(0, 0, 0), X(0, 0), Y(0, 0, H), "#0f2e4d", 1.5, 0.9);
+
+  // ── DIR-48 · iso-meubels & props op het grid (stuk 2) ──────────────────────
+  // Chunky volumes (top + 2 zijvlakken), zelfde lichthoek (top lichtst, SW-zij
+  // licht, SE-zij donker), contactschaduw per object, back-to-front getekend.
+  const circ = (cx, cy, r, fill) =>
+    '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + fill + '"/>';
+  const ell = (cx, cy, rx, ry, fill) =>
+    '<ellipse cx="' + cx + '" cy="' + cy + '" rx="' + rx + '" ry="' + ry + '" fill="' + fill + '"/>';
+  const shadow = (i0, j0, wi, wj) => {
+    const m = 0.12;
+    return poly([P(i0 + m, j0 + m, 0), P(i0 + wi - m, j0 + m, 0),
+      P(i0 + wi - m, j0 + wj - m, 0), P(i0 + m, j0 + wj - m, 0)], "#000000", ' opacity="0.16"');
+  };
+  // chunky iso-box: SE-zijvlak (donker) + SW-zijvlak (licht) + top-vlak (lichtst).
+  const box = (i0, j0, wi, wj, z0, z1, top, left, right) => {
+    const se = poly([P(i0 + wi, j0, z0), P(i0 + wi, j0 + wj, z0),
+      P(i0 + wi, j0 + wj, z1), P(i0 + wi, j0, z1)], right);
+    const sw = poly([P(i0, j0 + wj, z0), P(i0 + wi, j0 + wj, z0),
+      P(i0 + wi, j0 + wj, z1), P(i0, j0 + wj, z1)], left);
+    const tp = poly([P(i0, j0, z1), P(i0 + wi, j0, z1),
+      P(i0 + wi, j0 + wj, z1), P(i0, j0 + wj, z1)], top);
+    return se + sw + tp;
+  };
+
+  // Ronde 2 (Craft-gap): chunkier + hoger meubilair (meer presence), strakke
+  // 2×2 grid-ordening met gangpad, compactere vloer (N 11→9) → voller, minder
+  // dode vloer. Vaste footprints zodat de 4 bureaus exact even groot zijn.
+  const DW = 2.4, DD = 1.4, DH = 18; // bureau: breed×diep×hoog
+  const desk = (i0, j0) => {
+    let g = shadow(i0, j0, DW, DD);
+    g += box(i0, j0, DW, DD, 0, DH, "#b07a34", "#9c6a2b", "#855620"); // hout-bureau
+    const mi = i0 + 0.85, mj = j0 + 0.28, mw = 0.9, md = 0.42, z0 = DH, z1 = DH + 13;
+    g += box(mi, mj, mw, md, z0, z1, "#2a2f3a", "#20242c", "#181b21"); // monitor-body
+    // scherm-vlak (SW, naar voren), huisstijl-blauw + oranje stip
+    g += poly([P(mi, mj + md, z0 + 2), P(mi + mw, mj + md, z0 + 2),
+      P(mi + mw, mj + md, z1 - 2), P(mi, mj + md, z1 - 2)], "#015092");
+    g += circ(X(mi + mw * 0.5, mj + md), Y(mi + mw * 0.5, mj + md, (z0 + z1) / 2), 2, "#F18E02");
+    return g;
+  };
+  const sofa = (i0, j0) => {
+    let g = shadow(i0, j0, 1.5, 2.2);
+    g += box(i0, j0, 1.5, 2.2, 0, 13, "#d9a520", "#c48f16", "#a67810");     // zitting mosterd
+    g += box(i0, j0, 0.5, 2.2, 0, 24, "#c99a1a", "#b3860f", "#96700c");     // rugleuning (achter)
+    g += box(i0, j0, 1.5, 0.35, 0, 20, "#cf9d1c", "#b98a12", "#9c760f");    // armleuning (rechts)
+    return g;
+  };
+  const printer = (i0, j0) => {
+    let g = shadow(i0, j0, 1.1, 1.1);
+    g += box(i0, j0, 1.1, 1.1, 0, 15, "#d8dde3", "#c2c8d0", "#a7aeb8");
+    g += pline([P(i0 + 0.2, j0 + 0.35, 15), P(i0 + 0.9, j0 + 0.35, 15)], "#8a929c", 2); // papiergleuf
+    return g;
+  };
+  const koffie = (i0, j0) => {
+    let g = shadow(i0, j0, 1.0, 1.0);
+    g += box(i0, j0, 1.0, 1.0, 0, 24, "#33383f", "#262b31", "#1b1f24");
+    g += circ(X(i0 + 0.5, j0 + 1.0), Y(i0 + 0.5, j0 + 1.0, 15), 2, "#F18E02"); // lampje
+    return g;
+  };
+  const kast = (i0, j0) => { // archiefkast — vult zijstrook, meer 'ingericht'
+    let g = shadow(i0, j0, 1.1, 1.1);
+    g += box(i0, j0, 1.1, 1.1, 0, 20, "#3a6ea0", "#2f5c87", "#244a6e"); // huisstijl-blauw
+    g += pline([P(i0 + 0.15, j0 + 1.1, 13), P(i0 + 0.95, j0 + 1.1, 13)], "#8fb4d6", 2); // lade-lijn
+    return g;
+  };
+  const plant = (i0, j0) => {
+    let g = shadow(i0, j0, 0.8, 0.8);
+    g += box(i0 + 0.15, j0 + 0.15, 0.5, 0.5, 0, 10, "#b5623a", "#9c4f2d", "#813f22"); // pot
+    const cx = X(i0 + 0.4, j0 + 0.4), cy = Y(i0 + 0.4, j0 + 0.4, 10);
+    g += circ(cx, cy - 13, 8.5, "#357033");
+    g += circ(cx - 6, cy - 7, 6.5, "#4f9247");
+    g += circ(cx + 6, cy - 9, 6.5, "#3f7d3a");
+    return g;
+  };
+  const mand = (i0, j0) => {
+    let g = shadow(i0, j0, 1.2, 1.0);
+    const cx = X(i0 + 0.6, j0 + 0.5), cy = Y(i0 + 0.6, j0 + 0.5, 0);
+    g += ell(cx, cy, 24, 12, "#6b4423");
+    g += ell(cx, cy - 4, 20, 10, "#7d5230");
+    g += ell(cx, cy - 4, 15, 7, "#4a2f18");
+    g += ell(cx, cy - 5, 14, 6, "#caa06a"); // kussen
+    return g;
+  };
+
+  // Agent-sprite op zijn sta-tegel achter het bureau (bestaande #-symbolen),
+  // met contactschaduw. Wordt vóór het bureau getekend zodat het bureau de
+  // onderbenen occludeert (zit-illusie) — DIR-49 #1/#7.
+  const agentSprite = (d) => {
+    const f = isoAgentFeet(d);
+    const fx = X(f.i, f.j), fy = Y(f.i, f.j, 0);
+    let g = '<ellipse cx="' + fx + '" cy="' + fy + '" rx="13" ry="6" fill="#000" opacity="0.18"/>';
+    g += '<use href="#' + d.sym + '" x="' + (fx - 15) + '" y="' + (fy - 37) + '" width="30" height="37"/>';
+    return g;
+  };
+
+  // Plaatsing op het grid (9×9). 4 identieke bureaus in een strak 2×2 blok
+  // met kruis-gangpad; props langs de rand zodat de kamer bewust ingericht oogt.
+  const objs = [];
+  const put = (ci, cj, svg) => objs.push({ k: ci + cj, svg }); // sorteer op tegel-diepte
+  // 2×2 bureau-blok met agents (rijen i=1.5 & 5.0, kolommen j=1.3 & 4.8).
+  for (const d of ISO_DESKS) {
+    const f = isoAgentFeet(d);
+    put(f.i, f.j, agentSprite(d));                              // agent (achter) eerst
+    put(d.i0 + DW / 2, d.j0 + DD / 2 + 0.02, desk(d.i0, d.j0)); // bureau occludeert
+  }
+  put(7.2 + 0.75, 6.6 + 1.1, sofa(7.2, 6.6));   // bank in voor-linker hoek
+  put(7.4 + 0.5, 0.1 + 0.5, koffie(7.4, 0.1));  // koffie voor-rechter hoek
+  put(0.1 + 0.55, 3.6 + 0.55, printer(0.1, 3.6)); // printer achter-midden
+  put(3.8 + 0.55, 0.1 + 0.55, kast(3.8, 0.1));  // kast langs rechter zijstrook
+  put(0.2 + 0.4, 0.2 + 0.4, plant(0.2, 0.2));   // plant achter-rechter hoek
+  put(0.2 + 0.4, 7.6 + 0.4, plant(0.2, 7.6));   // plant achter-linker hoek
+  put(5.6 + 0.6, 7.4 + 0.5, mand(5.6, 7.4));    // hondenmand bij de bank
+  objs.sort((a, b) => a.k - b.k);                // back-to-front
+  let sObj = "";
+  for (const o of objs) sObj += o.svg;
+
+  // Muren (achter) → dominante vloer → meubels+agents back-to-front eroverheen.
+  // Inner markup: de scène-<svg>, defs en titel-overlay komen uit OFFICE_HTML.
+  return '<rect x="0" y="0" width="640" height="360" fill="#2b2f36"/>' + sWall + sFloor + sObj;
+}
+
+// Klikbare/keyboard-agent-hotspots + naamtags, bovenop de scène (DIR-49 #2).
+// Elke <g id> houdt de bestaande front-scène-id's aan (agent-desk/gertjan-desk/
+// ilona-desk/anton-desk) zodat de bestaande event-binding blijft werken. De
+// zichtbare sprite zit in de scène (occlusie); hier de klik-hitzone + naamtag.
+function isoAgentsOverlay() {
+  let s = "";
+  for (const d of ISO_DESKS) {
+    const f = isoAgentFeet(d);
+    const fx = isoX(f.i, f.j), fy = isoY(f.i, f.j, 0);
+    const headY = fy - 37;                    // bovenkant sprite
+    const tagW = 96, tagH = 22;
+    const tx = fx - tagW / 2, ty = headY - tagH - 4;
+    const deskFrontY = isoY(d.i0 + 2.4, d.j0 + 1.4, 0); // voorrand bureau
+    const hitH = Math.max(40, deskFrontY - ty + 8);
+    s += '<g id="' + d.id + '" role="button" tabindex="0" aria-label="Open ' + d.label + '">';
+    s += '<rect x="' + tx + '" y="' + ty + '" width="' + tagW + '" height="' + hitH + '" fill="#000" opacity="0"/>'; // klik-hitzone
+    s += '<rect x="' + tx + '" y="' + ty + '" width="' + tagW + '" height="' + tagH + '" fill="#0b1219"/>';
+    s += '<rect x="' + tx + '" y="' + ty + '" width="' + tagW + '" height="' + tagH + '" fill="none" stroke="' + d.tag + '" stroke-width="1.5"/>';
+    s += '<circle cx="' + (tx + 10) + '" cy="' + (ty + 8) + '" r="3.5" fill="' + d.dot + '" style="animation:dd-blink 2s steps(1) infinite"/>';
+    s += '<text x="' + fx + '" y="' + (ty + 10) + '" text-anchor="middle" font-family="\'Segoe UI\',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">' + d.naam + '</text>';
+    s += '<text x="' + fx + '" y="' + (ty + 19) + '" text-anchor="middle" font-family="\'Segoe UI\',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">' + d.spec + '</text>';
+    s += '</g>';
+  }
+  return s;
+}
+
 const OFFICE_HTML = `<!doctype html>
 <html lang="nl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1563,180 +1811,7 @@ const OFFICE_HTML = `<!doctype html>
           <rect x="18" y="23" width="4" height="2" fill="#b57a55"/>
         </symbol>
       </defs>
-      <polygon points="0,0 640,0 544,48 96,48" fill="#171b20"/>
-      <polygon points="0,0 96,48 96,50 0,4" fill="#0f1216"/>
-      <polygon points="0,4 96,48 96,240 0,360" fill="#3a2a22"/>
-      <polygon points="0,4 96,48 96,60 0,20" fill="#241812"/>
-      <polygon points="640,4 544,48 544,240 640,360" fill="#33241d"/>
-      <polygon points="640,4 544,48 544,60 640,20" fill="#241812"/>
-      <polygon points="96,240 544,240 640,360 0,360" fill="#4b4f55"/>
-      <polygon points="96,240 544,240 544,246 96,246" fill="#3c4045"/>
-      <rect x="0" y="352" width="640" height="8" fill="#3a3e43"/>
-      <polygon points="230,240 210,360 214,360 234,240" fill="#454951"/>
-      <polygon points="410,240 430,360 426,360 406,240" fill="#454951"/>
-      <rect x="96" y="48" width="448" height="192" fill="url(#brick)"/>
-      <rect x="96" y="48" width="448" height="192" fill="#000" opacity="0.12"/>
-      <rect x="96" y="234" width="448" height="6" fill="#20130e"/>
-      <g>
-        <use href="#hex" x="112" y="70" width="40" height="36"/>
-        <use href="#hex" x="150" y="70" width="40" height="36"/>
-        <use href="#hex" x="131" y="100" width="40" height="36"/>
-        <use href="#hex" x="169" y="100" width="40" height="36"/>
-        <use href="#hex" x="112" y="130" width="40" height="36"/>
-        <use href="#hex" x="150" y="130" width="40" height="36"/>
-        <rect x="120" y="76" width="24" height="24" fill="#c98a5a"/>
-        <rect x="158" y="76" width="24" height="24" fill="#8aa0b5"/>
-        <rect x="139" y="106" width="24" height="24" fill="#b56a4a"/>
-        <rect x="177" y="106" width="24" height="24" fill="#7d9c6a"/>
-        <rect x="120" y="136" width="24" height="24" fill="#9a8fb5"/>
-        <rect x="158" y="136" width="24" height="24" fill="#c9a05a"/>
-      </g>
-      <rect x="300" y="56" width="236" height="176" fill="#20262c"/>
-      <rect x="300" y="56" width="236" height="4" fill="#2b333a"/>
-      <text x="316" y="120" font-family="'Press Start 2P'" font-size="12" fill="#F18E02" transform="rotate(-3 316 120)">CREATIVITY</text>
-      <text x="330" y="140" font-family="'Press Start 2P'" font-size="12" fill="#F18E02" transform="rotate(-3 330 140)">NEVER DIES</text>
-      <text x="340" y="176" font-family="'Press Start 2P'" font-size="14" fill="#3285D1" transform="rotate(2 340 176)">DREAM BIG</text>
-      <text x="322" y="210" font-family="'Press Start 2P'" font-size="10" fill="#e8e2d8" transform="rotate(-2 322 210)">NO PAIN</text>
-      <text x="360" y="226" font-family="'Press Start 2P'" font-size="10" fill="#e8e2d8" transform="rotate(-2 360 226)">NO GAIN</text>
-      <g>
-        <rect x="174" y="48" width="2" height="58" fill="#0a0a0a"/>
-        <rect x="168" y="106" width="14" height="12" fill="#3a2f18"/>
-        <rect x="170" y="112" width="10" height="10" fill="#ffb733" style="animation:dd-bulb 3.2s ease-in-out infinite"/>
-        <rect x="330" y="48" width="2" height="48" fill="#0a0a0a"/>
-        <rect x="324" y="96" width="14" height="12" fill="#3a2f18"/>
-        <rect x="326" y="102" width="10" height="10" fill="#ffb733" style="animation:dd-bulb 2.6s ease-in-out infinite"/>
-        <rect x="464" y="48" width="2" height="58" fill="#0a0a0a"/>
-        <rect x="458" y="106" width="14" height="12" fill="#3a2f18"/>
-        <rect x="460" y="112" width="10" height="10" fill="#ffb733" style="animation:dd-bulb 3.6s ease-in-out infinite"/>
-      </g>
-      <!-- mosterdgele bank: horizontaal, plat op de vloer in de rechter-hoek, vóór/naast de printer (DIR-46) -->
-      <g>
-        <rect x="556" y="336" width="80" height="6" fill="#7d5c10"/>       <!-- schaduw onder -->
-        <rect x="556" y="300" width="9" height="22" fill="#b8891a"/>        <!-- armleuning links -->
-        <rect x="627" y="300" width="9" height="22" fill="#b8891a"/>        <!-- armleuning rechts -->
-        <rect x="565" y="304" width="62" height="14" fill="#e4b83e"/>       <!-- rugleuning -->
-        <rect x="568" y="307" width="26" height="9" fill="#d9ab2c"/>        <!-- rugkussen 1 -->
-        <rect x="598" y="307" width="26" height="9" fill="#d9ab2c"/>        <!-- rugkussen 2 -->
-        <rect x="556" y="318" width="80" height="8" fill="#d9ab2c"/>        <!-- zitting bovenkant -->
-        <rect x="556" y="326" width="80" height="12" fill="#c99a1e"/>       <!-- zitting voorkant -->
-      </g>
-      <use href="#plant" x="500" y="176" width="34" height="52"/>
-      <use href="#plant" x="104" y="182" width="30" height="46"/>
-      <!-- Gertjan (GA4-agent), actief + klikbaar (DIR-29) -->
-      <!-- Gertjan: links-van-midden, ACHTER (DIR-37) -->
-      <g id="gertjan-desk" role="button" tabindex="0" aria-label="Open de GA4-agent Gertjan" transform="translate(-34,-20)">
-        <rect x="286" y="204" width="104" height="114" fill="#000" opacity="0"/>
-        <g id="gertjan-body" style="transform-origin:332px 288px;animation:dd-albert-idle 6s ease-in-out infinite">
-          <use href="#gertjan" x="308" y="234" width="48" height="58"/>
-        </g>
-        <use href="#deskEmpty" x="286" y="232" width="104" height="83"/>
-        <g class="gertjan-hand" style="transform-origin:320px 297px;animation:dd-type-l .5s steps(2) infinite">
-          <rect x="316" y="283" width="6" height="9" fill="#c7ccd2"/>
-          <rect x="315" y="290" width="9" height="6" fill="#e8b98a"/>
-        </g>
-        <g class="gertjan-hand" style="transform-origin:337px 297px;animation:dd-type-r .5s steps(2) infinite">
-          <rect x="334" y="283" width="6" height="9" fill="#c7ccd2"/>
-          <rect x="331" y="290" width="9" height="6" fill="#e8b98a"/>
-        </g>
-        <rect x="290" y="206" width="100" height="24" fill="#0b1219"/>
-        <rect x="290" y="206" width="100" height="24" fill="none" stroke="#3fd06a" stroke-width="1.5"/>
-        <circle cx="300" cy="214" r="3.5" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
-        <text x="340" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Gertjan</text>
-        <text x="340" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">GA4-data-specialist</text>
-      </g>
-      <!-- Leeg: rechts-van-midden, ACHTER -->
-      <!-- Ilona (Ads-agent), actief + klikbaar (DIR-36) -->
-      <g id="ilona-desk" role="button" tabindex="0" aria-label="Open de Ads-agent Ilona" transform="translate(-44,-20)">
-        <rect x="410" y="204" width="104" height="114" fill="#000" opacity="0"/>
-        <g id="ilona-body" style="transform-origin:448px 288px;animation:dd-albert-idle 6.5s ease-in-out infinite">
-          <use href="#ilona" x="424" y="234" width="48" height="58"/>
-        </g>
-        <use href="#deskEmpty" x="410" y="232" width="104" height="83"/>
-        <g class="ilona-hand" style="transform-origin:446px 297px;animation:dd-type-l .5s steps(2) infinite">
-          <rect x="442" y="283" width="6" height="9" fill="#2f7f6e"/>
-          <rect x="441" y="290" width="9" height="6" fill="#e8b98a"/>
-        </g>
-        <g class="ilona-hand" style="transform-origin:463px 297px;animation:dd-type-r .5s steps(2) infinite">
-          <rect x="460" y="283" width="6" height="9" fill="#2f7f6e"/>
-          <rect x="457" y="290" width="9" height="6" fill="#e8b98a"/>
-        </g>
-        <rect x="414" y="206" width="100" height="24" fill="#0b1219"/>
-        <rect x="414" y="206" width="100" height="24" fill="none" stroke="#e58fa8" stroke-width="1.5"/>
-        <circle cx="424" cy="214" r="3.5" fill="#e58fa8" style="animation:dd-blink 2s steps(1) infinite"/>
-        <text x="464" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Ilona</text>
-        <text x="464" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">Google Ads-specialist</text>
-      </g>
-      <!-- Anton (content-agent), actief + klikbaar (DIR-39) — front-rechts (paar met Albert, DIR-44 AC-7) -->
-      <g id="anton-desk" role="button" tabindex="0" aria-label="Open de content-agent Anton">
-        <rect x="458" y="222" width="120" height="130" fill="#000" opacity="0"/>
-        <g id="anton-body" style="transform-origin:504px 300px;animation:dd-albert-idle 6.2s ease-in-out infinite">
-          <use href="#anton" x="478" y="254" width="52" height="63"/>
-        </g>
-        <use href="#deskEmpty" x="452" y="256" width="104" height="83"/>
-        <g class="anton-hand" style="transform-origin:498px 305px;animation:dd-type-l .5s steps(2) infinite">
-          <rect x="494" y="300" width="6" height="9" fill="#2a2f3a"/>
-          <rect x="493" y="307" width="9" height="6" fill="#d9a878"/>
-        </g>
-        <g class="anton-hand" style="transform-origin:514px 305px;animation:dd-type-r .5s steps(2) infinite">
-          <rect x="510" y="300" width="6" height="9" fill="#2a2f3a"/>
-          <rect x="507" y="307" width="9" height="6" fill="#d9a878"/>
-        </g>
-        <rect x="468" y="228" width="100" height="24" fill="#0b1219"/>
-        <rect x="468" y="228" width="100" height="24" fill="none" stroke="#3285D1" stroke-width="1.5"/>
-        <circle cx="478" cy="236" r="3.5" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
-        <text x="518" y="238" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Anton</text>
-        <text x="518" y="247" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">Content-specialist</text>
-      </g>
-      <!-- koffieautomaat (DIR-26) -->
-      <g>
-        <rect x="40" y="250" width="30" height="52" fill="#2b2f36"/>
-        <rect x="40" y="250" width="30" height="6" fill="#3a3f47"/>
-        <rect x="44" y="258" width="22" height="14" fill="#0e1216"/>
-        <rect x="46" y="261" width="10" height="3" fill="#F18E02"/>
-        <rect x="46" y="266" width="14" height="2" fill="#3fd06a"/>
-        <rect x="48" y="278" width="14" height="10" fill="#1a1e24"/>
-        <rect x="52" y="282" width="6" height="6" fill="#e8e2d8"/>
-        <rect x="40" y="298" width="30" height="4" fill="#15181d"/>
-      </g>
-      <!-- printer (DIR-26) -->
-      <g>
-        <rect x="574" y="262" width="28" height="6" fill="#f4f0e6"/>
-        <rect x="572" y="266" width="32" height="6" fill="#2b2f36"/>
-        <rect x="566" y="270" width="44" height="26" fill="#3a3f47"/>
-        <rect x="566" y="270" width="44" height="6" fill="#4a505a"/>
-        <rect x="570" y="280" width="10" height="3" fill="#3fd06a"/>
-        <rect x="584" y="280" width="4" height="3" fill="#F18E02"/>
-        <rect x="566" y="296" width="44" height="4" fill="#20242a"/>
-      </g>
-      <g id="agent-desk" role="button" tabindex="0" aria-label="Open de GSC-agent" transform="translate(-30,0)">
-        <rect x="146" y="220" width="150" height="126" fill="#000" opacity="0"/>
-        <g id="albert-body" style="transform-origin:218px 300px;animation:dd-albert-idle 5.5s ease-in-out infinite">
-          <use href="#albert" x="186" y="238" width="64" height="77"/>
-        </g>
-        <!-- zelfde bureau-template (#deskEmpty 104x83) als de andere drie: even groot (DIR-44 AC-7) -->
-        <use href="#deskEmpty" x="166" y="256" width="104" height="83"/>
-        <!-- typende handen/armen (DIR-25) -->
-        <g class="albert-hand" style="transform-origin:210px 303px;animation:dd-type-l .5s steps(2) infinite">
-          <rect x="205" y="293" width="6" height="9" fill="#e58fa8"/>
-          <rect x="204" y="300" width="9" height="6" fill="#e8b98a"/>
-        </g>
-        <g class="albert-hand" style="transform-origin:227px 303px;animation:dd-type-r .5s steps(2) infinite">
-          <rect x="226" y="293" width="6" height="9" fill="#e58fa8"/>
-          <rect x="223" y="300" width="9" height="6" fill="#e8b98a"/>
-        </g>
-        <rect x="170" y="206" width="96" height="24" fill="#0b1219"/>
-        <rect x="170" y="206" width="96" height="24" fill="none" stroke="#F18E02" stroke-width="1.5"/>
-        <circle cx="180" cy="214" r="3.5" fill="#3fd06a" style="animation:dd-blink 2s steps(1) infinite"/>
-        <text x="221" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Albert</text>
-        <text x="218" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">GSC / SEO-specialist</text>
-      </g>
-      <!-- hondenmand: één duidelijk mandje in de linker-achterhoek (DIR-46, vervangt kleed + dubbele ovaal) -->
-      <ellipse cx="74" cy="300" rx="33" ry="9" fill="#4a2f18"/>       <!-- grondschaduw onder de mand -->
-      <rect x="43" y="294" width="62" height="11" rx="3" fill="#5b3a1e"/>   <!-- mand-wand (voorkant, geeft 3D-hoogte) -->
-      <ellipse cx="74" cy="294" rx="31" ry="8" fill="#6b4423"/>       <!-- bovenrand van de mand -->
-      <ellipse cx="74" cy="294" rx="23" ry="5.5" fill="#31200f"/>    <!-- binnenkant (diepte) -->
-      <ellipse cx="74" cy="296" rx="20" ry="4.5" fill="#caa06a"/>    <!-- kussen in de mand -->
-      <polygon points="0,300 640,300 640,360 0,360" fill="#000" opacity="0.10"/>
+      ${isoRoomInner()}${isoAgentsOverlay()}
     </svg>
 
     <div class="dog" aria-hidden="true">
@@ -1764,54 +1839,7 @@ const OFFICE_HTML = `<!doctype html>
       </svg>
     </div>
 
-    <!-- Rondlopende agents (DIR-32): verborgen tot een kantooractie; klik opent chat. -->
-    <div class="roam" id="albert-roam" role="button" tabindex="0" aria-label="Open de GSC-agent (Albert)">
-      <div class="roam-fig">
-        <svg viewBox="0 0 40 56" width="100%" shape-rendering="crispEdges" style="image-rendering:pixelated;display:block;">
-          <use href="#albert" x="0" y="0" width="40" height="48"/>
-          <g class="poot poot-a"><rect x="14" y="47" width="5" height="9" fill="#2a3138"/></g>
-          <g class="poot poot-b"><rect x="21" y="47" width="5" height="9" fill="#2a3138"/></g>
-          <g class="draag draag-koffie"><rect x="30" y="30" width="7" height="8" fill="#e8e2d8"/><rect x="30" y="30" width="7" height="2" fill="#c9c2b4"/><rect x="37" y="32" width="2" height="3" fill="#e8e2d8"/></g>
-          <g class="draag draag-papier"><rect x="30" y="28" width="8" height="11" fill="#f4f0e6"/><rect x="32" y="31" width="4" height="1" fill="#9aa2aa"/><rect x="32" y="34" width="4" height="1" fill="#9aa2aa"/></g>
-          <g class="draag draag-gieter"><rect x="29" y="31" width="8" height="7" fill="#3fa06a"/><rect x="30" y="29" width="4" height="2" fill="#2f7f56"/><rect x="37" y="30" width="5" height="2" fill="#3fa06a"/></g>
-        </svg>
-      </div>
-    </div>
-    <div class="roam" id="gertjan-roam" role="button" tabindex="0" aria-label="Open de GA4-agent (Gertjan)">
-      <div class="roam-fig">
-        <svg viewBox="0 0 40 56" width="100%" shape-rendering="crispEdges" style="image-rendering:pixelated;display:block;">
-          <use href="#gertjan" x="0" y="0" width="40" height="48"/>
-          <g class="poot poot-a"><rect x="14" y="47" width="5" height="9" fill="#2a3138"/></g>
-          <g class="poot poot-b"><rect x="21" y="47" width="5" height="9" fill="#2a3138"/></g>
-          <g class="draag draag-koffie"><rect x="30" y="30" width="7" height="8" fill="#e8e2d8"/><rect x="30" y="30" width="7" height="2" fill="#c9c2b4"/><rect x="37" y="32" width="2" height="3" fill="#e8e2d8"/></g>
-          <g class="draag draag-papier"><rect x="30" y="28" width="8" height="11" fill="#f4f0e6"/><rect x="32" y="31" width="4" height="1" fill="#9aa2aa"/><rect x="32" y="34" width="4" height="1" fill="#9aa2aa"/></g>
-          <g class="draag draag-gieter"><rect x="29" y="31" width="8" height="7" fill="#3fa06a"/><rect x="30" y="29" width="4" height="2" fill="#2f7f56"/><rect x="37" y="30" width="5" height="2" fill="#3fa06a"/></g>
-        </svg>
-      </div>
-    </div>
-    <div class="roam" id="ilona-roam" role="button" tabindex="0" aria-label="Open de Ads-agent (Ilona)">
-      <div class="roam-fig">
-        <svg viewBox="0 0 40 56" width="100%" shape-rendering="crispEdges" style="image-rendering:pixelated;display:block;">
-          <use href="#ilona" x="0" y="0" width="40" height="48"/>
-          <g class="poot poot-a"><rect x="14" y="47" width="5" height="9" fill="#2a3138"/></g>
-          <g class="poot poot-b"><rect x="21" y="47" width="5" height="9" fill="#2a3138"/></g>
-          <g class="draag draag-koffie"><rect x="30" y="30" width="7" height="8" fill="#e8e2d8"/><rect x="30" y="30" width="7" height="2" fill="#c9c2b4"/><rect x="37" y="32" width="2" height="3" fill="#e8e2d8"/></g>
-          <g class="draag draag-papier"><rect x="30" y="28" width="8" height="11" fill="#f4f0e6"/><rect x="32" y="31" width="4" height="1" fill="#9aa2aa"/><rect x="32" y="34" width="4" height="1" fill="#9aa2aa"/></g>
-          <g class="draag draag-gieter"><rect x="29" y="31" width="8" height="7" fill="#3fa06a"/><rect x="30" y="29" width="4" height="2" fill="#2f7f56"/><rect x="37" y="30" width="5" height="2" fill="#3fa06a"/></g>
-        </svg>
-      </div>
-    </div>
-    <div class="roam" id="anton-roam" role="button" tabindex="0" aria-label="Open de content-agent (Anton)">
-      <div class="roam-fig">
-        <svg viewBox="0 0 40 56" width="100%" shape-rendering="crispEdges" style="image-rendering:pixelated;display:block;">
-          <use href="#anton" x="0" y="0" width="40" height="48"/>
-          <g class="poot poot-a"><rect x="14" y="47" width="5" height="9" fill="#2a3138"/></g>
-          <g class="poot poot-b"><rect x="21" y="47" width="5" height="9" fill="#2a3138"/></g>
-          <g class="draag draag-koffie"><rect x="30" y="30" width="7" height="8" fill="#e8e2d8"/><rect x="30" y="30" width="7" height="2" fill="#c9c2b4"/><rect x="37" y="32" width="2" height="3" fill="#e8e2d8"/></g>
-          <g class="draag draag-papier"><rect x="30" y="28" width="8" height="11" fill="#f4f0e6"/><rect x="32" y="31" width="4" height="1" fill="#9aa2aa"/><rect x="32" y="34" width="4" height="1" fill="#9aa2aa"/></g>
-        </svg>
-      </div>
-    </div>
+    <!-- DIR-49: rondlopende agents verwijderd — agents zitten aan hun bureau. -->
 
     <div style="position:absolute;top:0;left:0;right:0;height:30%;background:linear-gradient(to bottom, rgba(8,11,15,.82) 0%, rgba(8,11,15,.5) 55%, rgba(8,11,15,0) 100%);pointer-events:none;"></div>
     <div style="position:absolute;top:5%;left:0;right:0;text-align:center;pointer-events:none;">
@@ -2172,9 +2200,9 @@ const OFFICE_HTML = `<!doctype html>
 (function(){
   var dog=document.querySelector('.dog'); if(!dog) return;
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var BED={l:12,b:24};   // in de hondenmand in de linker-achterhoek (DIR-46 B)
-  var SPOTS=[{l:34,b:8},{l:58,b:8},{l:72,b:16},{l:46,b:18},{l:82,b:9}];
-  var pos={l:6,b:6};
+  var BED=${JSON.stringify(isoPct(ISO_MAND.i0 + 0.6, ISO_MAND.j0 + 0.5))};   // in de iso-hondenmand (DIR-49 #3)
+  var SPOTS=${JSON.stringify([[4, 3.5], [6.5, 3], [3, 6.5], [5.5, 6.5], [7, 4]].map((t) => isoPct(t[0], t[1])))};
+  var pos=${JSON.stringify(isoPct(1, 8))};
   dog.style.left=pos.l+'%'; dog.style.bottom=pos.b+'%';
   if(reduce){ dog.style.left=BED.l+'%'; dog.style.bottom=BED.b+'%'; dog.classList.add('ligt'); return; }
   function face(d){ if(d<0) dog.classList.add('links'); else if(d>0) dog.classList.remove('links'); }
@@ -2697,6 +2725,12 @@ export default {
         }
         // Onbekende/ongeldige sleutel → gewoon het kantoor, zonder Meta-scoping (AC-6).
       }
+      return new Response(OFFICE_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
+    // Iso-scène preview (DIR-49, WIP): alias van de echte scène `/` zodat de
+    // critics de geïntegreerde iso-scène (agents + hond + chat) zien.
+    if (path === "/iso" && request.method === "GET") {
       return new Response(OFFICE_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
