@@ -1454,18 +1454,19 @@ function isoRoomInner() {
     let g = shadow(i0, j0, DW, DD);
     g += box(i0, j0, DW, DD, 0, DH, "#b07a34", "#9c6a2b", "#855620"); // hout-bureau
     const mi = i0 + 0.85, mj = j0 + 0.28, mw = 0.9, md = 0.42, z0 = DH, z1 = DH + 13;
-    g += box(mi, mj, mw, md, z0, z1, "#2a2f3a", "#20242c", "#181b21"); // monitor-body
+    // Toetsenbord aan de AGENT-kant (DIR-55): tussen het zittende poppetje (lage j)
+    // en de monitor, dus vóór de monitor getekend zodat de monitor het deels
+    // verdekt — logisch correct (agent → toetsenbord → monitor).
+    g += poly([P(i0 + 0.82, j0 + 0.04, DH), P(i0 + 1.40, j0 + 0.04, DH),
+      P(i0 + 1.40, j0 + 0.24, DH), P(i0 + 0.82, j0 + 0.24, DH)], "#262b31");
+    g += poly([P(i0 + 0.82, j0 + 0.04, DH), P(i0 + 1.40, j0 + 0.04, DH),
+      P(i0 + 1.40, j0 + 0.08, DH), P(i0 + 0.82, j0 + 0.08, DH)], "#3a414a"); // bovenrand
+    g += '<line x1="' + X(i0 + 0.88, j0 + 0.14) + '" y1="' + Y(i0 + 0.88, j0 + 0.14, DH) + '" x2="' + X(i0 + 1.34, j0 + 0.14) + '" y2="' + Y(i0 + 1.34, j0 + 0.14, DH) + '" stroke="#4a525c" stroke-width="0.6"/>';
+    g += box(mi, mj, mw, md, z0, z1, "#2a2f3a", "#20242c", "#181b21"); // monitor-body (occludeert toetsenbord-voorkant)
     // scherm-vlak (SW, naar voren), huisstijl-blauw + oranje stip
     g += poly([P(mi, mj + md, z0 + 2), P(mi + mw, mj + md, z0 + 2),
       P(mi + mw, mj + md, z1 - 2), P(mi, mj + md, z1 - 2)], "#015092");
     g += circ(X(mi + mw * 0.5, mj + md), Y(mi + mw * 0.5, mj + md, (z0 + z1) / 2), 2, "#F18E02");
-    // Toetsenbord VÓÓR de monitor op het bureau-blad (DIR-54): klein iso-vlak.
-    // De handen zitten aan het poppetje (agentSprite), niet hier — nooit los.
-    g += poly([P(i0 + 0.72, j0 + 0.88, DH), P(i0 + 1.38, j0 + 0.88, DH),
-      P(i0 + 1.38, j0 + 1.10, DH), P(i0 + 0.72, j0 + 1.10, DH)], "#262b31");
-    g += poly([P(i0 + 0.72, j0 + 0.88, DH), P(i0 + 1.38, j0 + 0.88, DH),
-      P(i0 + 1.38, j0 + 0.92, DH), P(i0 + 0.72, j0 + 0.92, DH)], "#3a414a"); // bovenrand
-    g += '<line x1="' + X(i0 + 0.78, j0 + 0.98) + '" y1="' + Y(i0 + 0.78, j0 + 0.98, DH) + '" x2="' + X(i0 + 1.32, j0 + 0.98) + '" y2="' + Y(i0 + 1.32, j0 + 0.98, DH) + '" stroke="#4a525c" stroke-width="0.6"/>';
     return g;
   };
   const sofa = (i0, j0) => {
