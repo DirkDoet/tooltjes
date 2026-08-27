@@ -1294,7 +1294,7 @@ function isoRoomSVG() {
   // Ronde 2 (Craft-gap): vloer-DOMINANT + warme, chunky per-tegel gearceerde
   // tegels; muren fors lager (~45% van vorige hoogte). 2:1 iso, achter-hoek,
   // één lichtrichting, crispe randen, huisstijl blijven.
-  const Ox = 320, Oy = 108, TW = 40, TH = 20, N = 11, H = 60;
+  const Ox = 320, Oy = 120, TW = 40, TH = 20, N = 9, H = 72;
   const X = (i, j) => Ox + (i - j) * (TW / 2);
   const Y = (i, j, z) => Oy + (i + j) * (TH / 2) - z;
   const P = (i, j, z) => X(i, j) + "," + Y(i, j, z);
@@ -1341,9 +1341,9 @@ function isoRoomSVG() {
   // LINKER MUUR (vlak i=0) — verlicht.
   sWall += poly([P(0, 0, 0), P(0, N, 0), P(0, N, H), P(0, 0, H)], wallLit);
 
-  // Baksteen-voegen (subtiele horizontale iso-lijnen per muur; lage muur → 2).
+  // Baksteen-voegen (subtiele horizontale iso-lijnen per muur).
   for (let k = 1; k <= 2; k++) {
-    const z = k * 20;
+    const z = k * 24;
     sWall += line(X(0, 0), Y(0, 0, z), X(0, N), Y(0, N, z), brick, 1, 0.35); // links
     sWall += line(X(0, 0), Y(0, 0, z), X(N, 0), Y(N, 0, z), "#12365a", 1, 0.35); // rechts
   }
@@ -1392,66 +1392,82 @@ function isoRoomSVG() {
     return se + sw + tp;
   };
 
+  // Ronde 2 (Craft-gap): chunkier + hoger meubilair (meer presence), strakke
+  // 2×2 grid-ordening met gangpad, compactere vloer (N 11→9) → voller, minder
+  // dode vloer. Vaste footprints zodat de 4 bureaus exact even groot zijn.
+  const DW = 2.4, DD = 1.4, DH = 18; // bureau: breed×diep×hoog
   const desk = (i0, j0) => {
-    const H1 = 13;
-    let g = shadow(i0, j0, 2, 1);
-    g += box(i0, j0, 2, 1, 0, H1, "#b07a34", "#9c6a2b", "#855620"); // hout-bureau
-    const mi = i0 + 0.65, mj = j0 + 0.16, mw = 0.7, md = 0.30, z0 = H1, z1 = H1 + 9;
+    let g = shadow(i0, j0, DW, DD);
+    g += box(i0, j0, DW, DD, 0, DH, "#b07a34", "#9c6a2b", "#855620"); // hout-bureau
+    const mi = i0 + 0.85, mj = j0 + 0.28, mw = 0.9, md = 0.42, z0 = DH, z1 = DH + 13;
     g += box(mi, mj, mw, md, z0, z1, "#2a2f3a", "#20242c", "#181b21"); // monitor-body
     // scherm-vlak (SW, naar voren), huisstijl-blauw + oranje stip
-    g += poly([P(mi, mj + md, z0 + 1.5), P(mi + mw, mj + md, z0 + 1.5),
-      P(mi + mw, mj + md, z1 - 1.5), P(mi, mj + md, z1 - 1.5)], "#015092");
-    g += circ(X(mi + mw * 0.5, mj + md), Y(mi + mw * 0.5, mj + md, (z0 + z1) / 2), 1.6, "#F18E02");
+    g += poly([P(mi, mj + md, z0 + 2), P(mi + mw, mj + md, z0 + 2),
+      P(mi + mw, mj + md, z1 - 2), P(mi, mj + md, z1 - 2)], "#015092");
+    g += circ(X(mi + mw * 0.5, mj + md), Y(mi + mw * 0.5, mj + md, (z0 + z1) / 2), 2, "#F18E02");
     return g;
   };
   const sofa = (i0, j0) => {
-    let g = shadow(i0, j0, 1.2, 2);
-    g += box(i0, j0, 1.2, 2, 0, 9, "#d9a520", "#c48f16", "#a67810");        // zitting mosterd
-    g += box(i0, j0, 0.35, 2, 0, 17, "#c99a1a", "#b3860f", "#96700c");      // rugleuning (achter)
+    let g = shadow(i0, j0, 1.5, 2.2);
+    g += box(i0, j0, 1.5, 2.2, 0, 13, "#d9a520", "#c48f16", "#a67810");     // zitting mosterd
+    g += box(i0, j0, 0.5, 2.2, 0, 24, "#c99a1a", "#b3860f", "#96700c");     // rugleuning (achter)
+    g += box(i0, j0, 1.5, 0.35, 0, 20, "#cf9d1c", "#b98a12", "#9c760f");    // armleuning (rechts)
     return g;
   };
   const printer = (i0, j0) => {
-    let g = shadow(i0, j0, 0.9, 0.9);
-    g += box(i0, j0, 0.9, 0.9, 0, 11, "#d8dde3", "#c2c8d0", "#a7aeb8");
-    g += pline([P(i0 + 0.15, j0 + 0.3, 11), P(i0 + 0.75, j0 + 0.3, 11)], "#8a929c", 2); // papiergleuf
+    let g = shadow(i0, j0, 1.1, 1.1);
+    g += box(i0, j0, 1.1, 1.1, 0, 15, "#d8dde3", "#c2c8d0", "#a7aeb8");
+    g += pline([P(i0 + 0.2, j0 + 0.35, 15), P(i0 + 0.9, j0 + 0.35, 15)], "#8a929c", 2); // papiergleuf
     return g;
   };
   const koffie = (i0, j0) => {
-    let g = shadow(i0, j0, 0.85, 0.85);
-    g += box(i0, j0, 0.85, 0.85, 0, 18, "#33383f", "#262b31", "#1b1f24");
-    g += circ(X(i0 + 0.42, j0 + 0.85), Y(i0 + 0.42, j0 + 0.85, 12), 1.4, "#F18E02"); // lampje
+    let g = shadow(i0, j0, 1.0, 1.0);
+    g += box(i0, j0, 1.0, 1.0, 0, 24, "#33383f", "#262b31", "#1b1f24");
+    g += circ(X(i0 + 0.5, j0 + 1.0), Y(i0 + 0.5, j0 + 1.0, 15), 2, "#F18E02"); // lampje
+    return g;
+  };
+  const kast = (i0, j0) => { // archiefkast — vult zijstrook, meer 'ingericht'
+    let g = shadow(i0, j0, 1.1, 1.1);
+    g += box(i0, j0, 1.1, 1.1, 0, 20, "#3a6ea0", "#2f5c87", "#244a6e"); // huisstijl-blauw
+    g += pline([P(i0 + 0.15, j0 + 1.1, 13), P(i0 + 0.95, j0 + 1.1, 13)], "#8fb4d6", 2); // lade-lijn
     return g;
   };
   const plant = (i0, j0) => {
-    let g = shadow(i0, j0, 0.7, 0.7);
-    g += box(i0 + 0.15, j0 + 0.15, 0.45, 0.45, 0, 7, "#b5623a", "#9c4f2d", "#813f22"); // pot
-    const cx = X(i0 + 0.375, j0 + 0.375), cy = Y(i0 + 0.375, j0 + 0.375, 7);
-    g += circ(cx, cy - 9, 6, "#357033");
-    g += circ(cx - 4, cy - 5, 4.5, "#4f9247");
-    g += circ(cx + 4, cy - 6, 4.5, "#3f7d3a");
+    let g = shadow(i0, j0, 0.8, 0.8);
+    g += box(i0 + 0.15, j0 + 0.15, 0.5, 0.5, 0, 10, "#b5623a", "#9c4f2d", "#813f22"); // pot
+    const cx = X(i0 + 0.4, j0 + 0.4), cy = Y(i0 + 0.4, j0 + 0.4, 10);
+    g += circ(cx, cy - 13, 8.5, "#357033");
+    g += circ(cx - 6, cy - 7, 6.5, "#4f9247");
+    g += circ(cx + 6, cy - 9, 6.5, "#3f7d3a");
     return g;
   };
   const mand = (i0, j0) => {
-    let g = shadow(i0, j0, 1, 0.9);
-    const cx = X(i0 + 0.5, j0 + 0.45), cy = Y(i0 + 0.5, j0 + 0.45, 0);
-    g += ell(cx, cy, 20, 10, "#6b4423");
-    g += ell(cx, cy - 3, 17, 8, "#7d5230");
-    g += ell(cx, cy - 3, 13, 6, "#4a2f18");
-    g += ell(cx, cy - 4, 12, 5, "#caa06a"); // kussen
+    let g = shadow(i0, j0, 1.2, 1.0);
+    const cx = X(i0 + 0.6, j0 + 0.5), cy = Y(i0 + 0.6, j0 + 0.5, 0);
+    g += ell(cx, cy, 24, 12, "#6b4423");
+    g += ell(cx, cy - 4, 20, 10, "#7d5230");
+    g += ell(cx, cy - 4, 15, 7, "#4a2f18");
+    g += ell(cx, cy - 5, 14, 6, "#caa06a"); // kussen
     return g;
   };
 
-  // Plaatsing op het grid (11×11). 4 identieke bureaus op 2 nette rijen.
+  // Plaatsing op het grid (9×9). 4 identieke bureaus in een strak 2×2 blok
+  // met kruis-gangpad; props langs de rand zodat de kamer bewust ingericht oogt.
   const objs = [];
   const put = (ci, cj, svg) => objs.push({ k: ci + cj, svg }); // sorteer op tegel-diepte
-  put(3, 2.5, desk(2, 2)); put(3, 6.5, desk(2, 6));   // achterste rij
-  put(6, 2.5, desk(5, 2)); put(6, 6.5, desk(5, 6));   // middelste rij
-  put(9.1, 9, sofa(8.5, 8));                           // bank in hoek (voor-links)
-  put(0.45, 5.45, printer(0, 5));                      // printer (achter-midden)
-  put(9.42, 0.42, koffie(9, 0));                       // koffie (voor-rechts)
-  put(0.35, 0.35, plant(0, 0)); put(0.35, 9.35, plant(0, 9)); // 2 planten (achter-hoeken)
-  put(9.5, 5.45, mand(9, 5));                          // hondenmand (voor-midden)
-  objs.sort((a, b) => a.k - b.k);                      // back-to-front
+  // 2×2 bureau-blok (rijen i=1.5 & 5.0, kolommen j=1.3 & 4.8), exact uitgelijnd.
+  put(1.5 + DW / 2, 1.3 + DD / 2, desk(1.5, 1.3));
+  put(1.5 + DW / 2, 4.8 + DD / 2, desk(1.5, 4.8));
+  put(5.0 + DW / 2, 1.3 + DD / 2, desk(5.0, 1.3));
+  put(5.0 + DW / 2, 4.8 + DD / 2, desk(5.0, 4.8));
+  put(7.2 + 0.75, 6.6 + 1.1, sofa(7.2, 6.6));   // bank in voor-linker hoek
+  put(7.4 + 0.5, 0.1 + 0.5, koffie(7.4, 0.1));  // koffie voor-rechter hoek
+  put(0.1 + 0.55, 3.6 + 0.55, printer(0.1, 3.6)); // printer achter-midden
+  put(3.8 + 0.55, 0.1 + 0.55, kast(3.8, 0.1));  // kast langs rechter zijstrook
+  put(0.2 + 0.4, 0.2 + 0.4, plant(0.2, 0.2));   // plant achter-rechter hoek
+  put(0.2 + 0.4, 7.6 + 0.4, plant(0.2, 7.6));   // plant achter-linker hoek
+  put(5.6 + 0.6, 7.4 + 0.5, mand(5.6, 7.4));    // hondenmand bij de bank
+  objs.sort((a, b) => a.k - b.k);                // back-to-front
   let sObj = "";
   for (const o of objs) sObj += o.svg;
 
