@@ -1459,11 +1459,13 @@ function isoRoomInner() {
     g += poly([P(mi, mj + md, z0 + 2), P(mi + mw, mj + md, z0 + 2),
       P(mi + mw, mj + md, z1 - 2), P(mi, mj + md, z1 - 2)], "#015092");
     g += circ(X(mi + mw * 0.5, mj + md), Y(mi + mw * 0.5, mj + md, (z0 + z1) / 2), 2, "#F18E02");
-    // Typende handen op het toetsenbord (DIR-52 #6) — dd-type-l/r animatie.
-    const hl = X(i0 + 0.78, j0 + 0.18), hlY = Y(i0 + 0.78, j0 + 0.18, DH);
-    const hr = X(i0 + 1.06, j0 + 0.18), hrY = Y(i0 + 1.06, j0 + 0.18, DH);
-    g += '<rect x="' + (hl - 3) + '" y="' + (hlY - 3) + '" width="6" height="4" rx="1" fill="#e8b98a" style="transform-box:fill-box;transform-origin:center;animation:dd-type-l .5s steps(2) infinite"/>';
-    g += '<rect x="' + (hr - 3) + '" y="' + (hrY - 3) + '" width="6" height="4" rx="1" fill="#e8b98a" style="transform-box:fill-box;transform-origin:center;animation:dd-type-r .5s steps(2) infinite"/>';
+    // Toetsenbord VÓÓR de monitor op het bureau-blad (DIR-54): klein iso-vlak.
+    // De handen zitten aan het poppetje (agentSprite), niet hier — nooit los.
+    g += poly([P(i0 + 0.72, j0 + 0.88, DH), P(i0 + 1.38, j0 + 0.88, DH),
+      P(i0 + 1.38, j0 + 1.10, DH), P(i0 + 0.72, j0 + 1.10, DH)], "#262b31");
+    g += poly([P(i0 + 0.72, j0 + 0.88, DH), P(i0 + 1.38, j0 + 0.88, DH),
+      P(i0 + 1.38, j0 + 0.92, DH), P(i0 + 0.72, j0 + 0.92, DH)], "#3a414a"); // bovenrand
+    g += '<line x1="' + X(i0 + 0.78, j0 + 0.98) + '" y1="' + Y(i0 + 0.78, j0 + 0.98, DH) + '" x2="' + X(i0 + 1.32, j0 + 0.98) + '" y2="' + Y(i0 + 1.32, j0 + 0.98, DH) + '" stroke="#4a525c" stroke-width="0.6"/>';
     return g;
   };
   const sofa = (i0, j0) => {
@@ -1520,8 +1522,12 @@ function isoRoomInner() {
     const fx = X(f.i, f.j), fy = Y(f.i, f.j, 0);
     let g = '<g id="iso-seat-' + d.key + '" class="iso-seat" style="transform-box:fill-box;transform-origin:center bottom">';
     g += '<ellipse cx="' + fx + '" cy="' + fy + '" rx="13" ry="6" fill="#000" opacity="0.18"/>';
+    // De sprite in een .typer-groep: subtiele "aan het werk"-beweging die bij het
+    // poppetje hoort (DIR-54). Verborgen zit-sprite tijdens roamen → geen typen
+    // aan een leeg bureau; geen losse handen (armen zitten in de sprite).
+    g += '<g class="typer" style="transform-box:fill-box;transform-origin:center bottom">';
     g += '<use href="#' + d.sym + '" x="' + (fx - 15) + '" y="' + (fy - 37) + '" width="30" height="37"/>';
-    g += '</g>';
+    g += '</g></g>';
     return g;
   };
 
@@ -1699,6 +1705,10 @@ const OFFICE_HTML = `<!doctype html>
   .roam.aait .roam-fig{ animation:dd-bend 1s ease-in-out infinite; }
   /* DIR-51: rekken/strekken in-place aan het eigen bureau (zit-sprite pulseert). */
   .iso-seat.rekt{ animation:dd-stretch 1.1s ease-in-out; }
+  /* DIR-54: subtiele "aan het werk"-beweging op de zit-sprite (hoort bij het
+     poppetje; verborgen zit-sprite tijdens roamen = automatisch geen typen). */
+  @keyframes dd-worktype{ 0%,100%{ transform:translateY(0) } 50%{ transform:translateY(-1px) } 25%,75%{ transform:translateX(.4px) } }
+  .iso-seat .typer{ animation:dd-worktype 1.5s ease-in-out infinite; }
   /* DIR-53: in-SVG movers (rondlopende agents + hond) — positie via JS translate. */
   .mover{ transform-box:view-box; }
   .roammover .draag{ display:none; }
@@ -1816,7 +1826,9 @@ const OFFICE_HTML = `<!doctype html>
 </head><body>
 <div class="scene-host">
   <div class="scene-wrap">
-    <svg viewBox="0 0 640 360" width="100%" height="100%" shape-rendering="crispEdges" style="display:block;position:absolute;inset:0;image-rendering:pixelated;">
+    <!-- DIR-54: strakkere viewBox rond de iso-kamer (16:9) → vult het scherm
+         beter, gecentreerd, niets afgeknipt; movers gebruiken dezelfde userspace. -->
+    <svg viewBox="90 42 462 260" width="100%" height="100%" shape-rendering="crispEdges" style="display:block;position:absolute;inset:0;image-rendering:pixelated;">
       <defs>
         <pattern id="brick" width="32" height="16" patternUnits="userSpaceOnUse">
           <rect width="32" height="16" fill="#6d271c"/>
