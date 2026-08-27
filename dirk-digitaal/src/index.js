@@ -1527,7 +1527,8 @@ function isoRoomInner() {
   // de down-left-recessie, glyphs niet gespiegeld = leesbaar). DIR-63 (fix): op de
   // BAKSTEEN net onder de bovenrand (baseline volgt de top-trim -0.5, offset omlaag),
   // niet in de donkere driehoek boven de muur; 2 regels, vrij van de hex.
-  sWall += '<g transform="matrix(1,-0.5,0,1,182,138)" font-family="\'Press Start 2P\',monospace">'
+  // DIR-64-bijlage: iets naar links zodat er duidelijke marge is tot de hex-wandkunst.
+  sWall += '<g transform="matrix(1,-0.5,0,1,164,138)" font-family="\'Press Start 2P\',monospace">'
     + '<text x="0" y="0" font-size="7" fill="#f4f0e6">NO PAIN</text>'
     + '<text x="0" y="12" font-size="7" fill="#f4f0e6">NO GAIN</text>'
     + '</g>';
@@ -1576,30 +1577,47 @@ function isoRoomInner() {
   // 2×2 grid-ordening met gangpad, compactere vloer (N 11→9) → voller, minder
   // dode vloer. Vaste footprints zodat de 4 bureaus exact even groot zijn.
   const DW = 2.4, DD = 1.4, DH = 18; // bureau: breed×diep×hoog
-  const desk = (i0, j0) => {
+  // DIR-65: monitor op een STANDAARD (voet+nek+paneel) achter op het blad; scherm
+  // richting viewer; een zichtbaar TOETSENBORD ervóór met typende handen (per bureau
+  // een id zodat de roam-JS ze verbergt als de agent weg is).
+  const desk = (i0, j0, key) => {
     let g = shadow(i0, j0, DW, DD);
     g += box(i0, j0, DW, DD, 0, DH, "#b07a34", "#9c6a2b", "#855620"); // hout-bureau
-    const mi = i0 + 0.85, mj = j0 + 0.28, mw = 0.9, md = 0.42, z0 = DH, z1 = DH + 13;
-    // Toetsenbord aan de AGENT-kant (DIR-55): tussen het zittende poppetje (lage j)
-    // en de monitor, dus vóór de monitor getekend zodat de monitor het deels
-    // verdekt — logisch correct (agent → toetsenbord → monitor).
-    g += poly([P(i0 + 0.82, j0 + 0.04, DH), P(i0 + 1.40, j0 + 0.04, DH),
-      P(i0 + 1.40, j0 + 0.24, DH), P(i0 + 0.82, j0 + 0.24, DH)], "#262b31");
-    g += poly([P(i0 + 0.82, j0 + 0.04, DH), P(i0 + 1.40, j0 + 0.04, DH),
-      P(i0 + 1.40, j0 + 0.08, DH), P(i0 + 0.82, j0 + 0.08, DH)], "#3a414a"); // bovenrand
-    g += '<line x1="' + X(i0 + 0.88, j0 + 0.14) + '" y1="' + Y(i0 + 0.88, j0 + 0.14, DH) + '" x2="' + X(i0 + 1.34, j0 + 0.14) + '" y2="' + Y(i0 + 1.34, j0 + 0.14, DH) + '" stroke="#4a525c" stroke-width="0.6"/>';
-    g += box(mi, mj, mw, md, z0, z1, "#2a2f3a", "#20242c", "#181b21"); // monitor-body (occludeert toetsenbord-voorkant)
-    // scherm-vlak (SW, naar voren), huisstijl-blauw + oranje stip
-    g += poly([P(mi, mj + md, z0 + 2), P(mi + mw, mj + md, z0 + 2),
-      P(mi + mw, mj + md, z1 - 2), P(mi, mj + md, z1 - 2)], "#015092");
-    g += circ(X(mi + mw * 0.5, mj + md), Y(mi + mw * 0.5, mj + md, (z0 + z1) / 2), 2, "#F18E02");
+    // Monitor-op-standaard, naar achteren (lage j, agent-kant).
+    const mi = i0 + 0.72, mw = 0.95, mbj = j0 + 0.30;       // paneel-achterkant j
+    g += box(i0 + 1.02, j0 + 0.32, 0.36, 0.2, DH, DH + 2, "#20242c", "#181b21", "#141821"); // voet
+    g += box(i0 + 1.16, j0 + 0.39, 0.08, 0.06, DH + 2, DH + 9, "#2a2f3a", "#20242c", "#181b21"); // nek
+    g += box(mi, mbj, mw, 0.12, DH + 9, DH + 22, "#2a2f3a", "#20242c", "#181b21"); // schermpaneel (dun+breed)
+    g += poly([P(mi, mbj + 0.12, DH + 11), P(mi + mw, mbj + 0.12, DH + 11),
+      P(mi + mw, mbj + 0.12, DH + 20), P(mi, mbj + 0.12, DH + 20)], "#015092"); // blauw scherm (viewer)
+    g += circ(X(mi + mw * 0.5, mbj + 0.12), Y(mi + mw * 0.5, mbj + 0.12, DH + 15.5), 1.6, "#F18E02");
+    // Toetsenbord VÓÓR het scherm (hogere j, zichtbaar op het vrije stuk blad).
+    g += poly([P(i0 + 0.72, j0 + 0.80, DH), P(i0 + 1.48, j0 + 0.80, DH),
+      P(i0 + 1.48, j0 + 1.08, DH), P(i0 + 0.72, j0 + 1.08, DH)], "#2b3138");
+    g += poly([P(i0 + 0.72, j0 + 0.80, DH), P(i0 + 1.48, j0 + 0.80, DH),
+      P(i0 + 1.48, j0 + 0.84, DH), P(i0 + 0.72, j0 + 0.84, DH)], "#3f4750"); // bovenrand
+    for (let r = 0; r < 2; r++) { const jj = j0 + 0.90 + r * 0.08;
+      g += '<line x1="' + X(i0 + 0.78, jj) + '" y1="' + Y(i0 + 0.78, jj, DH) + '" x2="' + X(i0 + 1.42, jj) + '" y2="' + Y(i0 + 1.42, jj, DH) + '" stroke="#4a525c" stroke-width="0.5"/>'; }
+    // Typende handen op het toetsenbord (id per bureau → verbergen bij roamen).
+    const hlx = X(i0 + 0.92, j0 + 0.94), hly = Y(i0 + 0.92, j0 + 0.94, DH);
+    const hrx = X(i0 + 1.26, j0 + 0.94), hry = Y(i0 + 1.26, j0 + 0.94, DH);
+    g += '<g id="iso-hands-' + key + '" class="typehands">'
+      + '<rect x="' + (hlx - 3) + '" y="' + (hly - 3) + '" width="6" height="4" rx="1" fill="#e8b98a" style="transform-box:fill-box;transform-origin:center;animation:dd-type-l .5s steps(2) infinite"/>'
+      + '<rect x="' + (hrx - 3) + '" y="' + (hry - 3) + '" width="6" height="4" rx="1" fill="#e8b98a" style="transform-box:fill-box;transform-origin:center;animation:dd-type-r .5s steps(2) infinite"/>'
+      + '</g>';
     return g;
   };
+  // DIR-69: herkenbare iso-zitbank — zitting + 2 kussens + hoge rugleuning (achter)
+  // + armleuningen links/rechts. Mosterdgeel, één lichtrichting.
   const sofa = (i0, j0) => {
-    let g = shadow(i0, j0, 1.5, 2.2);
-    g += box(i0, j0, 1.5, 2.2, 0, 13, "#d9a520", "#c48f16", "#a67810");     // zitting mosterd
-    g += box(i0, j0, 0.5, 2.2, 0, 24, "#c99a1a", "#b3860f", "#96700c");     // rugleuning (achter)
-    g += box(i0, j0, 1.5, 0.35, 0, 20, "#cf9d1c", "#b98a12", "#9c760f");    // armleuning (rechts)
+    const W = 2.4, D = 1.3;                                   // breed (i) × diep (j)
+    let g = shadow(i0, j0, W, D);
+    g += box(i0, j0, W, D, 0, 7, "#b98614", "#a4770f", "#8a640b");         // zit-basis
+    g += box(i0, j0, W, 0.32, 7, 22, "#d9a520", "#c48f16", "#a67810");     // rugleuning (achter, lage j)
+    g += box(i0, j0, 0.34, D, 0, 13, "#cf9d1c", "#b98a12", "#9c760f");     // armleuning links (lage i)
+    g += box(i0 + W - 0.34, j0, 0.34, D, 0, 13, "#cf9d1c", "#b98a12", "#9c760f"); // armleuning rechts
+    g += box(i0 + 0.40, j0 + 0.36, 0.75, D - 0.5, 7, 11, "#e4b83e", "#cf9d1c", "#b3870f"); // kussen 1
+    g += box(i0 + 1.25, j0 + 0.36, 0.75, D - 0.5, 7, 11, "#e4b83e", "#cf9d1c", "#b3870f"); // kussen 2
     return g;
   };
   const printer = (i0, j0) => {
@@ -1608,16 +1626,24 @@ function isoRoomInner() {
     g += pline([P(i0 + 0.2, j0 + 0.35, 15), P(i0 + 0.9, j0 + 0.35, 15)], "#8a929c", 2); // papiergleuf
     return g;
   };
+  // DIR-67: herkenbaar koffiezetapparaat — body + top + uitloop-nis (donkere holte)
+  // + kopje + knopjes/display (oranje accent).
   const koffie = (i0, j0) => {
-    let g = shadow(i0, j0, 1.0, 1.0);
-    g += box(i0, j0, 1.0, 1.0, 0, 24, "#33383f", "#262b31", "#1b1f24");
-    g += circ(X(i0 + 0.5, j0 + 1.0), Y(i0 + 0.5, j0 + 1.0, 15), 2, "#F18E02"); // lampje
-    return g;
-  };
-  const kast = (i0, j0) => { // archiefkast — vult zijstrook, meer 'ingericht'
-    let g = shadow(i0, j0, 1.1, 1.1);
-    g += box(i0, j0, 1.1, 1.1, 0, 20, "#3a6ea0", "#2f5c87", "#244a6e"); // huisstijl-blauw
-    g += pline([P(i0 + 0.15, j0 + 1.1, 13), P(i0 + 0.95, j0 + 1.1, 13)], "#8fb4d6", 2); // lade-lijn
+    const W = 0.95, D = 0.95;
+    let g = shadow(i0, j0, W, D);
+    g += box(i0, j0, W, D, 0, 26, "#3a4048", "#2b3037", "#1f242a");        // body
+    g += box(i0, j0, W, D, 26, 28, "#474e57", "#3a4049", "#2b3038");       // top (waterreservoir)
+    // Uitloop-nis op de SW-voorkant (viewer): donkere holte + zetgroep erboven.
+    const nx = X(i0 + 0.5, j0 + D), ny = Y(i0 + 0.5, j0 + D, 10);
+    g += '<rect x="' + (nx - 9) + '" y="' + (ny - 12) + '" width="18" height="14" fill="#0d1013"/>'; // nis
+    g += '<rect x="' + (nx - 4) + '" y="' + (ny - 12) + '" width="8" height="4" fill="#20262c"/>';   // zetgroep
+    g += '<rect x="' + (nx - 3) + '" y="' + (ny - 4) + '" width="6" height="4" fill="#f4f0e6"/>';     // kopje
+    g += '<rect x="' + (nx - 3) + '" y="' + (ny - 5) + '" width="6" height="1.5" fill="#d9c9a8"/>';   // koffie
+    // Knopjes + display op de voorkant boven de nis.
+    g += '<rect x="' + (nx - 8) + '" y="' + (ny - 22) + '" width="10" height="4" fill="#12161a"/>';   // display
+    g += '<rect x="' + (nx - 7) + '" y="' + (ny - 21) + '" width="5" height="2" fill="#3fd06a"/>';    // display-tekst
+    g += '<circle cx="' + (nx + 6) + '" cy="' + (ny - 20) + '" r="1.6" fill="#F18E02"/>';             // knop
+    g += '<circle cx="' + (nx + 6) + '" cy="' + (ny - 15) + '" r="1.6" fill="#c2c8d0"/>';             // knop
     return g;
   };
   const plant = (i0, j0) => {
@@ -1649,6 +1675,11 @@ function isoRoomInner() {
     const fx = X(f.i, f.j), fy = Y(f.i, f.j, 0);
     let g = '<g id="iso-seat-' + d.key + '" class="iso-seat" style="transform-box:fill-box;transform-origin:center bottom">';
     g += '<ellipse cx="' + fx + '" cy="' + fy + '" rx="13" ry="6" fill="#000" opacity="0.18"/>';
+    // DIR-65: zwarte bureaustoel — poot/voet + zitting + rugleuning achter de agent
+    // (vóór de sprite getekend zodat het poppetje er vóór/op zit).
+    g += '<rect x="' + (fx - 1.5) + '" y="' + (fy - 4) + '" width="3" height="6" fill="#111418"/>';    // gaspoot
+    g += '<rect x="' + (fx - 11) + '" y="' + (fy - 24) + '" width="22" height="20" rx="4" fill="#1a1e24"/>'; // rugleuning
+    g += '<rect x="' + (fx - 12) + '" y="' + (fy - 9) + '" width="24" height="6" rx="2" fill="#23272e"/>';   // zitting
     // De sprite in een .typer-groep: subtiele "aan het werk"-beweging die bij het
     // poppetje hoort (DIR-54). Verborgen zit-sprite tijdens roamen → geen typen
     // aan een leeg bureau; geen losse handen (armen zitten in de sprite).
@@ -1665,13 +1696,13 @@ function isoRoomInner() {
   // 2×2 bureau-blok met agents (rijen i=1.5 & 5.0, kolommen j=1.3 & 4.8).
   for (const d of ISO_DESKS) {
     const f = isoAgentFeet(d);
-    put(f.i, f.j, agentSprite(d));                              // agent (achter) eerst
-    put(d.i0 + DW / 2, d.j0 + DD / 2 + 0.02, desk(d.i0, d.j0)); // bureau occludeert
+    put(f.i, f.j, agentSprite(d));                                 // agent (achter) eerst
+    put(d.i0 + DW / 2, d.j0 + DD / 2 + 0.02, desk(d.i0, d.j0, d.key)); // bureau occludeert
   }
-  put(7.2 + 0.75, 6.6 + 1.1, sofa(7.2, 6.6));   // bank in voor-linker hoek
+  put(7.2 + 1.2, 6.6 + 0.65, sofa(7.2, 6.6));   // bank in voor-linker hoek
   put(7.4 + 0.5, 0.1 + 0.5, koffie(7.4, 0.1));  // koffie voor-rechter hoek
   put(0.1 + 0.55, 3.6 + 0.55, printer(0.1, 3.6)); // printer achter-midden
-  put(3.8 + 0.55, 0.1 + 0.55, kast(3.8, 0.1));  // kast langs rechter zijstrook
+  // DIR-68: blauwe archiefkast verwijderd (vloer eronder blijft over).
   put(0.2 + 0.4, 0.2 + 0.4, plant(0.2, 0.2));   // plant achter-rechter hoek
   put(0.2 + 0.4, 7.6 + 0.4, plant(0.2, 7.6));   // plant achter-linker hoek
   put(5.6 + 0.6, 7.4 + 0.5, mand(5.6, 7.4));    // hondenmand bij de bank
@@ -2094,11 +2125,8 @@ const OFFICE_HTML = `<!doctype html>
 <div class="overlay" id="chat-overlay" role="dialog" aria-label="GSC-agent chat">
   <div class="chat">
     <header><b id="chat-title">GSC-agent</b><button class="x" id="chat-close" aria-label="Sluiten">X</button></header>
-    <!-- DIR-62: "collega erbij" — team-regel + aanhaak-chips -->
-    <div class="collega-bar">
-      <span class="collega-team" id="collega-team">Albert</span>
-      <span class="collega-chips" id="collega-chips"></span>
-    </div>
+    <!-- DIR-64: collega-bar (feature A, DIR-62) tijdelijk verwijderd — chat weer solo.
+         De backend-collega-code (chatLoop/buildCollegas/collegaPack) blijft inert staan. -->
     <div class="chatrow">
       <div class="portret" aria-hidden="true">
         <div class="avatar" id="chat-avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#albert"/><rect class="ooglid" x="14" y="17" width="12" height="4" fill="#e8b98a"/></svg></div>
@@ -2204,12 +2232,11 @@ const OFFICE_HTML = `<!doctype html>
       +'</svg>';
   }
 
-  function openChat(key){ if(key) useAgent(key); buildCollegaChips(); overlay.style.display='flex'; }
+  function openChat(key){ if(key) useAgent(key); overlay.style.display='flex'; }
   function closeChat(){ overlay.style.display='none'; }
   function useAgent(key){
     if(cur.key===key) return;              // zelfde agent → gesprek behouden
     cur=AGENTS[key];
-    actieveCollegas={}; buildCollegaChips();   // DIR-62: nieuw gesprek → team reset naar de lead
     titleEl.textContent=cur.titel;
     avatarEl.innerHTML=avatarSVG(cur);
     pnaamEl.innerHTML='&#9679; '+cur.naam;
@@ -2228,7 +2255,7 @@ const OFFICE_HTML = `<!doctype html>
     }
   }
   function setConnected(v){ connected=v; connectBtn.style.display=v?'none':'inline-block';
-    if(notice) notice.style.display=v?'none':'block'; buildCollegaChips(); }
+    if(notice) notice.style.display=v?'none':'block'; }
   function setActive(v){ composer.style.display=v?'flex':'none'; switchBtn.style.display=v?'inline-block':'none'; }
   function addBubble(who,text){ var b=document.createElement('div'); b.className='bubble '+who;
     b.textContent=text; msgs.appendChild(b); msgs.scrollTop=msgs.scrollHeight; return b; }
@@ -2351,11 +2378,9 @@ const OFFICE_HTML = `<!doctype html>
     if(busy) return; busy=true; sendBtn.disabled=true;
     if(avatarEl) avatarEl.classList.add('aantypen');   // portret 'typt' terwijl antwoord binnenkomt (DIR-40)
     var bubble=addBubble('agent',''); setTyping(bubble); var got='';
-    // DIR-62: geef de aangehaakte collega's mee zodat de backend hun data-tools + persona toevoegt.
-    var pl=Object.assign({}, payload||{}); var ck=Object.keys(actieveCollegas); if(ck.length) pl.collegas=ck;
     try{
       var r=await fetch(cur.chat,{ method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(pl) });
+        body:JSON.stringify(payload||{}) });   // DIR-64: solo — geen collegas meer meesturen
       var ct=r.headers.get('Content-Type')||'';
       if(!r.ok||ct.indexOf('application/json')!==-1){
         var j={}; try{ j=await r.json(); }catch(e){}
@@ -2445,9 +2470,14 @@ const OFFICE_HTML = `<!doctype html>
     function ortho(a,b){ return [{i:b.i,j:a.j},{i:b.i,j:b.j}]; }
     var HUB={i:4.45,j:3.75};   // centrale gang-hub (vrij van meubels)
     var HOMES=${JSON.stringify(Object.fromEntries(ISO_DESKS.map((d) => { const f = isoAgentFeet(d); return [d.key, { i: +f.i.toFixed(2), j: +f.j.toFixed(2) }]; })))};
-    var KOFFIE={i:6.6,j:1.2,drag:'koffie'}, PRINT={i:1.4,j:3.6,drag:'papier'};
-    var PLANTA={i:1.4,j:1.2,drag:'gieter'}, PLANTB={i:1.4,j:6.8,drag:'gieter'};
-    var DOGTILE={i:5.0,j:6.6,bend:true};
+    // DIR-66: bestemmingen met een pad dat OM de bezette bureau-tegels heen loopt
+    // (via de gangpaden), zodat niemand dwars door/over een bureau loopt. path =
+    // waypoints ná de HUB. Ilona's plant-sta-tegels staan nu PAL naast de plant.
+    var KOFFIE={i:6.9,j:0.9,drag:'koffie',path:[{i:4.45,j:0.7},{i:6.9,j:0.7},{i:6.9,j:0.9}]}; // via front-lane, om Ilona's bureau (D3) heen
+    var PRINT={i:1.55,j:3.6,drag:'papier',path:[{i:2.1,j:3.75},{i:1.55,j:3.6}]};              // via j-gangpad
+    var PLANTA={i:1.05,j:0.55,drag:'gieter',path:[{i:4.45,j:0.7},{i:1.05,j:0.7},{i:1.05,j:0.55}]}; // pal naast plant (0.2,0.2)
+    var PLANTB={i:1.05,j:7.2,drag:'gieter',path:[{i:4.45,j:7.2},{i:1.05,j:7.2}]};             // pal naast plant (0.2,7.6)
+    var DOGTILE={i:4.95,j:6.95,bend:true,path:[{i:4.45,j:6.95},{i:4.95,j:6.95}]};             // bij de mand, via aisle
     var GEWONE=[KOFFIE,PRINT];   // DIR-60: alleen zichtbare carry-acties (geen leeg rondje)
     var ILONA=[PLANTA,PLANTB];
     var ACTIES={ gsc:GEWONE, ga4:GEWONE, ads:ILONA, anton:GEWONE };
@@ -2493,26 +2523,28 @@ const OFFICE_HTML = `<!doctype html>
       if(reduce) return;   // reduced-motion: blijven zitten
       var home=HOMES[key], spots=ACTIES[key];
       var w=walker(roam), busy=false;
+      var hands=document.getElementById('iso-hands-'+key);
       function trip(dest,opts){
         busy=true; actief=true;
         if(seat) seat.style.visibility='hidden';        // bureau leeg terwijl weg
+        if(hands) hands.style.visibility='hidden';       // DIR-65: typen stopt bij weg
         w.jumpTo(home.i,home.j);                        // zonder animatie op de zit-tegel
         roam.style.display='block';
         void roam.getBoundingClientRect();              // reflow → geen teleport (start staat vast)
-        // Directe start (geen requestAnimationFrame — dat pauzeert op een verborgen
-        // tab en zou de roamer laten vasthangen). setTimeout(0) volstaat.
         setTimeout(function(){
-          var out=ortho(home,HUB).concat(ortho(HUB,dest));
+          // out = via HUB, dan het dest-pad (om de bureaus heen); back = omgekeerd.
+          var out=ortho(home,HUB).concat(dest.path || ortho(HUB,dest));
+          var back=out.slice().reverse().slice(1).concat([home]);
           w.walkPath(out,function(){
             if(opts.drag) roam.classList.add('draagt-'+opts.drag);
             if(opts.bend) roam.classList.add('aait');
             setTimeout(function(){
               roam.classList.remove('aait');
-              var back=ortho(dest,HUB).concat(ortho(HUB,home));
               w.walkPath(back,function(){
                 roam.classList.remove('links','draagt-koffie','draagt-papier','draagt-gieter');
                 roam.style.display='none';
                 if(seat) seat.style.visibility='';
+                if(hands) hands.style.visibility='';
                 busy=false; actief=false; plan();
               });
             }, opts.wacht||1700);
@@ -2543,7 +2575,10 @@ const OFFICE_HTML = `<!doctype html>
     (function(){
       var dog=document.getElementById('iso-dog'); if(!dog) return;
       var BED={i:${(ISO_MAND.i0 + 0.6).toFixed(2)},j:${(ISO_MAND.j0 + 0.5).toFixed(2)}};
-      var SPOTS=[{i:4.4,j:3.7},{i:6.4,j:3.2},{i:3.2,j:6.2},{i:5.6,j:6.2}];
+      // DIR-66: alle dog-tegels in de vrije gangpaden (i≈4.45-kolom of j-gangpad),
+      // en het mand-pad loopt via i4.45 (tussen D2 en D4) → nooit dwars door een bureau.
+      var SPOTS=[{i:4.45,j:3.2},{i:4.45,j:6.9},{i:2.0,j:3.75},{i:4.45,j:7.9}];
+      var BEDPATH=[{i:4.45,j:7.9},{i:BED.i,j:7.9},{i:BED.i,j:BED.j}];
       var w=walker(dog);
       w.jumpTo(BED.i,BED.j);
       function inBed(){ dog.style.transform='translate('+sx(BED.i,BED.j).toFixed(1)+'px,'+(sy(BED.i,BED.j)-5).toFixed(1)+'px)'; w.setDepth(14.45); }
@@ -2555,7 +2590,7 @@ const OFFICE_HTML = `<!doctype html>
       // inBed(): zichtbaar IN de mand — iets omhoog (op het kussen, boven de
       // bodem) + hogere data-k dan de mand (14.1) zodat de hond ná de mand tekent.
       function loop(){
-        if(Math.random()<0.55){ var p=w.pos(); w.walkPath(ortho(p,HUB).concat(ortho(HUB,BED)),function(){ inBed(); rust(function(){ setTimeout(loop,2500); }); }); }
+        if(Math.random()<0.55){ var p=w.pos(); w.walkPath(ortho(p,HUB).concat(BEDPATH),function(){ inBed(); rust(function(){ setTimeout(loop,2500); }); }); }
         else { var g=SPOTS[Math.floor(Math.random()*SPOTS.length)]; var q=w.pos(); w.walkPath(ortho(q,HUB).concat(ortho(HUB,g)),function(){ setTimeout(loop,2200+Math.random()*3000); }); }
       }
       setTimeout(loop,1500);
