@@ -1758,9 +1758,14 @@ function isoRoomInner() {
 
   // Lopende agents (SVG-movers, verborgen tot een actie) — sprite met feet op de
   // oorsprong; JS zet style.transform=translate(feetX,feetY) + data-k + restack.
+  // DIR-76: data-i/data-j starten op de eigen zit-tegel, zodat ook een mover die nog
+  // nooit gelopen heeft op een echte positie gesorteerd wordt (niet op 0,0).
   let sMovers = "";
   for (const d of ISO_DESKS) {
-    sMovers += '<g class="dobj mover roammover" id="iso-roam-' + d.key + '" data-k="0" tabindex="0" role="button" aria-label="Open ' + d.label + '" style="display:none;cursor:pointer">'
+    const f0 = isoAgentFeet(d);
+    sMovers += '<g class="dobj mover roammover" id="iso-roam-' + d.key + '"'
+      + ' data-k="' + (f0.i + f0.j).toFixed(3) + '" data-i="' + f0.i.toFixed(3) + '" data-j="' + f0.j.toFixed(3) + '"'
+      + ' tabindex="0" role="button" aria-label="Open ' + d.label + '" style="display:none;cursor:pointer">'
       + '<ellipse cx="0" cy="0" rx="12" ry="6" fill="#000" opacity="0.18"/>'
       + '<g class="roamfig">'
       + '<use href="#' + d.sym + '" x="-15" y="-37" width="30" height="37"/>'
@@ -1784,7 +1789,9 @@ function isoRoomInner() {
   // Hond (SVG-mover, DIR-53): ~60% schaal, feet op de oorsprong. Geneste groepen:
   // #iso-dog = positie (JS translate), .dogscale = schaal, .dogpose = zit/lig
   // (CSS), .dogfig = sprite. tail/leg-animatie op de deel-groepen.
-  sMovers += '<g class="dobj mover" id="iso-dog" data-k="0"><g class="dogscale" transform="scale(0.6)"><g class="dogpose"><g class="dogfig" transform="translate(-30,-36)">'
+  sMovers += '<g class="dobj mover" id="iso-dog" data-k="' + (ISO_MAND.i0 + 0.6 + ISO_MAND.j0 + 0.5).toFixed(3) + '"'
+    + ' data-i="' + (ISO_MAND.i0 + 0.6).toFixed(3) + '" data-j="' + (ISO_MAND.j0 + 0.5).toFixed(3) + '">'
+    + '<g class="dogscale" transform="scale(0.6)"><g class="dogpose"><g class="dogfig" transform="translate(-30,-36)">'
     + '<g class="dogtail" style="transform-box:fill-box;transform-origin:right center;animation:dd-tail .5s ease-in-out infinite"><rect x="2" y="14" width="8" height="4" fill="#c99a4e"/></g>'
     + '<rect x="8" y="12" width="34" height="14" fill="#d9a441"/><rect x="8" y="12" width="34" height="4" fill="#e6b755"/>'
     + '<rect x="38" y="8" width="16" height="16" fill="#d9a441"/><rect x="38" y="8" width="16" height="4" fill="#e6b755"/>'
@@ -2600,7 +2607,9 @@ const OFFICE_HTML = `<!doctype html>
       function mark(i,j){ el.setAttribute('data-k',(i+j).toFixed(3));
         el.setAttribute('data-i',i.toFixed(3)); el.setAttribute('data-j',j.toFixed(3)); }
       function jumpTo(i,j){ el.style.transition='none'; put(i,j); mark(i,j); pos={i:i,j:j}; restack(); }
-      function setDepth(k){ el.setAttribute('data-k',(+k).toFixed(3)); restack(); }
+      // DIR-76: ook deze weg zet de LIVE tegel-positie, niet alleen data-k — anders
+      // sorteert restack() die mover op verouderde positiegegevens.
+      function setDepth(i,j){ mark(i,j); restack(); }
       function seg(ti,tj,cb){
         var fi=pos.i, fj=pos.j, dist=Math.abs(ti-fi)+Math.abs(tj-fj);
         if(dist<0.001){ cb&&cb(); return; }
@@ -2701,14 +2710,15 @@ const OFFICE_HTML = `<!doctype html>
       var BEDPATH=[{i:4.45,j:7.9},{i:BED.i,j:7.9},{i:BED.i,j:BED.j}];
       var w=walker(dog);
       w.jumpTo(BED.i,BED.j);
-      function inBed(){ dog.style.transform='translate('+sx(BED.i,BED.j).toFixed(1)+'px,'+(sy(BED.i,BED.j)-5).toFixed(1)+'px)'; w.setDepth(14.45); }
+      function inBed(){ dog.style.transform='translate('+sx(BED.i,BED.j).toFixed(1)+'px,'+(sy(BED.i,BED.j)-5).toFixed(1)+'px)'; w.setDepth(BED.i,BED.j); }
       inBed();
       if(reduce){ dog.classList.add('ligt'); return; }
       function rust(cb){ dog.classList.add('zit');
         setTimeout(function(){ dog.classList.remove('zit'); dog.classList.add('ligt');
           setTimeout(function(){ dog.classList.remove('ligt'); cb(); }, 6000); }, 3000); }
-      // inBed(): zichtbaar IN de mand — iets omhoog (op het kussen, boven de
-      // bodem) + hogere data-k dan de mand (14.1) zodat de hond ná de mand tekent.
+      // inBed(): zichtbaar IN de mand — iets omhoog (op het kussen, boven de bodem).
+      // De diepte komt van zijn eigen mand-tegel: die ligt binnen de footprint van de
+      // mand, dus de footprint-regel (DIR-75) tekent hem ná de mand.
       function loop(){
         if(Math.random()<0.55){ var p=w.pos(); w.walkPath(ortho(p,HUB).concat(BEDPATH),function(){ inBed(); rust(function(){ setTimeout(loop,2500); }); }); }
         else { var g=SPOTS[Math.floor(Math.random()*SPOTS.length)]; var q=w.pos(); w.walkPath(ortho(q,HUB).concat(ortho(HUB,g)),function(){ setTimeout(loop,2200+Math.random()*3000); }); }
