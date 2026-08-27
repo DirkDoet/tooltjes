@@ -2523,9 +2523,14 @@ const OFFICE_HTML = `<!doctype html>
     // DIR-66: bestemmingen met een pad dat OM de bezette bureau-tegels heen loopt
     // (via de gangpaden), zodat niemand dwars door/over een bureau loopt. path =
     // waypoints ná de HUB. Ilona's plant-sta-tegels staan nu PAL naast de plant.
-    var KOFFIE={i:6.9,j:0.9,drag:'koffie',path:[{i:4.45,j:0.7},{i:6.9,j:0.7},{i:6.9,j:0.9}]}; // via front-lane, om Ilona's bureau (D3) heen
+    // DIR-74: koffie én plant-A liepen door de smalle strook ACHTER de bureaus
+    // (j≈0.7), tussen de stoelen en de muur — pal langs (en bij plant-A dwars dóór)
+    // een zittende collega, waar de loper half achter opdook. Beide gaan nu via de
+    // ruime gang aan de KIJKER-kant: eerst vóór het bureau langs (waar de live-diepte
+    // uit DIR-72 de loper netjes vóór het meubel zet), dan pas naar de bestemming.
+    var KOFFIE={i:7.9,j:1.35,drag:'koffie',path:[{i:7.9,j:3.75},{i:7.9,j:1.35}]};             // vóór Ilona's bureau langs, dan omhoog naar de automaat
     var PRINT={i:1.55,j:3.6,drag:'papier',path:[{i:2.1,j:3.75},{i:1.55,j:3.6}]};              // via j-gangpad
-    var PLANTA={i:1.05,j:0.55,drag:'gieter',path:[{i:4.45,j:0.7},{i:1.05,j:0.7},{i:1.05,j:0.55}]}; // pal naast plant (0.2,0.2)
+    var PLANTA={i:0.8,j:1.35,drag:'gieter',path:[{i:4.45,j:3.2},{i:0.8,j:3.2},{i:0.8,j:1.35}]}; // vóór Alberts bureau langs, dan pal vóór de plant (0.2,0.2)
     var PLANTB={i:1.05,j:7.2,drag:'gieter',path:[{i:4.45,j:7.2},{i:1.05,j:7.2}]};             // pal naast plant (0.2,7.6)
     var DOGTILE={i:4.95,j:6.95,bend:true,path:[{i:4.45,j:6.95},{i:4.95,j:6.95}]};             // bij de mand, via aisle
     var GEWONE=[KOFFIE,PRINT];   // DIR-60: alleen zichtbare carry-acties (geen leeg rondje)
