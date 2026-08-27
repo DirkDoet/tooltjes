@@ -40,6 +40,9 @@ import {
   randomKey,
   buildContentSystemPrompt,
   kiesModel,
+  schoonKlantRecord,
+  normaliseerGebruikersnaam,
+  hashKlantWachtwoord,
 } from "../src/index.js";
 import { createHmac } from "node:crypto";
 
@@ -437,4 +440,49 @@ test("kiesModel: alles wat niet in de lijst staat valt terug op Sonnet 5", () =>
     "claude-sonnet-5\n", "gpt-4", "../../etc/passwd", 42, {}, ["claude-opus-5"]]) {
     assert.equal(kiesModel(rommel), "claude-sonnet-5");
   }
+});
+
+// DIR-78: het admin-antwoord mag nooit het wachtwoord-materiaal bevatten.
+test("schoonKlantRecord: geeft koppelingen terug, nooit salt of hash", () => {
+  const c = schoonKlantRecord("abc", {
+    naam: "Klant", adAccountId: "act_1", gscSite: "sc-domain:k.nl",
+    ga4Property: "properties/7", adsCustomerId: "123", adsLoginCustomerId: "456",
+    login: { gebruikersnaam: "klant", salt: "S4LTS4LT", hash: "H4SHH4SH", rondes: 210000 },
+  });
+  assert.equal(c.gebruikersnaam, "klant");
+  assert.equal(c.heeftWachtwoord, true);
+  assert.equal(JSON.stringify(c).includes("S4LTS4LT"), false);
+  assert.equal(JSON.stringify(c).includes("H4SHH4SH"), false);
+  assert.equal("salt" in c, false);
+  assert.equal("hash" in c, false);
+  assert.equal("login" in c, false);
+});
+
+test("schoonKlantRecord: klant zonder login meldt heeftWachtwoord false", () => {
+  const c = schoonKlantRecord("abc", { naam: "Klant" });
+  assert.equal(c.gebruikersnaam, "");
+  assert.equal(c.heeftWachtwoord, false);
+  assert.equal(c.gscSite, "");
+});
+
+test("normaliseerGebruikersnaam: trim + kleine letters (uniciteit case-insensitief)", () => {
+  assert.equal(normaliseerGebruikersnaam("  TestKlant "), "testklant");
+  assert.equal(normaliseerGebruikersnaam("TESTKLANT"), normaliseerGebruikersnaam("testklant"));
+  assert.equal(normaliseerGebruikersnaam(null), "");
+});
+
+test("hashKlantWachtwoord: PBKDF2-SHA256, salted, herhaalbaar met dezelfde salt", async () => {
+  const a = await hashKlantWachtwoord("geheim12345");
+  assert.equal(a.alg, "PBKDF2-SHA256");
+  assert.ok(a.rondes >= 100000);
+  assert.match(a.salt, /^[0-9a-f]{32}$/);
+  assert.match(a.hash, /^[0-9a-f]{64}$/);
+  assert.equal(a.hash.includes("geheim"), false);
+  const zelfde = await hashKlantWachtwoord("geheim12345", a.salt);
+  assert.equal(zelfde.hash, a.hash);
+  const ander = await hashKlantWachtwoord("geheim12346", a.salt);
+  assert.notEqual(ander.hash, a.hash);
+  const andereSalt = await hashKlantWachtwoord("geheim12345");
+  assert.notEqual(andereSalt.salt, a.salt);
+  assert.notEqual(andereSalt.hash, a.hash);
 });
