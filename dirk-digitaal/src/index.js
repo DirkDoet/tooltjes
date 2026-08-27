@@ -1329,8 +1329,9 @@ function isoRoomInner() {
   // Palet — warme vloer (hoofdvlak) + blauwe muren (huisstijl-contrast). Eén
   // lichtrichting links-boven: bevel licht op noord/west-tegelranden, donker
   // op zuid/oost. Vlakke kleuren, geen gradients.
-  const tileA = "#c9a978", tileB = "#bf9d6a", tilePop = "#d3b485"; // warm hout-dambord
-  const bevelL = "#e4cb9d", bevelD = "#93794f";                    // tegel-volume
+  // DIR-61: betonlook-grijze vloer (koele tinten) i.p.v. warme houttegels.
+  const tileA = "#b7bbc0", tileB = "#abafb4", tilePop = "#c2c6ca"; // beton-dambord (subtiele variatie)
+  const bevelL = "#ccd0d4", bevelD = "#888c91";                    // tegel-volume (licht/schaduw)
   const wallLit = "#3a6ea0", wallDark = "#29517a";                 // muur-vlakken
   const capLit = "#cdd9e4", capDark = "#bcc9d6";                   // muur-bovenkant
   const skirtL = "#1c3a58", skirtR = "#173049";                    // plint
@@ -1351,9 +1352,25 @@ function isoRoomInner() {
       sFloor += pline([R, B, L], bevelD, 1.5); // zuid/oost-randen — schaduw
     }
   }
-  // Vloer-rand (diamant-omtrek) crisp warm-donker kader.
+  // Vloer-rand (diamant-omtrek) crisp grijs kader.
   sFloor += poly([P(0, 0, 0), P(N, 0, 0), P(N, N, 0), P(0, N, 0)],
-    "none", ' stroke="#6f5a35" stroke-width="2"');
+    "none", ' stroke="#6b6f74" stroke-width="2"');
+
+  // DIR-61: Oosters/Perzisch tapijt links-vóór, plat op de vloer (iso-geprojecteerd,
+  // ~2×3 tegels), warm rood/blauw met rand + middenmotief. Los van de hondenmand.
+  // In sFloor → ligt onder de meubels/agents; die lopen er correct overheen.
+  (function(){
+    const ri = 3.0, rj = 5.4, rw = 2.0, rh = 3.0;          // links-vóór, vrij van bureaus/mand
+    const inset = (a, b, m) => [P(ri + m, rj + m, 0), P(ri + rw - m, rj + m, 0),
+      P(ri + rw - m, rj + rh - m, 0), P(ri + m, rj + rh - m, 0)];
+    sFloor += poly(inset(0, 0, 0.0), "#2c4a7a");           // blauwe rand-basis
+    sFloor += poly(inset(0, 0, 0.28), "#8a2f2f");          // rood veld
+    sFloor += poly(inset(0, 0, 0.5), "none", ' stroke="#d9b45a" stroke-width="1"'); // gouden lijn
+    // Midden-medaillon (ruit) — goud + blauw hart.
+    const cx = ri + rw / 2, cj = rj + rh / 2;
+    sFloor += poly([P(cx, cj - 0.55, 0), P(cx + 0.5, cj, 0), P(cx, cj + 0.55, 0), P(cx - 0.5, cj, 0)], "#d9b45a");
+    sFloor += poly([P(cx, cj - 0.32, 0), P(cx + 0.29, cj, 0), P(cx, cj + 0.32, 0), P(cx - 0.29, cj, 0)], "#2c4a7a");
+  })();
 
   // RECHTER MUUR (vlak j=0) — schaduw.
   sWall += poly([P(0, 0, 0), P(N, 0, 0), P(N, 0, H), P(0, 0, H)], wallDark);
@@ -1398,12 +1415,18 @@ function isoRoomInner() {
   // Baksteen-textuur op beide muren (subtiel, blauw blijft doorschijnen).
   sWall += '<g transform="' + MR + '" opacity="0.45"><rect x="0" y="0" width="180" height="72" fill="url(#brick)"/></g>';
   sWall += '<g transform="' + ML + '" opacity="0.45"><rect x="0" y="0" width="180" height="72" fill="url(#brick)"/></g>';
-  // Graffiti op de rechter muur — arcade/pixel, huisstijlkleuren.
+  // Graffiti op de rechter muur — arcade/pixel, huisstijlkleuren. Ruimer gespreid
+  // (DIR-59-bijlage): NO PAIN NO GAIN verhuist naar de linkermuur → minder gedrukt.
   sWall += '<g transform="' + MR + '" font-family="\'Press Start 2P\',monospace">'
-    + '<text x="12" y="18" font-size="8" fill="#F18E02">CREATIVITY</text>'
+    + '<text x="12" y="16" font-size="8" fill="#F18E02">CREATIVITY</text>'
     + '<text x="8" y="30" font-size="8" fill="#F18E02">NEVER DIES</text>'
-    + '<text x="30" y="46" font-size="10" fill="#3285D1">DREAM BIG</text>'
-    + '<text x="14" y="60" font-size="6.5" fill="#e8e2d8">NO PAIN NO GAIN</text>'
+    + '<text x="26" y="54" font-size="10" fill="#3285D1">DREAM BIG</text>'
+    + '</g>';
+  // NO PAIN NO GAIN op het LINKER muur-vlak — geschoren (matrix 1,-0.5 laat de
+  // tekst mee-hellen met de down-left-recessie én leesbaar, glyphs niet gespiegeld),
+  // in de voor-onderhoek, vrij van de hex-wandkunst.
+  sWall += '<g transform="matrix(1,-0.5,0,1,150,196)" font-family="\'Press Start 2P\',monospace">'
+    + '<text x="0" y="0" font-size="7" fill="#e8e2d8">NO PAIN NO GAIN</text>'
     + '</g>';
   // Hex-wandkunst op de linker muur — honingraat met kleurvlakken + oranje rand.
   const hexPts = [[38, 10], [60, 10], [49, 26], [71, 26], [38, 42], [60, 42]];
@@ -1566,9 +1589,19 @@ function isoRoomInner() {
       + '<use href="#' + d.sym + '" x="-15" y="-37" width="30" height="37"/>'
       + '<g class="poot poot-a"><rect x="-6" y="-2" width="4" height="7" fill="#2a3138"/></g>'
       + '<g class="poot poot-b"><rect x="1" y="-2" width="4" height="7" fill="#2a3138"/></g>'
-      + '<g class="draag draag-koffie"><rect x="7" y="-14" width="6" height="7" fill="#e8e2d8"/></g>'
-      + '<g class="draag draag-papier"><rect x="7" y="-15" width="7" height="9" fill="#f4f0e6"/></g>'
-      + '<g class="draag draag-gieter"><rect x="7" y="-13" width="7" height="6" fill="#3fa06a"/></g>'
+      // DIR-60: herkenbare draag-items (koffiekopje / papier / gieter met tuit+handvat).
+      + '<g class="draag draag-koffie">'
+      + '<path d="M14 -15 q3 1.5 0 4" stroke="#c9c2b4" stroke-width="1.5" fill="none"/>'   // oor
+      + '<rect x="7" y="-15" width="7" height="8" rx="1" fill="#e8e2d8"/><rect x="7" y="-15" width="7" height="2" fill="#c9c2b4"/>'
+      + '<rect x="9" y="-19" width="1" height="3" fill="#e8e2d8" opacity=".55"/><rect x="11.5" y="-20" width="1" height="3" fill="#e8e2d8" opacity=".55"/>' // stoom
+      + '</g>'
+      + '<g class="draag draag-papier"><rect x="7" y="-16" width="7" height="9" fill="#f4f0e6"/><rect x="8.5" y="-13" width="4" height="1" fill="#9aa2aa"/><rect x="8.5" y="-11" width="4" height="1" fill="#9aa2aa"/></g>'
+      + '<g class="draag draag-gieter">'
+      + '<rect x="6" y="-14" width="8" height="7" rx="1.5" fill="#3fa06a"/><rect x="6" y="-14" width="8" height="2" rx="1" fill="#57b97e"/>' // body
+      + '<polygon points="13,-13 20,-16 20,-13.5 13.5,-10.5" fill="#2f7f56"/>'                 // tuit
+      + '<rect x="19" y="-16.5" width="2.5" height="1.6" rx=".6" fill="#256a48"/>'              // sproeikop
+      + '<path d="M7 -14 q3 -5 6 0" stroke="#2f7f56" stroke-width="1.6" fill="none"/>'          // handvat
+      + '</g>'
       + '</g></g>';
   }
   // Hond (SVG-mover, DIR-53): ~60% schaal, feet op de oorsprong. Geneste groepen:
@@ -1769,6 +1802,18 @@ const OFFICE_HTML = `<!doctype html>
     word-break:break-word; font-family:var(--leesfont); font-size:1.02rem; line-height:1.5; }
   .bubble.user{ align-self:flex-end; background:var(--teal2); color:#08211d; }
   .bubble.agent{ align-self:flex-start; background:#fff; }
+  /* DIR-59: opgemaakte markdown in agent-bubbles (tabellen/koppen/lijsten). */
+  .bubble .md-tablewrap{ overflow-x:auto; max-width:100%; margin:.45rem 0; -webkit-overflow-scrolling:touch; }
+  .bubble table.md-table{ border-collapse:collapse; font-size:.86rem; font-variant-numeric:tabular-nums; }
+  .bubble .md-table th, .bubble .md-table td{ border:1px solid rgba(23,23,23,.28); padding:3px 8px; white-space:nowrap; }
+  .bubble .md-table th{ background:#efe8d7; font-weight:700; }
+  .bubble .md-table tbody tr:nth-child(even){ background:rgba(23,23,23,.05); }
+  .bubble .md-h{ margin:.55rem 0 .28rem; font-family:'Press Start 2P',monospace; line-height:1.35; }
+  .bubble h3.md-h{ font-size:.95rem; } .bubble h4.md-h{ font-size:.82rem; } .bubble h5.md-h{ font-size:.74rem; }
+  .bubble .md-list{ margin:.3rem 0 .3rem 1.15rem; padding:0; }
+  .bubble .md-list li{ margin:.12rem 0; }
+  .bubble .md-p{ margin:.38rem 0; }
+  .bubble .md-p:first-child, .bubble .md-h:first-child{ margin-top:0; }
   /* typing-indicator (AC-1): pixel-puntjes die verschijnen/verdwijnen */
   .typing{ display:inline-flex; gap:5px; align-items:center; padding:2px 1px; }
   .typing i{ width:7px; height:7px; background:var(--accent); display:inline-block;
@@ -2118,6 +2163,43 @@ const OFFICE_HTML = `<!doctype html>
     msgs.appendChild(b); msgs.scrollTop=msgs.scrollHeight;
   }
 
+  // DIR-59: veilige markdown → HTML voor agent-antwoorden. Escape eerst ALLE HTML
+  // uit de agent-tekst; render daarna alléén bekende constructies (pipe-tabellen,
+  // koppen, bold/italic, lijsten, alinea's). Geen raw-HTML-injectie mogelijk.
+  function mdToHtml(md){
+    function esc(s){ return String(s).split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;'); }
+    function inl(s){ s=s.replace(/\\*\\*([^*]+)\\*\\*/g,'<strong>$1</strong>'); s=s.replace(/\\*([^*\\n]+)\\*/g,'<em>$1</em>'); return s; }
+    function isSep(l){ return l.indexOf('|')>=0 && /^[\\s:|-]*-{2,}[\\s:|-]*$/.test(l); }
+    function cells(l){ var t=l.trim(); if(t.charAt(0)==='|')t=t.slice(1); if(t.charAt(t.length-1)==='|')t=t.slice(0,-1); return t.split('|').map(function(c){return c.trim();}); }
+    function isNum(s){ return /\\d/.test(s) && /^[-+]?[\\d.,%€$\\s]+$/.test(s); }
+    var lines=esc(md).split('\\n'), i=0, n=lines.length, html='';
+    while(i<n){
+      var l=lines[i];
+      if(l.indexOf('|')>=0 && i+1<n && isSep(lines[i+1])){
+        var head=cells(l); i+=2; var rows=[];
+        while(i<n && lines[i].indexOf('|')>=0 && lines[i].trim()!==''){ rows.push(cells(lines[i])); i++; }
+        var aligns=head.map(function(_,ci){ return (rows.length && rows.every(function(r){return isNum(r[ci]||'');}))?'right':'left'; });
+        var t='<div class="md-tablewrap"><table class="md-table"><thead><tr>';
+        head.forEach(function(h,ci){ t+='<th style="text-align:'+aligns[ci]+'">'+inl(h)+'</th>'; });
+        t+='</tr></thead><tbody>';
+        rows.forEach(function(r){ t+='<tr>'; head.forEach(function(_,ci){ t+='<td style="text-align:'+aligns[ci]+'">'+inl(r[ci]||'')+'</td>'; }); t+='</tr>'; });
+        html+=t+'</tbody></table></div>'; continue;
+      }
+      var hm=/^(#{1,3})\\s+(.*)$/.exec(l);
+      if(hm){ var lv=hm[1].length+2; html+='<h'+lv+' class="md-h">'+inl(hm[2].trim())+'</h'+lv+'>'; i++; continue; }
+      if(/^\\s*[-*]\\s+/.test(l) || /^\\s*\\d+\\.\\s+/.test(l)){
+        var ordered=/^\\s*\\d+\\.\\s+/.test(l), tag=ordered?'ol':'ul', items='';
+        while(i<n && (/^\\s*[-*]\\s+/.test(lines[i]) || /^\\s*\\d+\\.\\s+/.test(lines[i]))){ items+='<li>'+inl(lines[i].replace(/^\\s*([-*]|\\d+\\.)\\s+/,''))+'</li>'; i++; }
+        html+='<'+tag+' class="md-list">'+items+'</'+tag+'>'; continue;
+      }
+      if(l.trim()===''){ i++; continue; }
+      var para=l; i++;
+      while(i<n && lines[i].trim()!=='' && lines[i].indexOf('|')<0 && !/^#{1,3}\\s+/.test(lines[i]) && !/^\\s*[-*]\\s+/.test(lines[i]) && !/^\\s*\\d+\\.\\s+/.test(lines[i])){ para+=' '+lines[i]; i++; }
+      html+='<p class="md-p">'+inl(para.trim())+'</p>';
+    }
+    return html;
+  }
+
   async function streamChat(payload, dashboard){
     if(busy) return; busy=true; sendBtn.disabled=true;
     if(avatarEl) avatarEl.classList.add('aantypen');   // portret 'typt' terwijl antwoord binnenkomt (DIR-40)
@@ -2147,6 +2229,7 @@ const OFFICE_HTML = `<!doctype html>
       else {
         var doc=parseDoc(got);
         if(doc){ bubble.textContent=doc.markdown; toonDownload(doc.slug, doc.markdown); }
+        else { bubble.innerHTML=mdToHtml(got); }   // DIR-59: normale antwoorden als opgemaakte markdown
         setActive(true);
       }
     }catch(e){ bubble.textContent='Kon de agent niet bereiken. Probeer het opnieuw.'; }
@@ -2216,7 +2299,7 @@ const OFFICE_HTML = `<!doctype html>
     var KOFFIE={i:6.6,j:1.2,drag:'koffie'}, PRINT={i:1.4,j:3.6,drag:'papier'};
     var PLANTA={i:1.4,j:1.2,drag:'gieter'}, PLANTB={i:1.4,j:6.8,drag:'gieter'};
     var DOGTILE={i:5.0,j:6.6,bend:true};
-    var GEWONE=[KOFFIE,PRINT,{i:4.0,j:3.6}];
+    var GEWONE=[KOFFIE,PRINT];   // DIR-60: alleen zichtbare carry-acties (geen leeg rondje)
     var ILONA=[PLANTA,PLANTB];
     var ACTIES={ gsc:GEWONE, ga4:GEWONE, ads:ILONA, anton:GEWONE };
     var actief=false;   // gedeelde lock: max ÉÉN loper tegelijk
@@ -2293,12 +2376,13 @@ const OFFICE_HTML = `<!doctype html>
       function petDog(){ trip(DOGTILE, { wacht:1900, bend:true }); }
       function act(){
         var r=Math.random();
-        if(r<0.30){ stretch(); return; }
+        if(r<0.22){ stretch(); return; }                // rekken in-place (geen lock)
         if(busy||actief){ plan(); return; }             // max 1 loper
-        if(r<0.45){ overleg(); return; }
-        if(key!=='ads' && r<0.72){ petDog(); return; }
+        if(r<0.34){ overleg(); return; }
+        if(key!=='ads' && r<0.52){ petDog(); return; }  // hond aaien (niet Ilona)
+        // rest = zichtbare kantooractie met item: koffie/printer (of planten water = Ilona)
         var s=spots[Math.floor(Math.random()*spots.length)];
-        if(s) trip(s, { drag:s.drag, bend:s.bend, wacht:1700 }); else stretch();
+        if(s) trip(s, { drag:s.drag, bend:s.bend, wacht:1900 }); else stretch();
       }
       function plan(){ setTimeout(act, 8000+Math.random()*9000); }
       plan();
