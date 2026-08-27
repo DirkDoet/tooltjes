@@ -1285,6 +1285,107 @@ function sseResponse(text, extraHeaders) {
   });
 }
 
+// ── DIR-47 · Iso-herbouw stuk 1: isometrische kamer-shell (Habbo-lat) ────────
+// Proof-of-concept op een branch — NIET deployen. Losse SVG naast de front-
+// scène (OFFICE_HTML); chat/agents-logica ongemoeid. Echte 2:1 iso-projectie:
+// ruit-grid vloer + 2 iso-muren die in een achter-hoek samenkomen, één
+// lichtrichting (links-boven), vlakke kleuren, crispe randen.
+function isoRoomSVG() {
+  const Ox = 320, Oy = 170, TW = 40, TH = 20, N = 8, H = 130;
+  const X = (i, j) => Ox + (i - j) * (TW / 2);
+  const Y = (i, j, z) => Oy + (i + j) * (TH / 2) - z;
+  const P = (i, j, z) => X(i, j) + "," + Y(i, j, z);
+  const poly = (pts, fill, extra) =>
+    '<polygon points="' + pts.join(" ") + '" fill="' + fill + '"' + (extra || "") + "/>";
+  const line = (x1, y1, x2, y2, stroke, w, op) =>
+    '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 +
+    '" stroke="' + stroke + '" stroke-width="' + w + '" opacity="' + op + '"/>';
+
+  // Palet — één lichtrichting (links-boven): top-vlakken lichtst, dan vloer,
+  // dan verlichte (linker) muur, dan schaduw (rechter) muur. Vlakke kleuren.
+  const fA = "#b9c6d3", fB = "#c3cfda", fBorder = "#a6b4c1";  // vloer-checker
+  const wallLit = "#3a6ea0", wallDark = "#29517a";            // muur-vlakken
+  const capLit = "#cdd9e4", capDark = "#bcc9d6";              // muur-bovenkant
+  const skirtL = "#1c3a58", skirtR = "#173049";               // plint
+  const brick = "#20456a";                                    // baksteen-voegen
+  const ORANJE = "#F18E02", ORANJE_D = "#c9760a";             // huisstijl-accent
+
+  let s = "";
+
+  // VLOER — ruit-grid van rhombus-tegels (2:1), subtiele tegelranden.
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      const col = ((i + j) % 2 === 0) ? fA : fB;
+      s += poly([P(i, j, 0), P(i + 1, j, 0), P(i + 1, j + 1, 0), P(i, j + 1, 0)],
+        col, ' stroke="' + fBorder + '" stroke-width="1"');
+    }
+  }
+  // Vloer-rand (diamant-omtrek) crisp donker kader.
+  s += poly([P(0, 0, 0), P(N, 0, 0), P(N, N, 0), P(0, N, 0)],
+    "none", ' stroke="#8b99a6" stroke-width="1.5"');
+
+  // RECHTER MUUR (vlak j=0) — schaduw.
+  s += poly([P(0, 0, 0), P(N, 0, 0), P(N, 0, H), P(0, 0, H)], wallDark);
+  // LINKER MUUR (vlak i=0) — verlicht.
+  s += poly([P(0, 0, 0), P(0, N, 0), P(0, N, H), P(0, 0, H)], wallLit);
+
+  // Baksteen-voegen (subtiele horizontale iso-lijnen per muur).
+  for (let k = 1; k <= 4; k++) {
+    const z = k * 26;
+    s += line(X(0, 0), Y(0, 0, z), X(0, N), Y(0, N, z), brick, 1, 0.35); // links
+    s += line(X(0, 0), Y(0, 0, z), X(N, 0), Y(N, 0, z), "#12365a", 1, 0.35); // rechts
+  }
+
+  // Plint (donkere band onderaan elke muur) — Habbo-detail, diepte-anker.
+  s += poly([P(0, 0, 0), P(0, N, 0), P(0, N, 10), P(0, 0, 10)], skirtL);
+  s += poly([P(0, 0, 0), P(N, 0, 0), P(N, 0, 10), P(0, 0, 10)], skirtR);
+
+  // Oranje huisstijl-accentstrip net onder de muur-bovenkant.
+  s += poly([P(0, 0, H - 14), P(0, N, H - 14), P(0, N, H - 6), P(0, 0, H - 6)], ORANJE);
+  s += poly([P(0, 0, H - 14), P(N, 0, H - 14), P(N, 0, H - 6), P(0, 0, H - 6)], ORANJE_D);
+
+  // Muur-bovenkant (dikte) — top-vlakken, lichtst.
+  s += poly([
+    X(0, 0) + "," + Y(0, 0, H), X(0, N) + "," + Y(0, N, H),
+    (X(0, N) - 7) + "," + (Y(0, N, H) - 3.5), (X(0, 0) - 7) + "," + (Y(0, 0, H) - 3.5)
+  ], capLit); // linker cap (extrude -eX)
+  s += poly([
+    X(0, 0) + "," + Y(0, 0, H), X(N, 0) + "," + Y(N, 0, H),
+    (X(N, 0) + 7) + "," + (Y(N, 0, H) - 3.5), (X(0, 0) + 7) + "," + (Y(0, 0, H) - 3.5)
+  ], capDark); // rechter cap (extrude -eY)
+
+  // Achter-hoek — verticale naad waar de 2 muren samenkomen, crisp benadrukt.
+  s += line(X(0, 0), Y(0, 0, 0), X(0, 0), Y(0, 0, H), "#0f2e4d", 1.5, 0.9);
+
+  const W = 640, HH = 360;
+  return '<svg viewBox="0 0 ' + W + ' ' + HH + '" width="100%" ' +
+    'xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" ' +
+    'style="image-rendering:pixelated;display:block">' +
+    '<rect x="0" y="0" width="' + W + '" height="' + HH + '" fill="#2b2f36"/>' +
+    s +
+    '<text x="320" y="30" text-anchor="middle" font-family="\'Press Start 2P\',monospace" ' +
+    'font-size="16" letter-spacing="2" fill="' + ORANJE + '">DIRK DIGITAAL</text>' +
+    '</svg>';
+}
+
+const ISO_HTML = `<!doctype html>
+<html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dirk Digitaal — iso-kamer (WIP DIR-47)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;background:#20242b;color:#cdd9e4;font-family:'Press Start 2P',monospace}
+  .wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px}
+  .room{width:min(92vw,760px);background:#2b2f36;border:2px solid #0f2e4d;box-shadow:0 8px 0 #12161c}
+  .note{font-size:10px;color:#7f8b98;letter-spacing:1px}
+</style></head>
+<body><div class="wrap">
+  <div class="room">${isoRoomSVG()}</div>
+  <div class="note">DIR-47 · iso kamer-shell (stuk 1/3) · proof — niet gedeployed</div>
+</div></body></html>`;
+
 const OFFICE_HTML = `<!doctype html>
 <html lang="nl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2698,6 +2799,11 @@ export default {
         // Onbekende/ongeldige sleutel → gewoon het kantoor, zonder Meta-scoping (AC-6).
       }
       return new Response(OFFICE_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
+    // Iso-kamer proof (DIR-47, WIP) — losse iso-scène naast de front-scène.
+    if (path === "/iso" && request.method === "GET") {
+      return new Response(ISO_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
     // Admin-beheer klanten (DIR-30) — achter ADMIN_PASSWORD.
