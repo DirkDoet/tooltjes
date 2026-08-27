@@ -1370,7 +1370,7 @@ const OFFICE_HTML = `<!doctype html>
   /* chat-portret naast de chat (AC-2) */
   .chatrow{ display:flex; flex:1; min-height:0; }
   .chatmain{ flex:1; display:flex; flex-direction:column; min-width:0; }
-  .portret{ flex:0 0 84px; display:flex; flex-direction:column; align-items:center; padding:.6rem;
+  .portret{ position:relative; flex:0 0 84px; display:flex; flex-direction:column; align-items:center; padding:.6rem;
     background:#14202b; border-right:3px solid var(--ink); }
   .portret .avatar{ width:72px; height:72px; background:#0b1219; border:2px solid var(--accent);
     display:flex; align-items:center; justify-content:center; font-size:2.2rem; }
@@ -1381,9 +1381,20 @@ const OFFICE_HTML = `<!doctype html>
   @keyframes dd-eyelid{ 0%,92%,100%{ opacity:0; } 94%,97%{ opacity:1; } }
   .portret .avatar.aantypen svg{ animation:dd-portret-typ .5s ease-in-out infinite; transform-origin:50% 100%; }
   .portret .avatar.aantypen .ooglid{ animation:dd-eyelid 1.4s steps(1,end) infinite; }
-  @keyframes dd-portret-typ{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-2px); } }
+  @keyframes dd-portret-typ{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-3px); } }
+  /* Zichtbare typ-indicator: '···'-ballonnetje boven de kop terwijl het antwoord streamt (DIR-46 D) */
+  .portret .typ-indicator{ display:none; position:absolute; top:2px; left:50%; transform:translateX(-50%);
+    align-items:center; gap:4px; background:#f4f0e6; border:2px solid var(--ink); border-radius:11px; padding:4px 8px; z-index:2; }
+  .portret .typ-indicator::after{ content:''; position:absolute; bottom:-6px; left:50%; transform:translateX(-50%);
+    border-left:5px solid transparent; border-right:5px solid transparent; border-top:6px solid var(--ink); }
+  .portret .typ-indicator span{ width:6px; height:6px; border-radius:50%; background:#2a2f36; display:inline-block;
+    animation:dd-typdot 1s ease-in-out infinite; }
+  .portret .typ-indicator span:nth-child(2){ animation-delay:.18s; }
+  .portret .typ-indicator span:nth-child(3){ animation-delay:.36s; }
+  #chat-avatar.aantypen ~ .typ-indicator{ display:inline-flex; }
+  @keyframes dd-typdot{ 0%,100%{ transform:translateY(0); opacity:.35; } 50%{ transform:translateY(-4px); opacity:1; } }
   @media (prefers-reduced-motion: reduce){ .scene-wrap *{ animation:none !important; }
-    .portret .avatar .ooglid, .portret .avatar.aantypen svg{ animation:none !important; } }
+    .portret .avatar .ooglid, .portret .avatar.aantypen svg, .portret .typ-indicator span{ animation:none !important; } }
   @media (max-width:640px){ .portret{ flex-basis:60px; }
     .portret .avatar{ width:48px; height:48px; font-size:1.5rem; } }
 
@@ -1505,8 +1516,6 @@ const OFFICE_HTML = `<!doctype html>
         </symbol>
         <!-- Gertjan (GA4): bril, korte baard, licht overhemd (DIR-29) -->
         <symbol id="gertjan" viewBox="0 0 40 48">
-          <rect x="6" y="31" width="4" height="16" fill="#aeb4bb"/>
-          <rect x="30" y="31" width="4" height="16" fill="#aeb4bb"/>
           <rect x="9" y="30" width="22" height="18" fill="#c7ccd2"/>
           <rect x="9" y="30" width="22" height="4" fill="#aeb4bb"/>
           <rect x="19" y="30" width="2" height="18" fill="#aeb4bb"/>
@@ -1600,16 +1609,16 @@ const OFFICE_HTML = `<!doctype html>
         <rect x="458" y="106" width="14" height="12" fill="#3a2f18"/>
         <rect x="460" y="112" width="10" height="10" fill="#ffb733" style="animation:dd-bulb 3.6s ease-in-out infinite"/>
       </g>
-      <!-- mosterdgele bank: 90° verticaal, tegen de rechtermuur, boven/achter de printer (DIR-44) -->
+      <!-- mosterdgele bank: horizontaal, plat op de vloer in de rechter-hoek, vóór/naast de printer (DIR-46) -->
       <g>
-        <rect x="622" y="176" width="14" height="84" fill="#c99a1e"/>
-        <rect x="622" y="176" width="14" height="6" fill="#d9ab2c"/>
-        <rect x="600" y="176" width="22" height="12" fill="#b8891a"/>
-        <rect x="600" y="248" width="22" height="12" fill="#b8891a"/>
-        <rect x="602" y="188" width="20" height="60" fill="#d9ab2c"/>
-        <rect x="606" y="192" width="14" height="26" fill="#e4b83e"/>
-        <rect x="606" y="220" width="14" height="26" fill="#e4b83e"/>
-        <rect x="600" y="188" width="6" height="60" fill="#7d5c10"/>
+        <rect x="556" y="336" width="80" height="6" fill="#7d5c10"/>       <!-- schaduw onder -->
+        <rect x="556" y="300" width="9" height="22" fill="#b8891a"/>        <!-- armleuning links -->
+        <rect x="627" y="300" width="9" height="22" fill="#b8891a"/>        <!-- armleuning rechts -->
+        <rect x="565" y="304" width="62" height="14" fill="#e4b83e"/>       <!-- rugleuning -->
+        <rect x="568" y="307" width="26" height="9" fill="#d9ab2c"/>        <!-- rugkussen 1 -->
+        <rect x="598" y="307" width="26" height="9" fill="#d9ab2c"/>        <!-- rugkussen 2 -->
+        <rect x="556" y="318" width="80" height="8" fill="#d9ab2c"/>        <!-- zitting bovenkant -->
+        <rect x="556" y="326" width="80" height="12" fill="#c99a1e"/>       <!-- zitting voorkant -->
       </g>
       <use href="#plant" x="500" y="176" width="34" height="52"/>
       <use href="#plant" x="104" y="182" width="30" height="46"/>
@@ -1645,11 +1654,11 @@ const OFFICE_HTML = `<!doctype html>
         <use href="#deskEmpty" x="410" y="232" width="104" height="83"/>
         <g class="ilona-hand" style="transform-origin:446px 297px;animation:dd-type-l .5s steps(2) infinite">
           <rect x="442" y="283" width="6" height="9" fill="#2f7f6e"/>
-          <rect x="441" y="290" width="9" height="6" fill="#f0c79a"/>
+          <rect x="441" y="290" width="9" height="6" fill="#e8b98a"/>
         </g>
         <g class="ilona-hand" style="transform-origin:463px 297px;animation:dd-type-r .5s steps(2) infinite">
           <rect x="460" y="283" width="6" height="9" fill="#2f7f6e"/>
-          <rect x="457" y="290" width="9" height="6" fill="#f0c79a"/>
+          <rect x="457" y="290" width="9" height="6" fill="#e8b98a"/>
         </g>
         <rect x="414" y="206" width="100" height="24" fill="#0b1219"/>
         <rect x="414" y="206" width="100" height="24" fill="none" stroke="#e58fa8" stroke-width="1.5"/>
@@ -1721,14 +1730,12 @@ const OFFICE_HTML = `<!doctype html>
         <text x="221" y="216" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">Albert</text>
         <text x="218" y="225" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">GSC / SEO-specialist</text>
       </g>
-      <!-- paars kleed: links-achter (DIR-44) -->
-      <ellipse cx="78" cy="306" rx="46" ry="12" fill="#2a2f34"/>
-      <ellipse cx="78" cy="304" rx="38" ry="9" fill="#6d3b8f" opacity="0.55"/>
-      <ellipse cx="78" cy="303" rx="30" ry="6" fill="#824aa8" opacity="0.5"/>
-      <!-- hondenmand op het kleed (DIR-44) -->
-      <ellipse cx="78" cy="318" rx="34" ry="9" fill="#5b3a1e"/>
-      <ellipse cx="78" cy="316" rx="27" ry="6.5" fill="#7a5330"/>
-      <ellipse cx="78" cy="315" rx="20" ry="4.5" fill="#9c6b3f"/>
+      <!-- hondenmand: één duidelijk mandje in de linker-achterhoek (DIR-46, vervangt kleed + dubbele ovaal) -->
+      <ellipse cx="74" cy="300" rx="33" ry="9" fill="#4a2f18"/>       <!-- grondschaduw onder de mand -->
+      <rect x="43" y="294" width="62" height="11" rx="3" fill="#5b3a1e"/>   <!-- mand-wand (voorkant, geeft 3D-hoogte) -->
+      <ellipse cx="74" cy="294" rx="31" ry="8" fill="#6b4423"/>       <!-- bovenrand van de mand -->
+      <ellipse cx="74" cy="294" rx="23" ry="5.5" fill="#31200f"/>    <!-- binnenkant (diepte) -->
+      <ellipse cx="74" cy="296" rx="20" ry="4.5" fill="#caa06a"/>    <!-- kussen in de mand -->
       <polygon points="0,300 640,300 640,360 0,360" fill="#000" opacity="0.10"/>
     </svg>
 
@@ -1825,6 +1832,7 @@ const OFFICE_HTML = `<!doctype html>
       <div class="portret" aria-hidden="true">
         <div class="avatar" id="chat-avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#albert"/><rect class="ooglid" x="14" y="17" width="12" height="4" fill="#e8b98a"/></svg></div>
         <div class="pnaam" id="chat-pnaam">&#9679; Albert</div>
+        <div class="typ-indicator" aria-hidden="true"><span></span><span></span><span></span></div>
       </div>
       <div class="chatmain">
         <div class="msgs" id="chat-msgs">
@@ -2131,7 +2139,7 @@ const OFFICE_HTML = `<!doctype html>
         trip({ l: o.l + (home.l < o.l ? -9 : 9), b: o.b }, { wacht:3000 });
       }
       // Naar de hondenmand links-achter lopen en zichtbaar bukken/aaien (DIR-44 AC-6).
-      function petDog(){ trip({l:15,b:14}, { wacht:1900, bend:true }); }
+      function petDog(){ trip({l:16,b:20}, { wacht:1900, bend:true }); }
       function act(){
         var r=Math.random();
         // Rekken/strekken gebeurt aan het eigen bureau (geen looplock nodig) → mag altijd, dus zichtbaar vaak.
@@ -2164,7 +2172,7 @@ const OFFICE_HTML = `<!doctype html>
 (function(){
   var dog=document.querySelector('.dog'); if(!dog) return;
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var BED={l:13,b:18};   // op de verplaatste hondenmand links-achter (DIR-44 AC-2/3)
+  var BED={l:12,b:24};   // in de hondenmand in de linker-achterhoek (DIR-46 B)
   var SPOTS=[{l:34,b:8},{l:58,b:8},{l:72,b:16},{l:46,b:18},{l:82,b:9}];
   var pos={l:6,b:6};
   dog.style.left=pos.l+'%'; dog.style.bottom=pos.b+'%';
