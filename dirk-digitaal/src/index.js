@@ -1527,7 +1527,8 @@ function isoRoomInner() {
   // de down-left-recessie, glyphs niet gespiegeld = leesbaar). DIR-63 (fix): op de
   // BAKSTEEN net onder de bovenrand (baseline volgt de top-trim -0.5, offset omlaag),
   // niet in de donkere driehoek boven de muur; 2 regels, vrij van de hex.
-  sWall += '<g transform="matrix(1,-0.5,0,1,182,138)" font-family="\'Press Start 2P\',monospace">'
+  // DIR-64-bijlage: iets naar links zodat er duidelijke marge is tot de hex-wandkunst.
+  sWall += '<g transform="matrix(1,-0.5,0,1,164,138)" font-family="\'Press Start 2P\',monospace">'
     + '<text x="0" y="0" font-size="7" fill="#f4f0e6">NO PAIN</text>'
     + '<text x="0" y="12" font-size="7" fill="#f4f0e6">NO GAIN</text>'
     + '</g>';
@@ -2094,11 +2095,8 @@ const OFFICE_HTML = `<!doctype html>
 <div class="overlay" id="chat-overlay" role="dialog" aria-label="GSC-agent chat">
   <div class="chat">
     <header><b id="chat-title">GSC-agent</b><button class="x" id="chat-close" aria-label="Sluiten">X</button></header>
-    <!-- DIR-62: "collega erbij" — team-regel + aanhaak-chips -->
-    <div class="collega-bar">
-      <span class="collega-team" id="collega-team">Albert</span>
-      <span class="collega-chips" id="collega-chips"></span>
-    </div>
+    <!-- DIR-64: collega-bar (feature A, DIR-62) tijdelijk verwijderd — chat weer solo.
+         De backend-collega-code (chatLoop/buildCollegas/collegaPack) blijft inert staan. -->
     <div class="chatrow">
       <div class="portret" aria-hidden="true">
         <div class="avatar" id="chat-avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#albert"/><rect class="ooglid" x="14" y="17" width="12" height="4" fill="#e8b98a"/></svg></div>
@@ -2204,12 +2202,11 @@ const OFFICE_HTML = `<!doctype html>
       +'</svg>';
   }
 
-  function openChat(key){ if(key) useAgent(key); buildCollegaChips(); overlay.style.display='flex'; }
+  function openChat(key){ if(key) useAgent(key); overlay.style.display='flex'; }
   function closeChat(){ overlay.style.display='none'; }
   function useAgent(key){
     if(cur.key===key) return;              // zelfde agent → gesprek behouden
     cur=AGENTS[key];
-    actieveCollegas={}; buildCollegaChips();   // DIR-62: nieuw gesprek → team reset naar de lead
     titleEl.textContent=cur.titel;
     avatarEl.innerHTML=avatarSVG(cur);
     pnaamEl.innerHTML='&#9679; '+cur.naam;
@@ -2228,7 +2225,7 @@ const OFFICE_HTML = `<!doctype html>
     }
   }
   function setConnected(v){ connected=v; connectBtn.style.display=v?'none':'inline-block';
-    if(notice) notice.style.display=v?'none':'block'; buildCollegaChips(); }
+    if(notice) notice.style.display=v?'none':'block'; }
   function setActive(v){ composer.style.display=v?'flex':'none'; switchBtn.style.display=v?'inline-block':'none'; }
   function addBubble(who,text){ var b=document.createElement('div'); b.className='bubble '+who;
     b.textContent=text; msgs.appendChild(b); msgs.scrollTop=msgs.scrollHeight; return b; }
@@ -2351,11 +2348,9 @@ const OFFICE_HTML = `<!doctype html>
     if(busy) return; busy=true; sendBtn.disabled=true;
     if(avatarEl) avatarEl.classList.add('aantypen');   // portret 'typt' terwijl antwoord binnenkomt (DIR-40)
     var bubble=addBubble('agent',''); setTyping(bubble); var got='';
-    // DIR-62: geef de aangehaakte collega's mee zodat de backend hun data-tools + persona toevoegt.
-    var pl=Object.assign({}, payload||{}); var ck=Object.keys(actieveCollegas); if(ck.length) pl.collegas=ck;
     try{
       var r=await fetch(cur.chat,{ method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(pl) });
+        body:JSON.stringify(payload||{}) });   // DIR-64: solo — geen collegas meer meesturen
       var ct=r.headers.get('Content-Type')||'';
       if(!r.ok||ct.indexOf('application/json')!==-1){
         var j={}; try{ j=await r.json(); }catch(e){}
