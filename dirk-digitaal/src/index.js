@@ -1265,6 +1265,107 @@ async function callAnthropic(env, system, messages, tools) {
   return resp.json();
 }
 
+// ── DIR-62 · "Collega erbij" (multi-agent aanpak A) ─────────────────────────
+// Gedeelde agentische tool-loop: dispatch tool_use naar een naam→fn-map.
+async function chatLoop(env, system, convo, tools, dispatch) {
+  for (let i = 0; i < 5; i++) {
+    const resp = await callAnthropic(env, system, convo, tools);
+    if (!resp || !resp.content) return null;
+    const parsed = parseAssistant(resp.content);
+    if (resp.stop_reason === "tool_use" && parsed.toolUses.length) {
+      convo.push({ role: "assistant", content: resp.content });
+      const resultaten = [];
+      for (const tu of parsed.toolUses) {
+        let out;
+        try { const fn = dispatch[tu.name]; out = fn ? await fn(tu.input) : { error: "onbekende tool" }; }
+        catch (e) { out = { error: "kon deze data niet ophalen" }; }
+        resultaten.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out) });
+      }
+      convo.push({ role: "user", content: resultaten });
+      continue;
+    }
+    return parsed.text;
+  }
+  return "";
+}
+
+const AGENT_NAAM = { gsc: "Albert (GSC/SEO)", ga4: "Gertjan (GA4)", ads: "Ilona (Google Ads)", anton: "Anton (content)" };
+
+// Laadt de tool + data-bron van één aanhakende collega (sessie-scoped, auto-select
+// van de eerste bron als er nog niets gekozen is). Geeft null als niet bruikbaar
+// (bv. niet gekoppeld). GSC/GA4/Ads vallen onder dezelfde Google-token.
+async function collegaPack(env, stub, token, key) {
+  if (key === "gsc") {
+    if (!token) return null;
+    let st = {}; try { st = await (await stub.fetch("https://do/chat/state")).json(); } catch (e) {}
+    let gsc = st && st.gsc;
+    if (!gsc || !gsc.actief) {
+      const sites = await fetchGscSites(token);
+      if (!sites || !sites.length) return null;
+      gsc = await selectSite(stub, token, sites[0].siteUrl, sites.map((s) => s.siteUrl));
+      if (!gsc) return null;
+    }
+    const site = gsc.actief;
+    return { tool: gscTool(), note: "Albert (GSC/SEO) haakt aan — gebruik `gsc_query` voor live Search Console-data van " + site + ".",
+      dispatch: { gsc_query: (input) => fetchGscQuery(token, site, input) } };
+  }
+  if (key === "ga4") {
+    if (!token) return null;
+    let st = {}; try { st = await (await stub.fetch("https://do/chat/state-ga4")).json(); } catch (e) {}
+    let ga4 = st && st.ga4;
+    if (!ga4 || !ga4.actief) {
+      const props = await fetchGa4Properties(token);
+      if (!props || !props.length) return null;
+      ga4 = await selectGa4Property(stub, token, props[0].property, props);
+      if (!ga4) return null;
+    }
+    const property = ga4.actief;
+    return { tool: ga4Tool(), note: "Gertjan (GA4) haakt aan — gebruik `ga4_report` voor live Google Analytics 4-data van " + property + ".",
+      dispatch: { ga4_report: (input) => fetchGa4Query(token, property, input) } };
+  }
+  if (key === "ads") {
+    if (!token || !env.GOOGLE_ADS_DEVELOPER_TOKEN) return null;
+    let st = {}; try { st = await (await stub.fetch("https://do/chat/state-ilona")).json(); } catch (e) {}
+    let ads = st && st.ads;
+    if (!ads || !ads.actief) {
+      const res = await fetchAdsCustomers(token, env);
+      if (!res || res.error || !res.accounts || !res.accounts.length) return null;
+      ads = await selectAdsCustomer(stub, token, env, res.accounts[0].customer, res.accounts, res.accounts[0].loginCid);
+      if (!ads) return null;
+    }
+    const customer = ads.actief, loginCid = ads.loginCid;
+    return { tool: adsTool(), note: "Ilona (Google Ads) haakt aan — gebruik `ads_report` voor live Google Ads-data.",
+      dispatch: { ads_report: (input) => fetchAdsReport(token, env, customer, input, loginCid) } };
+  }
+  if (key === "anton") {
+    return { tool: null, note: "Anton (content) haakt aan — help ook met tekst/schrijfwerk waar dat de vraag dient.", dispatch: {} };
+  }
+  return null;
+}
+
+// Bouwt de aanhakende collega's (excl. de lead) tot extra tools + systeem-notitie
+// + dispatch-map. body.collegas = ['ga4', ...]. Alleen bruikbare collega's tellen.
+async function buildCollegas(env, stub, token, leadKey, body) {
+  const keys = (body && Array.isArray(body.collegas) ? body.collegas : [])
+    .filter((k) => k && k !== leadKey && AGENT_NAAM[k]);
+  const tools = [], notes = [], namen = []; let dispatch = {};
+  for (const k of keys) {
+    const pack = await collegaPack(env, stub, token, k);
+    if (!pack) continue;
+    if (pack.tool) tools.push(pack.tool);
+    notes.push(pack.note);
+    namen.push(AGENT_NAAM[k].split(" ")[0]);
+    dispatch = Object.assign(dispatch, pack.dispatch);
+  }
+  let note = "";
+  if (namen.length) {
+    note = "\n\nJe werkt in DIT gesprek samen met collega('s): " + notes.join(" ") +
+      " Beantwoord de vraag als team over álle beschikbare bronnen, in jij-vorm, zonder verzonnen data. " +
+      "Onderteken je antwoord met '" + (AGENT_NAAM[leadKey].split(" ")[0]) + " & " + namen.join(" & ") + "'.";
+  }
+  return { tools, note, dispatch };
+}
+
 // Verpakt platte tekst als een SSE-stream die de bestaande frontend (content_block_delta) leest.
 function sseResponse(text, extraHeaders) {
   const enc = new TextEncoder();
@@ -1422,11 +1523,13 @@ function isoRoomInner() {
     + '<text x="8" y="30" font-size="8" fill="#F18E02">NEVER DIES</text>'
     + '<text x="26" y="54" font-size="10" fill="#3285D1">DREAM BIG</text>'
     + '</g>';
-  // NO PAIN NO GAIN op het LINKER muur-vlak — geschoren (matrix 1,-0.5 laat de
-  // tekst mee-hellen met de down-left-recessie én leesbaar, glyphs niet gespiegeld),
-  // in de voor-onderhoek, vrij van de hex-wandkunst.
-  sWall += '<g transform="matrix(1,-0.5,0,1,150,196)" font-family="\'Press Start 2P\',monospace">'
-    + '<text x="0" y="0" font-size="7" fill="#e8e2d8">NO PAIN NO GAIN</text>'
+  // NO PAIN NO GAIN op het LINKER muur-vlak — geschoren (matrix 1,-0.5 helt mee met
+  // de down-left-recessie, glyphs niet gespiegeld = leesbaar). DIR-63 (fix): op de
+  // BAKSTEEN net onder de bovenrand (baseline volgt de top-trim -0.5, offset omlaag),
+  // niet in de donkere driehoek boven de muur; 2 regels, vrij van de hex.
+  sWall += '<g transform="matrix(1,-0.5,0,1,182,138)" font-family="\'Press Start 2P\',monospace">'
+    + '<text x="0" y="0" font-size="7" fill="#f4f0e6">NO PAIN</text>'
+    + '<text x="0" y="12" font-size="7" fill="#f4f0e6">NO GAIN</text>'
     + '</g>';
   // Hex-wandkunst op de linker muur — honingraat met kleurvlakken + oranje rand.
   const hexPts = [[38, 10], [60, 10], [49, 26], [71, 26], [38, 42], [60, 42]];
@@ -1794,6 +1897,14 @@ const OFFICE_HTML = `<!doctype html>
   .chat header{ background:var(--teal); color:var(--cream); padding:.5rem .7rem;
     display:flex; align-items:center; justify-content:space-between; border-bottom:3px solid var(--ink); }
   .chat header b{ letter-spacing:1px; font-size:.95rem; }
+  /* DIR-62: collega-bar (team + aanhaak-chips) */
+  .collega-bar{ display:flex; align-items:center; flex-wrap:wrap; gap:.4rem; padding:.35rem .7rem;
+    background:#0b1219; color:#e8e2d8; border-bottom:2px solid var(--ink); font-family:var(--leesfont); }
+  .collega-team{ font-weight:700; font-size:.8rem; color:#3fd06a; margin-right:.2rem; }
+  .collega-chip{ font-size:.72rem; padding:.12rem .5rem; border:1px solid #3a6ea0; border-radius:11px;
+    background:#122232; color:#cdd9e4; cursor:pointer; white-space:nowrap; }
+  .collega-chip[aria-pressed="true"]{ background:#F18E02; border-color:#F18E02; color:#171717; font-weight:700; }
+  .collega-chip[disabled]{ opacity:.45; cursor:not-allowed; border-style:dashed; }
   .x{ background:var(--accent); color:var(--ink); border:2px solid var(--ink); cursor:pointer;
     font-family:var(--leesfont); font-weight:700; font-size:1.1rem; line-height:1; padding:.15rem .55rem; }
   .msgs{ flex:1; overflow:auto; padding:.7rem; display:flex; flex-direction:column; gap:.5rem;
@@ -1983,6 +2094,11 @@ const OFFICE_HTML = `<!doctype html>
 <div class="overlay" id="chat-overlay" role="dialog" aria-label="GSC-agent chat">
   <div class="chat">
     <header><b id="chat-title">GSC-agent</b><button class="x" id="chat-close" aria-label="Sluiten">X</button></header>
+    <!-- DIR-62: "collega erbij" — team-regel + aanhaak-chips -->
+    <div class="collega-bar">
+      <span class="collega-team" id="collega-team">Albert</span>
+      <span class="collega-chips" id="collega-chips"></span>
+    </div>
     <div class="chatrow">
       <div class="portret" aria-hidden="true">
         <div class="avatar" id="chat-avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#albert"/><rect class="ooglid" x="14" y="17" width="12" height="4" fill="#e8b98a"/></svg></div>
@@ -2028,6 +2144,36 @@ const OFFICE_HTML = `<!doctype html>
   var pnaamEl=document.getElementById('chat-pnaam');
   var connected=false, busy=false, started=false;
 
+  // DIR-62: "collega erbij" — welke collega's in dit gesprek aangehaakt zijn.
+  var actieveCollegas={};
+  var COLLEGA_KEYS=['gsc','ga4','ads','anton'];
+  var COLLEGA_LABEL={ gsc:'Albert (GSC)', ga4:'Gertjan (GA4)', ads:'Ilona (Ads)', anton:'Anton (content)' };
+  function collegaBeschikbaar(key){ return key==='anton' ? true : connected; }  // Google-bronnen onder login
+  function updateTeam(){
+    var el=document.getElementById('collega-team'); if(!el) return;
+    var namen=[cur.naam].concat(Object.keys(actieveCollegas).map(function(k){ return AGENTS[k].naam; }));
+    el.textContent=namen.join(' + ');
+  }
+  function buildCollegaChips(){
+    var box=document.getElementById('collega-chips'); if(!box) return; box.innerHTML='';
+    COLLEGA_KEYS.forEach(function(key){
+      if(key===cur.key) return;                        // niet de lead zelf
+      var ok=collegaBeschikbaar(key);
+      if(!ok) delete actieveCollegas[key];
+      var b=document.createElement('button'); b.type='button'; b.className='collega-chip';
+      var on=!!actieveCollegas[key]; b.setAttribute('aria-pressed', on?'true':'false');
+      b.textContent=(on?'\\u2713 ':'+ ')+COLLEGA_LABEL[key];
+      if(!ok){ b.disabled=true; b.title='Log eerst in met Google om '+AGENTS[key].naam+' aan te haken.'; }
+      b.addEventListener('click',function(){
+        if(b.disabled) return;
+        if(actieveCollegas[key]) delete actieveCollegas[key]; else actieveCollegas[key]=true;
+        buildCollegaChips();
+      });
+      box.appendChild(b);
+    });
+    updateTeam();
+  }
+
   // Agent-config: welke agent je aanklikt bepaalt portret, persona en endpoints (DIR-29).
   var AGENTS={
     gsc:{ key:'gsc', naam:'Albert', titel:'GSC-agent', sym:'albert', huid:'#e8b98a', chat:'/api/chat', bron:'/api/gsc/sites',
@@ -2058,11 +2204,12 @@ const OFFICE_HTML = `<!doctype html>
       +'</svg>';
   }
 
-  function openChat(key){ if(key) useAgent(key); overlay.style.display='flex'; }
+  function openChat(key){ if(key) useAgent(key); buildCollegaChips(); overlay.style.display='flex'; }
   function closeChat(){ overlay.style.display='none'; }
   function useAgent(key){
     if(cur.key===key) return;              // zelfde agent → gesprek behouden
     cur=AGENTS[key];
+    actieveCollegas={}; buildCollegaChips();   // DIR-62: nieuw gesprek → team reset naar de lead
     titleEl.textContent=cur.titel;
     avatarEl.innerHTML=avatarSVG(cur);
     pnaamEl.innerHTML='&#9679; '+cur.naam;
@@ -2081,7 +2228,7 @@ const OFFICE_HTML = `<!doctype html>
     }
   }
   function setConnected(v){ connected=v; connectBtn.style.display=v?'none':'inline-block';
-    if(notice) notice.style.display=v?'none':'block'; }
+    if(notice) notice.style.display=v?'none':'block'; buildCollegaChips(); }
   function setActive(v){ composer.style.display=v?'flex':'none'; switchBtn.style.display=v?'inline-block':'none'; }
   function addBubble(who,text){ var b=document.createElement('div'); b.className='bubble '+who;
     b.textContent=text; msgs.appendChild(b); msgs.scrollTop=msgs.scrollHeight; return b; }
@@ -2204,9 +2351,11 @@ const OFFICE_HTML = `<!doctype html>
     if(busy) return; busy=true; sendBtn.disabled=true;
     if(avatarEl) avatarEl.classList.add('aantypen');   // portret 'typt' terwijl antwoord binnenkomt (DIR-40)
     var bubble=addBubble('agent',''); setTyping(bubble); var got='';
+    // DIR-62: geef de aangehaakte collega's mee zodat de backend hun data-tools + persona toevoegt.
+    var pl=Object.assign({}, payload||{}); var ck=Object.keys(actieveCollegas); if(ck.length) pl.collegas=ck;
     try{
       var r=await fetch(cur.chat,{ method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(payload||{}) });
+        body:JSON.stringify(pl) });
       var ct=r.headers.get('Content-Type')||'';
       if(!r.ok||ct.indexOf('application/json')!==-1){
         var j={}; try{ j=await r.json(); }catch(e){}
@@ -2591,39 +2740,19 @@ async function handleChat(request, env, ctx) {
     promptText = userText;
   }
 
-  const system = buildSystemPrompt(gsc);
   const site = gsc && gsc.actief;
   const convo = buildAnthropicMessages(history, promptText);
 
-  // Agentische tool-loop: het model mag live GSC-data ophalen (gsc_query) vóór het
-  // antwoordt. Max iteraties beperkt kosten/rate (AC-3). We voeren de loop niet-
-  // streamend uit en sturen de uiteindelijke tekst als SSE naar de bestaande frontend.
+  // DIR-62: aanhakende collega's → extra tools + persona-notities + team-antwoord.
+  const col = await buildCollegas(env, stub, token, "gsc", body);
+  const system = buildSystemPrompt(gsc) + col.note;
+  const tools = [gscTool(), ...col.tools];
+  const dispatch = Object.assign({ gsc_query: (input) => fetchGscQuery(token, site, input) }, col.dispatch);
+
   let finalText = "";
-  try {
-    for (let i = 0; i < 5; i++) {
-      const resp = await callAnthropic(env, system, convo, [gscTool()]);
-      if (!resp || !resp.content) {
-        return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
-      }
-      const parsed = parseAssistant(resp.content);
-      if (resp.stop_reason === "tool_use" && parsed.toolUses.length) {
-        convo.push({ role: "assistant", content: resp.content });
-        const resultaten = [];
-        for (const tu of parsed.toolUses) {
-          let out;
-          try { out = await fetchGscQuery(token, site, tu.input); }
-          catch (e) { out = { error: "kon deze data niet ophalen" }; }
-          resultaten.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out) });
-        }
-        convo.push({ role: "user", content: resultaten });
-        continue;
-      }
-      finalText = parsed.text;
-      break;
-    }
-  } catch (e) {
-    return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
-  }
+  try { finalText = await chatLoop(env, system, convo, tools, dispatch); }
+  catch (e) { return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502); }
+  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
   ctx.waitUntil(
@@ -2690,36 +2819,19 @@ async function handleGa4Chat(request, env, ctx) {
     promptText = userText;
   }
 
-  const system = buildGa4SystemPrompt(ga4);
   const property = ga4 && ga4.actief;
   const convo = buildAnthropicMessages(history, promptText);
 
+  // DIR-62: aanhakende collega's (bv. Albert/GSC) erbij.
+  const col = await buildCollegas(env, stub, token, "ga4", body);
+  const system = buildGa4SystemPrompt(ga4) + col.note;
+  const tools = [ga4Tool(), ...col.tools];
+  const dispatch = Object.assign({ ga4_report: (input) => fetchGa4Query(token, property, input) }, col.dispatch);
+
   let finalText = "";
-  try {
-    for (let i = 0; i < 5; i++) {
-      const resp = await callAnthropic(env, system, convo, [ga4Tool()]);
-      if (!resp || !resp.content) {
-        return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
-      }
-      const parsed = parseAssistant(resp.content);
-      if (resp.stop_reason === "tool_use" && parsed.toolUses.length) {
-        convo.push({ role: "assistant", content: resp.content });
-        const resultaten = [];
-        for (const tu of parsed.toolUses) {
-          let out;
-          try { out = await fetchGa4Query(token, property, tu.input); }
-          catch (e) { out = { error: "kon deze data niet ophalen" }; }
-          resultaten.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out) });
-        }
-        convo.push({ role: "user", content: resultaten });
-        continue;
-      }
-      finalText = parsed.text;
-      break;
-    }
-  } catch (e) {
-    return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
-  }
+  try { finalText = await chatLoop(env, system, convo, tools, dispatch); }
+  catch (e) { return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502); }
+  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
   ctx.waitUntil(
@@ -2816,34 +2928,19 @@ async function handleAdsChat(request, env, ctx) {
   const loginCid = ads && ads.loginCid;   // MCC-id als login-customer-id voor subaccounts (AC-2)
   const convo = buildAnthropicMessages(history, promptText);
 
+  // DIR-62: aanhakende collega's (bv. Albert/GSC, Gertjan/GA4) erbij.
+  const col = await buildCollegas(env, stub, token, "ads", body);
+  system += col.note;
+  for (const t of col.tools) tools.push(t);
+  const dispatch = Object.assign({
+    ads_report: (input) => fetchAdsReport(token, env, customer, input, loginCid),
+    meta_report: (input) => metaOn ? fetchMetaInsights(env, metaacct, input) : { error: "Meta niet beschikbaar in deze sessie." },
+  }, col.dispatch);
+
   let finalText = "";
-  try {
-    for (let i = 0; i < 5; i++) {
-      const resp = await callAnthropic(env, system, convo, tools);
-      if (!resp || !resp.content) {
-        return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
-      }
-      const parsed = parseAssistant(resp.content);
-      if (resp.stop_reason === "tool_use" && parsed.toolUses.length) {
-        convo.push({ role: "assistant", content: resp.content });
-        const resultaten = [];
-        for (const tu of parsed.toolUses) {
-          let out;
-          try {
-            if (tu.name === "meta_report") out = metaOn ? await fetchMetaInsights(env, metaacct, tu.input) : { error: "Meta niet beschikbaar in deze sessie." };
-            else out = await fetchAdsReport(token, env, customer, tu.input, loginCid);
-          } catch (e) { out = { error: "kon deze data niet ophalen" }; }
-          resultaten.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out) });
-        }
-        convo.push({ role: "user", content: resultaten });
-        continue;
-      }
-      finalText = parsed.text;
-      break;
-    }
-  } catch (e) {
-    return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
-  }
+  try { finalText = await chatLoop(env, system, convo, tools, dispatch); }
+  catch (e) { return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502); }
+  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
   ctx.waitUntil(
@@ -2875,17 +2972,18 @@ async function handleContentChat(request, env, ctx) {
   const userText = (body && typeof body.message === "string") ? body.message.trim() : "";
   if (!userText) return json({ error: "Plak een tekst of stel een vraag." }, 400);
 
-  const system = buildContentSystemPrompt();
   const convo = buildAnthropicMessages(history, userText);
 
+  // DIR-62: collega's kunnen bij Anton aanhaken als de bezoeker in deze sessie is
+  // ingelogd via Google (token in dezelfde sessie). Zonder token → geen data-tools.
+  let token = null; try { const s = await (await stub.fetch("https://do/chat/state")).json(); token = s && s.token; } catch (e) {}
+  const col = await buildCollegas(env, stub, token, "anton", body);
+  const system = buildContentSystemPrompt() + col.note;
+
   let finalText = "";
-  try {
-    const resp = await callAnthropic(env, system, convo, []);
-    if (!resp || !resp.content) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
-    finalText = parseAssistant(resp.content).text;
-  } catch (e) {
-    return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
-  }
+  try { finalText = await chatLoop(env, system, convo, col.tools, col.dispatch); }
+  catch (e) { return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502); }
+  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
   ctx.waitUntil(
