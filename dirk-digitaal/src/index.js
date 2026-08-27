@@ -1727,28 +1727,34 @@ function isoRoomInner() {
   // Plaatsing op het grid (9×9). 4 identieke bureaus in een strak 2×2 blok
   // met kruis-gangpad; props langs de rand zodat de kamer bewust ingericht oogt.
   const objs = [];
-  const put = (ci, cj, svg) => objs.push({ k: ci + cj, svg }); // sorteer op tegel-diepte
+  const put = (ci, cj, svg, box) => objs.push({ k: ci + cj, box, svg }); // sorteer op tegel-diepte
   // 2×2 bureau-blok met agents (rijen i=1.5 & 5.0, kolommen j=1.3 & 4.8).
   for (const d of ISO_DESKS) {
     const f = isoAgentFeet(d);
-    put(f.i, f.j, agentSprite(d));                                 // agent (achter) eerst
-    put(d.i0 + DW / 2, d.j0 + DD / 2 + 0.02, desk(d));             // bureau occludeert
+    put(f.i, f.j, agentSprite(d), [f.i - 0.35, f.j - 0.35, 0.7, 0.7]); // agent (achter) eerst
+    put(d.i0 + DW / 2, d.j0 + DD / 2 + 0.02, desk(d), [d.i0, d.j0, DW, DD]); // bureau occludeert
   }
   // DIR-71: bank langs de rechter vloerrand (i 7.5→8.85, j 5.15→7.55) — volledig
   // binnen de kamer, vrij van de bureaus, de mand en alle loop-paden.
-  put(7.5 + 0.675, 5.15 + 1.2, sofa(7.5, 5.15));
-  put(7.4 + 0.5, 0.1 + 0.5, koffie(7.4, 0.1));  // koffie voor-rechter hoek
-  put(0.1 + 0.55, 3.6 + 0.55, printer(0.1, 3.6)); // printer achter-midden
+  put(7.5 + 0.675, 5.15 + 1.2, sofa(7.5, 5.15), [7.5, 5.15, 1.35, 2.4]);
+  put(7.4 + 0.5, 0.1 + 0.5, koffie(7.4, 0.1), [7.4, 0.1, 0.95, 0.95]);  // koffie voor-rechter hoek
+  put(0.1 + 0.55, 3.6 + 0.55, printer(0.1, 3.6), [0.1, 3.6, 1.1, 1.1]); // printer achter-midden
   // DIR-68: blauwe archiefkast verwijderd (vloer eronder blijft over).
-  put(0.2 + 0.4, 0.2 + 0.4, plant(0.2, 0.2));   // plant achter-rechter hoek
-  put(0.2 + 0.4, 7.6 + 0.4, plant(0.2, 7.6));   // plant achter-linker hoek
-  put(5.6 + 0.6, 7.4 + 0.5, mand(5.6, 7.4));    // hondenmand bij de bank
+  put(0.2 + 0.4, 0.2 + 0.4, plant(0.2, 0.2), [0.2, 0.2, 0.8, 0.8]);   // plant achter-rechter hoek
+  put(0.2 + 0.4, 7.6 + 0.4, plant(0.2, 7.6), [0.2, 7.6, 0.8, 0.8]);   // plant achter-linker hoek
+  put(5.6 + 0.6, 7.4 + 0.5, mand(5.6, 7.4), [5.6, 7.4, 1.2, 1.0]);    // hondenmand bij de bank
   objs.sort((a, b) => a.k - b.k);                // back-to-front
   // DIR-53: elk object in een .dobj-laag met data-k (tegel-diepte) zodat de JS
   // de lopende agents + hond ertussen kan sorteren (restack) → correcte iso-
   // diepte tijdens beweging, nooit over een meubel heen.
+  // DIR-75: daarnaast data-box = de footprint (i0,j0,breedte,diepte). Eén meubel
+  // beslaat meerdere tegels, dus één diepte-getal volstaat niet vlak langs de rand:
+  // de JS vergelijkt een loper voortaan met de footprint zelf (scheidingsas), niet
+  // met het middelpunt van het meubel.
   let sObj = "";
-  for (const o of objs) sObj += '<g class="dobj" data-k="' + o.k.toFixed(3) + '">' + o.svg + '</g>';
+  for (const o of objs) sObj += '<g class="dobj" data-k="' + o.k.toFixed(3) + '"'
+    + (o.box ? ' data-box="' + o.box.map((v) => (+v).toFixed(2)).join(",") + '"' : "")
+    + '>' + o.svg + '</g>';
 
   // Lopende agents (SVG-movers, verborgen tot een actie) — sprite met feet op de
   // oorsprong; JS zet style.transform=translate(feetX,feetY) + data-k + restack.
@@ -2506,12 +2512,48 @@ const OFFICE_HTML = `<!doctype html>
     // Verplaatsen in de DOM breekt lopende CSS-animaties/transitions (typ-handen,
     // glij-beweging), dus doen we het zo min mogelijk — en herstelt seg() de
     // transition van de loper zodra hij wél verplaatst is.
+    // DIR-75: een meubel is één object met ÉÉN data-k maar beslaat meerdere tegels.
+    // Vlak langs de rand klopt die enkele waarde niet: een loper die fysiek vóór de
+    // voorrand staat kan een lagere i+j hebben dan het middelpunt van het meubel en
+    // werd dan door dat meubel overtekend (gemeten op (1.90, 2.75) vs Alberts bureau).
+    // Daarom vergelijken we een loper nu met de FOOTPRINT via de scheidingsas: ligt hij
+    // buiten de i-strook, dan beslist i; ligt hij erbinnen, dan beslist j. Staat hij aan
+    // de andere kant van één as, dan overlappen ze sowieso niet op het scherm, dus die
+    // uitkomst is altijd veilig. Meubels onderling houden hun bestaande k-volgorde.
+    function kv(n){ return parseFloat(n.getAttribute('data-k'))||0; }
+    function boxOf(n){
+      var b=n.getAttribute('data-box'); if(!b) return null;
+      var p=b.split(',').map(Number);
+      return { i0:p[0], j0:p[1], i1:p[0]+p[2], j1:p[1]+p[3] };
+    }
+    function relatie(P,b){                                      // 1 = vóór, -1 = achter, 0 = raken elkaar niet
+      var x=P.i-P.j, sb=0.8;                                    // scherm-x in tegels: (i-j); sb = halve sprite-breedte
+      if(x<b.i0-b.j1-sb || x>b.i1-b.j0+sb) return 0;            // geen overlap in x → geen enkele eis
+      if(P.i>=b.i1) return 1;  if(P.i<=b.i0) return -1;         // i scheidt
+      if(P.j>=b.j1) return 1;  if(P.j<=b.j0) return -1;         // binnen de i-strook: j scheidt
+      return 1;                                                 // op de footprint (komt niet voor)
+    }
     function restack(){
       if(!depth) return false;
       var kids=Array.prototype.slice.call(depth.children);
-      var sorted=kids.slice().sort(function(a,b){ return (parseFloat(a.getAttribute('data-k'))||0)-(parseFloat(b.getAttribute('data-k'))||0); });
-      for(var n=0;n<kids.length;n++){ if(kids[n]!==sorted[n]){
-        sorted.forEach(function(el){ depth.appendChild(el); });
+      var meubels=[], movers=[];
+      kids.forEach(function(n){ (n.hasAttribute('data-box')?meubels:movers).push(n); });
+      meubels.sort(function(a,b){ return kv(a)-kv(b); });
+      var order=meubels.slice();
+      movers.sort(function(a,b){ return kv(a)-kv(b); }).forEach(function(mv){
+        var P={ i:parseFloat(mv.getAttribute('data-i'))||0, j:parseFloat(mv.getAttribute('data-j'))||0 };
+        var idx=0, grens=order.length;
+        for(var n=0;n<order.length;n++){
+          var b=boxOf(order[n]); if(!b) continue;
+          var r=relatie(P,b);
+          if(r>0) idx=n+1;                      // staat vóór dit meubel → erna tekenen
+          else if(r<0 && n<grens) grens=n;      // staat erachter → daarvóór blijven
+        }
+        if(idx>grens) idx=grens;                // tegenstrijdige eisen: achter wint (nooit dwars erdoor)
+        order.splice(idx,0,mv);
+      });
+      for(var q=0;q<kids.length;q++){ if(kids[q]!==order[q]){
+        order.forEach(function(el){ depth.appendChild(el); });
         return true;
       } }
       return false;
@@ -2529,7 +2571,10 @@ const OFFICE_HTML = `<!doctype html>
     // ruime gang aan de KIJKER-kant: eerst vóór het bureau langs (waar de live-diepte
     // uit DIR-72 de loper netjes vóór het meubel zet), dan pas naar de bestemming.
     var KOFFIE={i:7.9,j:1.35,drag:'koffie',path:[{i:7.9,j:3.75},{i:7.9,j:1.35}]};             // vóór Ilona's bureau langs, dan omhoog naar de automaat
-    var PRINT={i:1.55,j:3.6,drag:'papier',path:[{i:2.1,j:3.75},{i:1.55,j:3.6}]};              // via j-gangpad
+    // DIR-75: printer-pad liep schuin naar j=3.6 en schampte daarbij op ~0.9 tegel
+    // langs de printer; nu één rechte baan midden door de gang (1.05 tegel vrij van
+    // beide bureau-rijen) tot de sta-tegel naast de printer.
+    var PRINT={i:1.55,j:3.75,drag:'papier',path:[{i:1.55,j:3.75}]};                           // rechte baan door het gangpad
     var PLANTA={i:0.8,j:1.35,drag:'gieter',path:[{i:4.45,j:3.2},{i:0.8,j:3.2},{i:0.8,j:1.35}]}; // vóór Alberts bureau langs, dan pal vóór de plant (0.2,0.2)
     var PLANTB={i:1.05,j:7.2,drag:'gieter',path:[{i:4.45,j:7.2},{i:1.05,j:7.2}]};             // pal naast plant (0.2,7.6)
     var DOGTILE={i:4.95,j:6.95,bend:true,path:[{i:4.45,j:6.95},{i:4.95,j:6.95}]};             // bij de mand, via aisle
@@ -2550,7 +2595,11 @@ const OFFICE_HTML = `<!doctype html>
       var pos={i:0,j:0};
       function face(toi,toj){ var dx=sx(toi,toj)-sx(pos.i,pos.j); if(dx<0) el.classList.add('links'); else if(dx>0) el.classList.remove('links'); }
       function put(i,j){ el.style.transform='translate('+sx(i,j).toFixed(1)+'px,'+sy(i,j).toFixed(1)+'px)'; }
-      function jumpTo(i,j){ el.style.transition='none'; put(i,j); el.setAttribute('data-k',(i+j).toFixed(3)); pos={i:i,j:j}; restack(); }
+      // DIR-75: naast data-k ook de live tegel-positie publiceren; restack vergelijkt
+      // een loper daarmee tegen de footprint van elk meubel (scheidingsas).
+      function mark(i,j){ el.setAttribute('data-k',(i+j).toFixed(3));
+        el.setAttribute('data-i',i.toFixed(3)); el.setAttribute('data-j',j.toFixed(3)); }
+      function jumpTo(i,j){ el.style.transition='none'; put(i,j); mark(i,j); pos={i:i,j:j}; restack(); }
       function setDepth(k){ el.setAttribute('data-k',(+k).toFixed(3)); restack(); }
       function seg(ti,tj,cb){
         var fi=pos.i, fj=pos.j, dist=Math.abs(ti-fi)+Math.abs(tj-fj);
@@ -2562,7 +2611,7 @@ const OFFICE_HTML = `<!doctype html>
           el.style.transition='transform '+rest.toFixed(2)+'s linear';
           put(ti,tj);
         }
-        el.setAttribute('data-k',(fi+fj).toFixed(3)); restack();   // start-diepte
+        mark(fi,fj); restack();                                    // start-diepte
         glij(fi,fj,dur);
         pos={i:ti,j:tj};
         // DIR-72: de diepte volgt de LIVE (geïnterpoleerde) positie van de loper,
@@ -2575,11 +2624,11 @@ const OFFICE_HTML = `<!doctype html>
         var tik=setInterval(function(){
           var p=Math.min(1,(Date.now()-t0)/ms);
           var ci=fi+(ti-fi)*p, cj=fj+(tj-fj)*p;
-          el.setAttribute('data-k',(ci+cj).toFixed(3));
+          mark(ci,cj);
           if(restack() && p<1) glij(ci,cj,Math.max(0.05,(ms-(Date.now()-t0))/1000));
           if(p>=1) clearInterval(tik);
         },50);
-        setTimeout(function(){ clearInterval(tik); el.setAttribute('data-k',(ti+tj).toFixed(3)); restack(); cb&&cb(); }, ms+40);
+        setTimeout(function(){ clearInterval(tik); mark(ti,tj); restack(); cb&&cb(); }, ms+40);
       }
       function walkPath(pts,cb){ el.classList.add('loopt'); (function nxt(k){ if(k>=pts.length){ el.classList.remove('loopt'); cb&&cb(); return; } seg(pts[k].i,pts[k].j,function(){ nxt(k+1); }); })(0); }
       return { pos:function(){return pos;}, jumpTo:jumpTo, setDepth:setDepth, walkPath:walkPath };
