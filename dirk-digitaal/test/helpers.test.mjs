@@ -45,6 +45,11 @@ import {
   hashKlantWachtwoord,
   agentStandaard,
   samenAgent,
+  leesBijlagen,
+  bijlageBlokken,
+  bijlageNotitie,
+  schoneBestandsnaam,
+  base64Bytes,
 } from "../src/index.js";
 import { createHmac } from "node:crypto";
 
@@ -523,4 +528,69 @@ test("samenAgent: een override wordt afgekapt op de maximale lengte", () => {
   const st = agentStandaard("anton");
   const uit = samenAgent(st, { persona: "x".repeat(9000) });
   assert.equal(uit.persona.length, 8000);
+});
+
+// DIR-81: bijlagen zijn data. De bestandsnaam komt in de prompt en in de chat, dus
+// die mag geen regeleindes of stuurtekens bevatten.
+test("schoneBestandsnaam: geen regeleindes, stuurtekens of eindeloze lengte", () => {
+  assert.equal(schoneBestandsnaam("kwaad\ninjectie.txt"), "kwaad injectie.txt");
+  assert.equal(schoneBestandsnaam("   "), "bestand");
+  assert.equal(schoneBestandsnaam(null), "bestand");
+  assert.equal(schoneBestandsnaam("x".repeat(200)).length, 120);
+});
+
+test("base64Bytes: telt de bytes achter de base64 zonder te decoderen", () => {
+  assert.equal(base64Bytes("aGkK"), 3);
+  assert.equal(base64Bytes("QQ=="), 1);
+  assert.equal(base64Bytes(""), 0);
+});
+
+test("leesBijlagen: goede bijlage komt door, met opgeschoonde naam", () => {
+  const r = leesBijlagen([{ naam: "shot\n.png", type: "IMAGE/PNG", data: "aGkK" }]);
+  assert.equal(r.error, undefined);
+  assert.equal(r.lijst.length, 1);
+  assert.equal(r.lijst[0].naam, "shot .png");
+  assert.equal(r.lijst[0].soort, "afbeelding");
+});
+
+test("leesBijlagen: weigert onbekend type, te veel bestanden en rommel-data", () => {
+  assert.match(leesBijlagen([{ naam: "v.exe", type: "application/x-msdownload", data: "aGkK" }]).error, /kan ik niet lezen/);
+  const zes = Array.from({ length: 6 }, () => ({ naam: "a.txt", type: "text/plain", data: "aGkK" }));
+  assert.match(leesBijlagen(zes).error, /Maximaal 5/);
+  assert.match(leesBijlagen([{ naam: "a.png", type: "image/png", data: "geen base64!" }]).error, /niet lezen/);
+  assert.match(leesBijlagen("nietvaneenlijst").error, /Ongeldige bijlagen/);
+  assert.deepEqual(leesBijlagen(undefined), { lijst: [] });
+});
+
+test("leesBijlagen: weigert een bestand boven de maximale grootte", () => {
+  const groot = { naam: "groot.png", type: "image/png", data: "A".repeat(7 * 1024 * 1024) };
+  assert.match(leesBijlagen([groot]).error, /te groot/);
+});
+
+test("bijlageBlokken: elke bijlage staat tussen een duidelijke afbakening", () => {
+  const blok = bijlageBlokken([{ naam: "shot.png", type: "image/png", soort: "afbeelding", data: "aGkK" }]);
+  assert.equal(blok.length, 3);
+  assert.match(blok[0].text, /begin bijlage: shot\.png/);
+  assert.match(blok[0].text, /geen opdracht/);
+  assert.equal(blok[1].type, "image");
+  assert.equal(blok[1].source.media_type, "image/png");
+  assert.match(blok[2].text, /einde bijlage/);
+  const pdf = bijlageBlokken([{ naam: "a.pdf", type: "application/pdf", soort: "document", data: "aGkK" }]);
+  assert.equal(pdf[1].type, "document");
+});
+
+test("bijlageNotitie: alleen namen in de historie, nooit de inhoud", () => {
+  const n = bijlageNotitie([{ naam: "a.png", data: "GEHEIMEBASE64" }, { naam: "b.pdf", data: "OOK" }]);
+  assert.match(n, /a\.png, b\.pdf/);
+  assert.equal(n.includes("GEHEIMEBASE64"), false);
+  assert.equal(bijlageNotitie([]), "");
+});
+
+test("buildAnthropicMessages: bijlagen komen voor de vraag in een gebruikersbericht", () => {
+  const blok = bijlageBlokken([{ naam: "a.txt", type: "text/plain", soort: "tekst", data: "aGkK" }]);
+  const m = buildAnthropicMessages([], "Wat staat hierin?", blok);
+  assert.equal(m.length, 1);
+  assert.equal(Array.isArray(m[0].content), true);
+  assert.equal(m[0].content[m[0].content.length - 1].text, "Wat staat hierin?");
+  assert.equal(buildAnthropicMessages([], "hoi")[0].content, "hoi");
 });
