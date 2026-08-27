@@ -39,6 +39,7 @@ import {
   metaTool,
   randomKey,
   buildContentSystemPrompt,
+  kiesModel,
 } from "../src/index.js";
 import { createHmac } from "node:crypto";
 
@@ -421,4 +422,19 @@ test("buildContentSystemPrompt: Anton content-agent, NL jij-vorm, %%DOC, geen da
   assert.match(s, /SEO/);
   assert.match(s, /%%DOC/);
   assert.doesNotMatch(s, /nog geen data/);
+});
+
+// DIR-77: het model is de duurste knop in de tool, dus alleen exact bekende
+// model-id's komen erdoor; al het andere valt terug op de standaard (Sonnet 5).
+test("kiesModel: laat exact de drie toegestane modellen door", () => {
+  assert.equal(kiesModel("claude-sonnet-5"), "claude-sonnet-5");
+  assert.equal(kiesModel("claude-opus-4-8"), "claude-opus-4-8");
+  assert.equal(kiesModel("claude-opus-5"), "claude-opus-5");
+});
+
+test("kiesModel: alles wat niet in de lijst staat valt terug op Sonnet 5", () => {
+  for (const rommel of [null, undefined, "", "claude-opus-6", "CLAUDE-OPUS-5", " claude-opus-5",
+    "claude-sonnet-5\n", "gpt-4", "../../etc/passwd", 42, {}, ["claude-opus-5"]]) {
+    assert.equal(kiesModel(rommel), "claude-sonnet-5");
+  }
 });
