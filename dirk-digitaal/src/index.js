@@ -1291,71 +1291,86 @@ function sseResponse(text, extraHeaders) {
 // ruit-grid vloer + 2 iso-muren die in een achter-hoek samenkomen, één
 // lichtrichting (links-boven), vlakke kleuren, crispe randen.
 function isoRoomSVG() {
-  const Ox = 320, Oy = 170, TW = 40, TH = 20, N = 8, H = 130;
+  // Ronde 2 (Craft-gap): vloer-DOMINANT + warme, chunky per-tegel gearceerde
+  // tegels; muren fors lager (~45% van vorige hoogte). 2:1 iso, achter-hoek,
+  // één lichtrichting, crispe randen, huisstijl blijven.
+  const Ox = 320, Oy = 108, TW = 40, TH = 20, N = 11, H = 60;
   const X = (i, j) => Ox + (i - j) * (TW / 2);
   const Y = (i, j, z) => Oy + (i + j) * (TH / 2) - z;
   const P = (i, j, z) => X(i, j) + "," + Y(i, j, z);
   const poly = (pts, fill, extra) =>
     '<polygon points="' + pts.join(" ") + '" fill="' + fill + '"' + (extra || "") + "/>";
+  const pline = (pts, stroke, w) =>
+    '<polyline points="' + pts.join(" ") + '" fill="none" stroke="' + stroke +
+    '" stroke-width="' + w + '"/>';
   const line = (x1, y1, x2, y2, stroke, w, op) =>
     '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 +
     '" stroke="' + stroke + '" stroke-width="' + w + '" opacity="' + op + '"/>';
 
-  // Palet — één lichtrichting (links-boven): top-vlakken lichtst, dan vloer,
-  // dan verlichte (linker) muur, dan schaduw (rechter) muur. Vlakke kleuren.
-  const fA = "#b9c6d3", fB = "#c3cfda", fBorder = "#a6b4c1";  // vloer-checker
-  const wallLit = "#3a6ea0", wallDark = "#29517a";            // muur-vlakken
-  const capLit = "#cdd9e4", capDark = "#bcc9d6";              // muur-bovenkant
-  const skirtL = "#1c3a58", skirtR = "#173049";               // plint
-  const brick = "#20456a";                                    // baksteen-voegen
-  const ORANJE = "#F18E02", ORANJE_D = "#c9760a";             // huisstijl-accent
+  // Palet — warme vloer (hoofdvlak) + blauwe muren (huisstijl-contrast). Eén
+  // lichtrichting links-boven: bevel licht op noord/west-tegelranden, donker
+  // op zuid/oost. Vlakke kleuren, geen gradients.
+  const tileA = "#c9a978", tileB = "#bf9d6a", tilePop = "#d3b485"; // warm hout-dambord
+  const bevelL = "#e4cb9d", bevelD = "#93794f";                    // tegel-volume
+  const wallLit = "#3a6ea0", wallDark = "#29517a";                 // muur-vlakken
+  const capLit = "#cdd9e4", capDark = "#bcc9d6";                   // muur-bovenkant
+  const skirtL = "#1c3a58", skirtR = "#173049";                    // plint
+  const brick = "#20456a";                                         // baksteen-voegen
+  const ORANJE = "#F18E02", ORANJE_D = "#c9760a";                  // huisstijl-accent
 
-  let s = "";
+  let sFloor = "", sWall = "";
 
-  // VLOER — ruit-grid van rhombus-tegels (2:1), subtiele tegelranden.
+  // VLOER — groot ruit-grid van chunky warme tegels met per-tegel bevel:
+  // noord/west-randen licht (vangen top-links licht), zuid/oost-randen donker.
   for (let i = 0; i < N; i++) {
     for (let j = 0; j < N; j++) {
-      const col = ((i + j) % 2 === 0) ? fA : fB;
-      s += poly([P(i, j, 0), P(i + 1, j, 0), P(i + 1, j + 1, 0), P(i, j + 1, 0)],
-        col, ' stroke="' + fBorder + '" stroke-width="1"');
+      let col = ((i + j) % 2 === 0) ? tileA : tileB;
+      if ((i * 7 + j * 5) % 6 === 0) col = tilePop; // subtiele warme toon-variatie
+      const T = P(i, j, 0), R = P(i + 1, j, 0), B = P(i + 1, j + 1, 0), L = P(i, j + 1, 0);
+      sFloor += poly([T, R, B, L], col);
+      sFloor += pline([L, T, R], bevelL, 1.5); // noord/west-randen — licht
+      sFloor += pline([R, B, L], bevelD, 1.5); // zuid/oost-randen — schaduw
     }
   }
-  // Vloer-rand (diamant-omtrek) crisp donker kader.
-  s += poly([P(0, 0, 0), P(N, 0, 0), P(N, N, 0), P(0, N, 0)],
-    "none", ' stroke="#8b99a6" stroke-width="1.5"');
+  // Vloer-rand (diamant-omtrek) crisp warm-donker kader.
+  sFloor += poly([P(0, 0, 0), P(N, 0, 0), P(N, N, 0), P(0, N, 0)],
+    "none", ' stroke="#6f5a35" stroke-width="2"');
 
   // RECHTER MUUR (vlak j=0) — schaduw.
-  s += poly([P(0, 0, 0), P(N, 0, 0), P(N, 0, H), P(0, 0, H)], wallDark);
+  sWall += poly([P(0, 0, 0), P(N, 0, 0), P(N, 0, H), P(0, 0, H)], wallDark);
   // LINKER MUUR (vlak i=0) — verlicht.
-  s += poly([P(0, 0, 0), P(0, N, 0), P(0, N, H), P(0, 0, H)], wallLit);
+  sWall += poly([P(0, 0, 0), P(0, N, 0), P(0, N, H), P(0, 0, H)], wallLit);
 
-  // Baksteen-voegen (subtiele horizontale iso-lijnen per muur).
-  for (let k = 1; k <= 4; k++) {
-    const z = k * 26;
-    s += line(X(0, 0), Y(0, 0, z), X(0, N), Y(0, N, z), brick, 1, 0.35); // links
-    s += line(X(0, 0), Y(0, 0, z), X(N, 0), Y(N, 0, z), "#12365a", 1, 0.35); // rechts
+  // Baksteen-voegen (subtiele horizontale iso-lijnen per muur; lage muur → 2).
+  for (let k = 1; k <= 2; k++) {
+    const z = k * 20;
+    sWall += line(X(0, 0), Y(0, 0, z), X(0, N), Y(0, N, z), brick, 1, 0.35); // links
+    sWall += line(X(0, 0), Y(0, 0, z), X(N, 0), Y(N, 0, z), "#12365a", 1, 0.35); // rechts
   }
 
   // Plint (donkere band onderaan elke muur) — Habbo-detail, diepte-anker.
-  s += poly([P(0, 0, 0), P(0, N, 0), P(0, N, 10), P(0, 0, 10)], skirtL);
-  s += poly([P(0, 0, 0), P(N, 0, 0), P(N, 0, 10), P(0, 0, 10)], skirtR);
+  sWall += poly([P(0, 0, 0), P(0, N, 0), P(0, N, 6), P(0, 0, 6)], skirtL);
+  sWall += poly([P(0, 0, 0), P(N, 0, 0), P(N, 0, 6), P(0, 0, 6)], skirtR);
 
   // Oranje huisstijl-accentstrip net onder de muur-bovenkant.
-  s += poly([P(0, 0, H - 14), P(0, N, H - 14), P(0, N, H - 6), P(0, 0, H - 6)], ORANJE);
-  s += poly([P(0, 0, H - 14), P(N, 0, H - 14), P(N, 0, H - 6), P(0, 0, H - 6)], ORANJE_D);
+  sWall += poly([P(0, 0, H - 10), P(0, N, H - 10), P(0, N, H - 5), P(0, 0, H - 5)], ORANJE);
+  sWall += poly([P(0, 0, H - 10), P(N, 0, H - 10), P(N, 0, H - 5), P(0, 0, H - 5)], ORANJE_D);
 
   // Muur-bovenkant (dikte) — top-vlakken, lichtst.
-  s += poly([
+  sWall += poly([
     X(0, 0) + "," + Y(0, 0, H), X(0, N) + "," + Y(0, N, H),
     (X(0, N) - 7) + "," + (Y(0, N, H) - 3.5), (X(0, 0) - 7) + "," + (Y(0, 0, H) - 3.5)
   ], capLit); // linker cap (extrude -eX)
-  s += poly([
+  sWall += poly([
     X(0, 0) + "," + Y(0, 0, H), X(N, 0) + "," + Y(N, 0, H),
     (X(N, 0) + 7) + "," + (Y(N, 0, H) - 3.5), (X(0, 0) + 7) + "," + (Y(0, 0, H) - 3.5)
   ], capDark); // rechter cap (extrude -eY)
 
   // Achter-hoek — verticale naad waar de 2 muren samenkomen, crisp benadrukt.
-  s += line(X(0, 0), Y(0, 0, 0), X(0, 0), Y(0, 0, H), "#0f2e4d", 1.5, 0.9);
+  sWall += line(X(0, 0), Y(0, 0, 0), X(0, 0), Y(0, 0, H), "#0f2e4d", 1.5, 0.9);
+
+  // Muren eerst (achter), dan de dominante vloer eroverheen.
+  const s = sWall + sFloor;
 
   const W = 640, HH = 360;
   return '<svg viewBox="0 0 ' + W + ' ' + HH + '" width="100%" ' +
