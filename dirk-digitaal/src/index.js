@@ -1577,47 +1577,79 @@ function isoRoomInner() {
   // 2×2 grid-ordening met gangpad, compactere vloer (N 11→9) → voller, minder
   // dode vloer. Vaste footprints zodat de 4 bureaus exact even groot zijn.
   const DW = 2.4, DD = 1.4, DH = 18; // bureau: breed×diep×hoog
-  // DIR-65: monitor op een STANDAARD (voet+nek+paneel) achter op het blad; scherm
-  // richting viewer; een zichtbaar TOETSENBORD ervóór met typende handen (per bureau
-  // een id zodat de roam-JS ze verbergt als de agent weg is).
-  const desk = (i0, j0, key) => {
+  // DIR-70/73: per agent de kleuren van zijn mouw/huid (uit zijn sprite) plus een
+  // EIGEN typ-tempo en -fase, zodat de vier bureaus niet synchroon tikken.
+  const AGENT_STIJL = {
+    gsc: { mouw: "#e58fa8", huid: "#e8b98a", tempo: 5.4, fase: -0.6, wieg: 1.7, wiegfase: -0.4 },
+    ga4: { mouw: "#c7ccd2", huid: "#e8b98a", tempo: 6.9, fase: -3.1, wieg: 2.1, wiegfase: -1.2 },
+    ads: { mouw: "#2f7f6e", huid: "#f0c79a", tempo: 6.1, fase: -4.4, wieg: 1.5, wiegfase: -0.9 },
+    anton: { mouw: "#2a2f3a", huid: "#d9a878", tempo: 7.6, fase: -1.9, wieg: 1.9, wiegfase: -1.7 },
+  };
+  // DIR-70: echte-wereld-opstelling. Van KIJKER (hoge j) naar ACHTEREN (lage j):
+  // 1) monitor op standaard met de ZWARTE ACHTERKANT naar ons — het scherm wijst
+  //    naar de agent (wij zien dus geen blauw scherm, alleen de gloed die het op
+  //    het blad werpt), 2) toetsenbord ertussen, 3) agent erachter op zijn stoel
+  //    met armen die vanaf zijn schouders op het toetsenbord uitkomen.
+  // De monitor staat iets links van de typ-zone (zoals op een echt bureau), zodat
+  // hij het toetsenbord + de handen niet wegneemt in dit iso-aanzicht.
+  const desk = (d) => {
+    const i0 = d.i0, j0 = d.j0, key = d.key;
+    const st = AGENT_STIJL[key] || AGENT_STIJL.gsc;
     let g = shadow(i0, j0, DW, DD);
     g += box(i0, j0, DW, DD, 0, DH, "#b07a34", "#9c6a2b", "#855620"); // hout-bureau
-    // Monitor-op-standaard, naar achteren (lage j, agent-kant).
-    const mi = i0 + 0.72, mw = 0.95, mbj = j0 + 0.30;       // paneel-achterkant j
-    g += box(i0 + 1.02, j0 + 0.32, 0.36, 0.2, DH, DH + 2, "#20242c", "#181b21", "#141821"); // voet
-    g += box(i0 + 1.16, j0 + 0.39, 0.08, 0.06, DH + 2, DH + 9, "#2a2f3a", "#20242c", "#181b21"); // nek
-    g += box(mi, mbj, mw, 0.12, DH + 9, DH + 22, "#2a2f3a", "#20242c", "#181b21"); // schermpaneel (dun+breed)
-    g += poly([P(mi, mbj + 0.12, DH + 11), P(mi + mw, mbj + 0.12, DH + 11),
-      P(mi + mw, mbj + 0.12, DH + 20), P(mi, mbj + 0.12, DH + 20)], "#015092"); // blauw scherm (viewer)
-    g += circ(X(mi + mw * 0.5, mbj + 0.12), Y(mi + mw * 0.5, mbj + 0.12, DH + 15.5), 1.6, "#F18E02");
-    // Toetsenbord VÓÓR het scherm (hogere j, zichtbaar op het vrije stuk blad).
-    g += poly([P(i0 + 0.72, j0 + 0.80, DH), P(i0 + 1.48, j0 + 0.80, DH),
-      P(i0 + 1.48, j0 + 1.08, DH), P(i0 + 0.72, j0 + 1.08, DH)], "#2b3138");
-    g += poly([P(i0 + 0.72, j0 + 0.80, DH), P(i0 + 1.48, j0 + 0.80, DH),
-      P(i0 + 1.48, j0 + 0.84, DH), P(i0 + 0.72, j0 + 0.84, DH)], "#3f4750"); // bovenrand
-    for (let r = 0; r < 2; r++) { const jj = j0 + 0.90 + r * 0.08;
-      g += '<line x1="' + X(i0 + 0.78, jj) + '" y1="' + Y(i0 + 0.78, jj, DH) + '" x2="' + X(i0 + 1.42, jj) + '" y2="' + Y(i0 + 1.42, jj, DH) + '" stroke="#4a525c" stroke-width="0.5"/>'; }
-    // Typende handen op het toetsenbord (id per bureau → verbergen bij roamen).
-    const hlx = X(i0 + 0.92, j0 + 0.94), hly = Y(i0 + 0.92, j0 + 0.94, DH);
-    const hrx = X(i0 + 1.26, j0 + 0.94), hry = Y(i0 + 1.26, j0 + 0.94, DH);
+    // Schermgloed op het blad tússen monitor en agent: bewijs dat het scherm
+    // de andere kant op staat (naar de agent, weg van de kijker).
+    g += poly([P(i0 + 0.36, j0 + 0.26, DH), P(i0 + 1.22, j0 + 0.26, DH),
+      P(i0 + 1.22, j0 + 0.92, DH), P(i0 + 0.36, j0 + 0.92, DH)], "#2f7fbf", ' opacity="0.13"');
+    // Toetsenbord: tussen monitor en agent, recht vóór de agent.
+    const kb0 = i0 + 0.95, kb1 = i0 + 1.75, kj0 = j0 + 0.45, kj1 = j0 + 0.72;
+    g += poly([P(kb0, kj0, DH), P(kb1, kj0, DH), P(kb1, kj1, DH), P(kb0, kj1, DH)], "#2b3138");
+    g += poly([P(kb0, kj0, DH), P(kb1, kj0, DH), P(kb1, kj0 + 0.04, DH), P(kb0, kj0 + 0.04, DH)], "#3f4750");
+    for (let r = 0; r < 2; r++) { const jj = kj0 + 0.09 + r * 0.09;
+      g += '<line x1="' + X(kb0 + 0.05, jj) + '" y1="' + Y(kb0 + 0.05, jj, DH) + '" x2="' + X(kb1 - 0.05, jj) + '" y2="' + Y(kb1 - 0.05, jj, DH) + '" stroke="#4a525c" stroke-width="0.5"/>'; }
+    // Armen + handen: vanaf de schouders van de zit-sprite naar het toetsenbord —
+    // vast aan het lichaam, geen zwevende blokjes. Zelfde id als voorheen, zodat de
+    // roam-JS de hele groep verbergt zodra de agent van zijn bureau wegloopt.
+    const f = isoAgentFeet(d), fx = X(f.i, f.j), fy = Y(f.i, f.j, 0);
+    const slx = fx - 8, sly = fy - 13, srx = fx + 8, sry = fy - 13;   // schouders
+    const hlx = X(i0 + 1.14, kj0 + 0.135), hly = Y(i0 + 1.14, kj0 + 0.135, DH);
+    const hrx = X(i0 + 1.50, kj0 + 0.135), hry = Y(i0 + 1.50, kj0 + 0.135, DH);
+    const arm = (x1, y1, x2, y2) => '<line x1="' + x1.toFixed(1) + '" y1="' + y1.toFixed(1)
+      + '" x2="' + x2.toFixed(1) + '" y2="' + y2.toFixed(1) + '" stroke="' + st.mouw
+      + '" stroke-width="4.5" stroke-linecap="round"/>';
+    const hand = (x, y, delay) => '<g style="transform-box:fill-box;transform-origin:center;'
+      + 'animation:dd-tap ' + st.tempo + 's linear ' + delay.toFixed(2) + 's infinite">'
+      + '<rect x="' + (x - 3.5).toFixed(1) + '" y="' + (y - 3).toFixed(1) + '" width="7" height="5" rx="1.5" fill="' + st.huid + '"/></g>';
     g += '<g id="iso-hands-' + key + '" class="typehands">'
-      + '<rect x="' + (hlx - 3) + '" y="' + (hly - 3) + '" width="6" height="4" rx="1" fill="#e8b98a" style="transform-box:fill-box;transform-origin:center;animation:dd-type-l .5s steps(2) infinite"/>'
-      + '<rect x="' + (hrx - 3) + '" y="' + (hry - 3) + '" width="6" height="4" rx="1" fill="#e8b98a" style="transform-box:fill-box;transform-origin:center;animation:dd-type-r .5s steps(2) infinite"/>'
+      + arm(slx, sly, hlx, hly) + arm(srx, sry, hrx, hry)
+      + hand(hlx, hly, st.fase) + hand(hrx, hry, st.fase - 0.22)
       + '</g>';
+    // Monitor op standaard, vooraan op het blad; achterkant (SW-vlak) naar ons.
+    const mi = i0 + 0.35, mw = 0.80, mj = j0 + 0.95, md = 0.12;
+    g += box(i0 + 0.55, j0 + 0.90, 0.40, 0.22, DH, DH + 2, "#20242c", "#181b21", "#141821"); // voet
+    g += box(i0 + 0.70, j0 + 0.98, 0.10, 0.07, DH + 2, DH + 9, "#2a2f3a", "#20242c", "#181b21"); // nek
+    g += box(mi, mj, mw, md, DH + 9, DH + 22, "#2a2f3a", "#20242c", "#181b21"); // paneel
+    g += poly([P(mi + 0.07, mj + md, DH + 11), P(mi + mw - 0.07, mj + md, DH + 11),
+      P(mi + mw - 0.07, mj + md, DH + 20), P(mi + 0.07, mj + md, DH + 20)], "#232833"); // rugpaneel
+    g += poly([P(mi + 0.31, mj + md, DH + 12), P(mi + 0.49, mj + md, DH + 12),
+      P(mi + 0.49, mj + md, DH + 16), P(mi + 0.31, mj + md, DH + 16)], "#171b22");     // ophangpunt
     return g;
   };
-  // DIR-69: herkenbare iso-zitbank — zitting + 2 kussens + hoge rugleuning (achter)
-  // + armleuningen links/rechts. Mosterdgeel, één lichtrichting.
+  // DIR-69/71: herkenbare iso-zitbank die VOLLEDIG binnen de kamer staat (langs de
+  // rechter vloerrand, niet meer over de voorrand heen). Lang in de j-as: rugleuning
+  // aan de buitenrand (hoge i), zitting + 2 kussens naar de kamer, armleuning aan
+  // beide uiteinden. Mosterdgeel, één lichtrichting.
   const sofa = (i0, j0) => {
-    const W = 2.4, D = 1.3;                                   // breed (i) × diep (j)
+    const W = 1.35, D = 2.4;                                  // diep (i) × lang (j)
     let g = shadow(i0, j0, W, D);
-    g += box(i0, j0, W, D, 0, 7, "#b98614", "#a4770f", "#8a640b");         // zit-basis
-    g += box(i0, j0, W, 0.32, 7, 22, "#d9a520", "#c48f16", "#a67810");     // rugleuning (achter, lage j)
-    g += box(i0, j0, 0.34, D, 0, 13, "#cf9d1c", "#b98a12", "#9c760f");     // armleuning links (lage i)
-    g += box(i0 + W - 0.34, j0, 0.34, D, 0, 13, "#cf9d1c", "#b98a12", "#9c760f"); // armleuning rechts
-    g += box(i0 + 0.40, j0 + 0.36, 0.75, D - 0.5, 7, 11, "#e4b83e", "#cf9d1c", "#b3870f"); // kussen 1
-    g += box(i0 + 1.25, j0 + 0.36, 0.75, D - 0.5, 7, 11, "#e4b83e", "#cf9d1c", "#b3870f"); // kussen 2
+    // Onderdelen strikt back-to-front (oplopende i+j), anders schilderen de kussens
+    // over de rugleuning heen die dichter bij de kijker staat.
+    g += box(i0, j0, W, D, 0, 7, "#b98614", "#a4770f", "#8a640b");                 // zit-basis
+    g += box(i0, j0, W - 0.32, 0.34, 7, 13, "#cf9d1c", "#b98a12", "#9c760f");      // armleuning achter (lage j)
+    g += box(i0 + 0.16, j0 + 0.40, W - 0.60, 0.72, 7, 11, "#e4b83e", "#cf9d1c", "#b3870f"); // kussen 1
+    g += box(i0 + 0.16, j0 + 1.24, W - 0.60, 0.72, 7, 11, "#e4b83e", "#cf9d1c", "#b3870f"); // kussen 2
+    g += box(i0, j0 + D - 0.34, W - 0.32, 0.34, 7, 13, "#cf9d1c", "#b98a12", "#9c760f"); // armleuning voor (hoge j)
+    g += box(i0 + W - 0.32, j0, 0.32, D, 7, 22, "#d9a520", "#c48f16", "#a67810");  // rugleuning (buitenrand, hoge i → laatst)
     return g;
   };
   const printer = (i0, j0) => {
@@ -1682,8 +1714,11 @@ function isoRoomInner() {
     g += '<rect x="' + (fx - 12) + '" y="' + (fy - 9) + '" width="24" height="6" rx="2" fill="#23272e"/>';   // zitting
     // De sprite in een .typer-groep: subtiele "aan het werk"-beweging die bij het
     // poppetje hoort (DIR-54). Verborgen zit-sprite tijdens roamen → geen typen
-    // aan een leeg bureau; geen losse handen (armen zitten in de sprite).
-    g += '<g class="typer" style="transform-box:fill-box;transform-origin:center bottom">';
+    // aan een leeg bureau. DIR-73: eigen tempo + fase per agent, zodat ze niet
+    // allemaal in dezelfde maat achter hun bureau zitten te wiebelen.
+    const st = AGENT_STIJL[d.key] || AGENT_STIJL.gsc;
+    g += '<g class="typer" style="transform-box:fill-box;transform-origin:center bottom;'
+      + 'animation:dd-worktype ' + st.wieg + 's ease-in-out ' + st.wiegfase + 's infinite">';
     g += '<use href="#' + d.sym + '" x="' + (fx - 15) + '" y="' + (fy - 37) + '" width="30" height="37"/>';
     g += '</g></g>';
     return g;
@@ -1697,9 +1732,11 @@ function isoRoomInner() {
   for (const d of ISO_DESKS) {
     const f = isoAgentFeet(d);
     put(f.i, f.j, agentSprite(d));                                 // agent (achter) eerst
-    put(d.i0 + DW / 2, d.j0 + DD / 2 + 0.02, desk(d.i0, d.j0, d.key)); // bureau occludeert
+    put(d.i0 + DW / 2, d.j0 + DD / 2 + 0.02, desk(d));             // bureau occludeert
   }
-  put(7.2 + 1.2, 6.6 + 0.65, sofa(7.2, 6.6));   // bank in voor-linker hoek
+  // DIR-71: bank langs de rechter vloerrand (i 7.5→8.85, j 5.15→7.55) — volledig
+  // binnen de kamer, vrij van de bureaus, de mand en alle loop-paden.
+  put(7.5 + 0.675, 5.15 + 1.2, sofa(7.5, 5.15));
   put(7.4 + 0.5, 0.1 + 0.5, koffie(7.4, 0.1));  // koffie voor-rechter hoek
   put(0.1 + 0.55, 3.6 + 0.55, printer(0.1, 3.6)); // printer achter-midden
   // DIR-68: blauwe archiefkast verwijderd (vloer eronder blijft over).
@@ -1813,8 +1850,13 @@ const OFFICE_HTML = `<!doctype html>
   @keyframes dd-tail{0%,100%{transform:rotate(-8deg)}50%{transform:rotate(10deg)}}
   @keyframes dd-modal-in{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
   /* Albert idle "aan het werk" (DIR-25) */
-  @keyframes dd-type-l{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
-  @keyframes dd-type-r{0%,100%{transform:translateY(-2px)}50%{transform:translateY(0)}}
+  /* DIR-73: typen zoals in het echt — bursts van tikken met rustpauzes ertussen.
+     Elke agent draait dit met een eigen duur + (negatieve) delay, en zijn twee
+     handen met een kleine onderlinge offset, dus nooit synchroon of in dezelfde maat. */
+  @keyframes dd-tap{
+    0%,3%,6%,9%,12%,15%,18%,21%,24%,27%,30%,31%,57%,60.5%,63.5%,66.5%,69.5%,72.5%,74%,99%,100%{transform:translateY(0)}
+    1.5%,4.5%,7.5%,10.5%,13.5%,16.5%,19.5%,22.5%,25.5%,28.5%,59%,62%,65%,68%,71%{transform:translateY(-2px)}
+  }
   @keyframes dd-albert-idle{0%,58%,100%{transform:translateY(0)}28%{transform:translateY(-1px)}70%,82%{transform:translate(1.5px,0)}}
   .scene-wrap{ position:relative; width:min(100vw,177.78vh); aspect-ratio:16/9; max-height:100vh; }
   #agent-desk{ cursor:pointer; transition:filter .12s; }
@@ -2460,11 +2502,19 @@ const OFFICE_HTML = `<!doctype html>
     function sx(i,j){ return ISO.Ox+(i-j)*(ISO.TW/2); }
     function sy(i,j){ return ISO.Oy+(i+j)*(ISO.TH/2); }   // z=0 (feet op de vloer)
     var depth=document.getElementById('iso-depth');
+    // DIR-72: sorteer alleen ECHT om als de volgorde wijzigt, en meld dat terug.
+    // Verplaatsen in de DOM breekt lopende CSS-animaties/transitions (typ-handen,
+    // glij-beweging), dus doen we het zo min mogelijk — en herstelt seg() de
+    // transition van de loper zodra hij wél verplaatst is.
     function restack(){
-      if(!depth) return;
+      if(!depth) return false;
       var kids=Array.prototype.slice.call(depth.children);
-      kids.sort(function(a,b){ return (parseFloat(a.getAttribute('data-k'))||0)-(parseFloat(b.getAttribute('data-k'))||0); });
-      kids.forEach(function(n){ depth.appendChild(n); });
+      var sorted=kids.slice().sort(function(a,b){ return (parseFloat(a.getAttribute('data-k'))||0)-(parseFloat(b.getAttribute('data-k'))||0); });
+      for(var n=0;n<kids.length;n++){ if(kids[n]!==sorted[n]){
+        sorted.forEach(function(el){ depth.appendChild(el); });
+        return true;
+      } }
+      return false;
     }
     // Orthogonaal pad A→B langs de iso-assen (eerst i, dan j): 2 enkel-as-stappen.
     function ortho(a,b){ return [{i:b.i,j:a.j},{i:b.i,j:b.j}]; }
@@ -2488,8 +2538,9 @@ const OFFICE_HTML = `<!doctype html>
     // restack alleen als de diepte-band (afgerond) wisselt → correcte back-to-
     // front zonder zichtbaar verspringen.
     // CSS-transition (niet rAF): loopt óók door als de tab op de achtergrond staat,
-    // en glijdt vloeiend. restack gebeurt ÉÉN keer aan het begin van elk segment
-    // (met de doel-diepte), dan draait de transition ononderbroken — geen sprong.
+    // en glijdt vloeiend. De diepte (data-k) wordt tijdens het glijden bijgewerkt op
+    // de live positie (DIR-72), en alleen als de stapelvolgorde daardoor echt wisselt
+    // wordt de transition hervat vanaf die live positie — dus nooit een sprong.
     function walker(el){
       var pos={i:0,j:0};
       function face(toi,toj){ var dx=sx(toi,toj)-sx(pos.i,pos.j); if(dx<0) el.classList.add('links'); else if(dx>0) el.classList.remove('links'); }
@@ -2500,15 +2551,30 @@ const OFFICE_HTML = `<!doctype html>
         var fi=pos.i, fj=pos.j, dist=Math.abs(ti-fi)+Math.abs(tj-fj);
         if(dist<0.001){ cb&&cb(); return; }
         face(ti,tj);
-        // Diepte voor dit segment eerst zetten + restack (vóór de transition, zodat
-        // appendChild de lopende transition niet onderbreekt).
-        el.setAttribute('data-k',(ti+tj).toFixed(3)); restack();
-        var dur=Math.max(0.35, dist*0.42);
-        el.style.transition='none'; put(fi,fj); void el.getBoundingClientRect();  // start vast
-        el.style.transition='transform '+dur+'s linear';
-        put(ti,tj);                                                                // glijd naar doel
+        var dur=Math.max(0.35, dist*0.42), ms=dur*1000, t0=Date.now();
+        function glij(fromI,fromJ,rest){                 // transition (her)starten
+          el.style.transition='none'; put(fromI,fromJ); void el.getBoundingClientRect();
+          el.style.transition='transform '+rest.toFixed(2)+'s linear';
+          put(ti,tj);
+        }
+        el.setAttribute('data-k',(fi+fj).toFixed(3)); restack();   // start-diepte
+        glij(fi,fj,dur);
         pos={i:ti,j:tj};
-        setTimeout(cb, dur*1000+40);
+        // DIR-72: de diepte volgt de LIVE (geïnterpoleerde) positie van de loper,
+        // niet 1× de doel-tegel — anders staat hij midden in de glijbeweging op de
+        // verkeerde plek in de stapel en verdwijnt hij achter een bureau waar hij
+        // visueel nog vóór staat. Verplaatst restack() hem écht, dan is zijn
+        // transition gecanceld → we hervatten die vanaf de live positie (linear,
+        // dus zonder zichtbare sprong). setInterval loopt óók door in een tab op
+        // de achtergrond (rAF niet — DIR-56).
+        var tik=setInterval(function(){
+          var p=Math.min(1,(Date.now()-t0)/ms);
+          var ci=fi+(ti-fi)*p, cj=fj+(tj-fj)*p;
+          el.setAttribute('data-k',(ci+cj).toFixed(3));
+          if(restack() && p<1) glij(ci,cj,Math.max(0.05,(ms-(Date.now()-t0))/1000));
+          if(p>=1) clearInterval(tik);
+        },50);
+        setTimeout(function(){ clearInterval(tik); el.setAttribute('data-k',(ti+tj).toFixed(3)); restack(); cb&&cb(); }, ms+40);
       }
       function walkPath(pts,cb){ el.classList.add('loopt'); (function nxt(k){ if(k>=pts.length){ el.classList.remove('loopt'); cb&&cb(); return; } seg(pts[k].i,pts[k].j,function(){ nxt(k+1); }); })(0); }
       return { pos:function(){return pos;}, jumpTo:jumpTo, setDepth:setDepth, walkPath:walkPath };
