@@ -1473,11 +1473,15 @@ function isoRoomInner() {
   // Agent-sprite op zijn sta-tegel achter het bureau (bestaande #-symbolen),
   // met contactschaduw. Wordt vóór het bureau getekend zodat het bureau de
   // onderbenen occludeert (zit-illusie) — DIR-49 #1/#7.
+  // Zit-sprite krijgt een id zodat de roam-JS (DIR-51) hem kan verbergen terwijl
+  // de agent rondloopt (bureau leeg, geen dubbel). class iso-seat voor rekken.
   const agentSprite = (d) => {
     const f = isoAgentFeet(d);
     const fx = X(f.i, f.j), fy = Y(f.i, f.j, 0);
-    let g = '<ellipse cx="' + fx + '" cy="' + fy + '" rx="13" ry="6" fill="#000" opacity="0.18"/>';
+    let g = '<g id="iso-seat-' + d.key + '" class="iso-seat" style="transform-box:fill-box;transform-origin:center bottom">';
+    g += '<ellipse cx="' + fx + '" cy="' + fy + '" rx="13" ry="6" fill="#000" opacity="0.18"/>';
     g += '<use href="#' + d.sym + '" x="' + (fx - 15) + '" y="' + (fy - 37) + '" width="30" height="37"/>';
+    g += '</g>';
     return g;
   };
 
@@ -1512,6 +1516,8 @@ function isoRoomInner() {
 // ilona-desk/anton-desk) zodat de bestaande event-binding blijft werken. De
 // zichtbare sprite zit in de scène (occlusie); hier de klik-hitzone + naamtag.
 function isoAgentsOverlay() {
+  // DIR-50: standaard schoon — alleen een subtiele marker (klein bolletje) boven
+  // de agent; de volledige naamtag verschijnt op hover/focus (CSS .iso-agent).
   let s = "";
   for (const d of ISO_DESKS) {
     const f = isoAgentFeet(d);
@@ -1521,13 +1527,19 @@ function isoAgentsOverlay() {
     const tx = fx - tagW / 2, ty = headY - tagH - 4;
     const deskFrontY = isoY(d.i0 + 2.4, d.j0 + 1.4, 0); // voorrand bureau
     const hitH = Math.max(40, deskFrontY - ty + 8);
-    s += '<g id="' + d.id + '" role="button" tabindex="0" aria-label="Open ' + d.label + '">';
+    s += '<g id="' + d.id + '" class="iso-agent" role="button" tabindex="0" aria-label="Open ' + d.label + ' (' + d.naam + ', ' + d.spec + ')">';
     s += '<rect x="' + tx + '" y="' + ty + '" width="' + tagW + '" height="' + hitH + '" fill="#000" opacity="0"/>'; // klik-hitzone
+    // Subtiele default-marker (rustige kamer): klein bolletje met donkere ring.
+    s += '<g class="marker"><circle cx="' + fx + '" cy="' + (headY - 7) + '" r="4.5" fill="#0b1219"/>';
+    s += '<circle cx="' + fx + '" cy="' + (headY - 7) + '" r="3" fill="' + d.dot + '"/></g>';
+    // Volledige naamtag — alleen op hover/focus (opacity via CSS).
+    s += '<g class="nametag">';
     s += '<rect x="' + tx + '" y="' + ty + '" width="' + tagW + '" height="' + tagH + '" fill="#0b1219"/>';
     s += '<rect x="' + tx + '" y="' + ty + '" width="' + tagW + '" height="' + tagH + '" fill="none" stroke="' + d.tag + '" stroke-width="1.5"/>';
-    s += '<circle cx="' + (tx + 10) + '" cy="' + (ty + 8) + '" r="3.5" fill="' + d.dot + '" style="animation:dd-blink 2s steps(1) infinite"/>';
+    s += '<circle cx="' + (tx + 10) + '" cy="' + (ty + 8) + '" r="3.5" fill="' + d.dot + '"/>';
     s += '<text x="' + fx + '" y="' + (ty + 10) + '" text-anchor="middle" font-family="\'Segoe UI\',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">' + d.naam + '</text>';
     s += '<text x="' + fx + '" y="' + (ty + 19) + '" text-anchor="middle" font-family="\'Segoe UI\',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">' + d.spec + '</text>';
+    s += '</g>';
     s += '</g>';
   }
   return s;
@@ -1576,6 +1588,12 @@ const OFFICE_HTML = `<!doctype html>
   #anton-desk{ cursor:pointer; transition:filter .12s; }
   #anton-desk:hover, #anton-desk:focus{ outline:none;
     filter:drop-shadow(0 0 6px #3285D1) drop-shadow(0 0 14px rgba(50,133,209,.6)); }
+  /* DIR-50: naamtags default verborgen (schone kamer), op hover/focus zichtbaar
+     (JS-gestuurd via display); de subtiele marker verdwijnt dan (geen dubbel). */
+  .iso-agent{ cursor:pointer; }
+  .iso-agent .nametag{ display:none; pointer-events:none; }
+  .iso-agent:hover .nametag, .iso-agent:focus .nametag, .iso-agent:focus-visible .nametag{ display:block; }
+  .iso-agent:hover .marker, .iso-agent:focus .marker, .iso-agent:focus-visible .marker{ display:none; }
   /* Hond (DIR-32): JS-gedreven, orthogonaal, zit/ligt bij de mand. */
   .dog{ position:absolute; bottom:6%; left:6%; width:9%; pointer-events:none;
     transition:left .6s linear, bottom .6s linear; }
@@ -1607,6 +1625,8 @@ const OFFICE_HTML = `<!doctype html>
   /* Hond aaien: bukken bij de mand (DIR-44 AC-6). */
   @keyframes dd-bend{0%,100%{transform:translateY(0) scaleY(1)}45%,60%{transform:translateY(7px) scaleY(.88)}}
   .roam.aait .roam-fig{ animation:dd-bend 1s ease-in-out infinite; }
+  /* DIR-51: rekken/strekken in-place aan het eigen bureau (zit-sprite pulseert). */
+  .iso-seat.rekt{ animation:dd-stretch 1.1s ease-in-out; }
   #agent-desk.away #albert-body, #agent-desk.away .albert-hand{ opacity:0; }
   #agent-desk.rekt #albert-body{ animation:dd-stretch 2.2s ease-in-out; }
   #gertjan-desk.away #gertjan-body, #gertjan-desk.away .gertjan-hand{ opacity:0; }
@@ -1839,7 +1859,17 @@ const OFFICE_HTML = `<!doctype html>
       </svg>
     </div>
 
-    <!-- DIR-49: rondlopende agents verwijderd — agents zitten aan hun bureau. -->
+    <!-- DIR-51: rondlopende agents terug, nu op het iso-grid. Verborgen tot een
+         kantooractie; JS zet de positie in iso-%-coords. Klik opent de chat. -->
+    ${ISO_DESKS.map((d) => '<div class="roam" id="' + d.key + '-roam" style="width:5%" role="button" tabindex="0" aria-label="Open ' + d.label + '">'
+      + '<div class="roam-fig"><svg viewBox="0 0 40 56" width="100%" shape-rendering="crispEdges" style="image-rendering:pixelated;display:block;">'
+      + '<use href="#' + d.sym + '" x="0" y="0" width="40" height="48"/>'
+      + '<g class="poot poot-a"><rect x="14" y="47" width="5" height="9" fill="#2a3138"/></g>'
+      + '<g class="poot poot-b"><rect x="21" y="47" width="5" height="9" fill="#2a3138"/></g>'
+      + '<g class="draag draag-koffie"><rect x="30" y="30" width="7" height="8" fill="#e8e2d8"/><rect x="30" y="30" width="7" height="2" fill="#c9c2b4"/><rect x="37" y="32" width="2" height="3" fill="#e8e2d8"/></g>'
+      + '<g class="draag draag-papier"><rect x="30" y="28" width="8" height="11" fill="#f4f0e6"/><rect x="32" y="31" width="4" height="1" fill="#9aa2aa"/><rect x="32" y="34" width="4" height="1" fill="#9aa2aa"/></g>'
+      + '<g class="draag draag-gieter"><rect x="29" y="31" width="8" height="7" fill="#3fa06a"/><rect x="30" y="29" width="4" height="2" fill="#2f7f56"/><rect x="37" y="30" width="5" height="2" fill="#3fa06a"/></g>'
+      + '</svg></div></div>').join("")}
 
     <div style="position:absolute;top:0;left:0;right:0;height:30%;background:linear-gradient(to bottom, rgba(8,11,15,.82) 0%, rgba(8,11,15,.5) 55%, rgba(8,11,15,0) 100%);pointer-events:none;"></div>
     <div style="position:absolute;top:5%;left:0;right:0;text-align:center;pointer-events:none;">
@@ -1847,7 +1877,7 @@ const OFFICE_HTML = `<!doctype html>
     </div>
     <div style="position:absolute;bottom:4%;left:0;right:0;text-align:center;pointer-events:none;">
       <span style="display:inline-block;font-family:'VT323',monospace;font-size:clamp(15px,2.1vw,26px);letter-spacing:1px;color:#e8e2d8;background:rgba(11,18,25,.72);border:1px solid #F18E02;padding:6px 16px;text-shadow:1px 1px 0 #000;animation:dd-cta 2.4s ease-in-out infinite;">
-        <span style="color:#F18E02">&#9656;</span> Klik op de GSC-agent om een gesprek te starten
+        <span style="color:#F18E02">&#9656;</span> Klik op een collega om een gesprek te starten
       </span>
     </div>
   </div>
@@ -2100,6 +2130,17 @@ const OFFICE_HTML = `<!doctype html>
     antonDesk.addEventListener('click',function(){ openAgent('anton'); });
     antonDesk.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent('anton'); } });
   }
+  // DIR-50: naamtag op hover én toetsenbord-focus tonen. SVG <g>:hover/:focus is
+  // niet overal betrouwbaar → JS-gestuurd (inline opacity wint altijd). Marker
+  // verdwijnt wanneer de tag verschijnt zodat er geen dubbel staat.
+  ['agent-desk','gertjan-desk','ilona-desk','anton-desk'].forEach(function(id){
+    var el=document.getElementById(id); if(!el) return;
+    var tag=el.querySelector('.nametag'), mark=el.querySelector('.marker');
+    function show(){ if(tag) tag.style.display='block'; if(mark) mark.style.display='none'; }
+    function hide(){ if(tag) tag.style.display='none'; if(mark) mark.style.display=''; }
+    el.addEventListener('mouseenter',show); el.addEventListener('mouseleave',hide);
+    el.addEventListener('focus',show); el.addEventListener('blur',hide);
+  });
   document.getElementById('chat-close').addEventListener('click',closeChat);
   connectBtn.addEventListener('click',connect);
   if(metaBtn) metaBtn.addEventListener('click',metaKlik);
@@ -2108,83 +2149,89 @@ const OFFICE_HTML = `<!doctype html>
   sendBtn.addEventListener('click',send);
   input.addEventListener('keydown',function(e){ if(e.key==='Enter') send(); });
 
-  // Kantooracties (DIR-32/38): elke bezette agent typt, verlaat af en toe zijn plek,
-  // loopt ORTHOGONAAL naar een actie en terug (benen zichtbaar, draagt iets). Ilona
-  // geeft planten water; af en toe lopen twee agents naar elkaar om te "overleggen".
+  // Kantooracties op het ISO-grid (DIR-51): af en toe staat een agent op, loopt
+  // ORTHOGONAAL langs de iso-assen naar een actie (koffie/printer/planten/hond/
+  // overleg), en gaat terug zitten. Max 1 tegelijk (gedeelde lock), geen teleport
+  // (reflow vóór de eerste stap), zit-sprite verborgen terwijl weg (bureau leeg),
+  // rekken in-place zonder lock. reduced-motion → iedereen blijft zitten.
   (function(){
     var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    var HOMES={ gsc:{l:20,b:12}, ga4:{l:41,b:24}, ads:{l:63,b:24}, anton:{l:76,b:12} };
-    // Albert/Gertjan/Anton: koffie, printje, wat rondlopen. Hond aaien + rekken lopen via act().
-    var GEWONE=[{l:9,b:16,drag:'koffie'},{l:88,b:16,drag:'papier'},{l:34,b:9,drag:null},null];
-    // Ilona: de twee planten water geven (rechts-achter ~x500, links-achter ~x104), en af en toe rekken.
-    var ILONA=[{l:78,b:20,drag:'gieter'},{l:18,b:20,drag:'gieter'},null];
+    var ISO=${JSON.stringify(ISO)};
+    var HALF=2.5;   // halve roam-breedte (%) om de sprite horizontaal te centreren
+    function pctL(i,j){ return (ISO.Ox+(i-j)*(ISO.TW/2))/640*100 - HALF; }
+    function pctB(i,j){ return (360-(ISO.Oy+(i+j)*(ISO.TH/2)))/360*100; }
+    var HOMES=${JSON.stringify(Object.fromEntries(ISO_DESKS.map((d) => { const f = isoAgentFeet(d); return [d.key, { i: +f.i.toFixed(2), j: +f.j.toFixed(2) }]; })))};
+    // Actie-sta-tegels op de vloer (benaderd, buiten de meubel-footprints).
+    var KOFFIE={i:6.6,j:1.2,drag:'koffie'}, PRINT={i:1.4,j:3.6,drag:'papier'};
+    var PLANTA={i:1.4,j:1.2,drag:'gieter'}, PLANTB={i:1.4,j:6.8,drag:'gieter'};
+    var DOGTILE={i:5.0,j:6.8,bend:true};
+    var GEWONE=[KOFFIE,PRINT,{i:4.0,j:3.6}];   // koffie, printer, een rondje
+    var ILONA=[PLANTA,PLANTB];                 // Ilona geeft de planten water
     var ACTIES={ gsc:GEWONE, ga4:GEWONE, ads:ILONA, anton:GEWONE };
-    var actief=false;   // gedeelde lock: er mag maar ÉÉN agent tegelijk rondlopen (DIR-41)
-    function maakRoamer(desk, roam, key){
-      if(!desk||!roam) return;
-      var home=HOMES[key], spots=ACTIES[key];
-      roam.addEventListener('click',function(){ openAgent(key); });
+    var actief=false;   // gedeelde lock: max ÉÉN loper tegelijk (DIR-51 #1)
+    function maakRoamer(key){
+      var roam=document.getElementById(key+'-roam');
+      var seat=document.getElementById('iso-seat-'+key);
+      if(!roam) return;
+      roam.addEventListener('click',function(){ openAgent(key); });   // klik werkt ook lopend
       roam.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent(key); } });
-      if(reduce) return;
-      var pos={l:home.l,b:home.b}, busy=false;
-      function face(d){ if(d<0) roam.classList.add('links'); else if(d>0) roam.classList.remove('links'); }
-      function leg(axis, to, cb){
-        var dist=Math.abs((axis==='left'?pos.l:pos.b)-to);
-        var t=Math.max(0.5, dist*0.06);
-        roam.style.transition=axis+' '+t+'s linear';
-        if(axis==='left'){ roam.style.left=to+'%'; pos.l=to; } else { roam.style.bottom=to+'%'; pos.b=to; }
+      if(reduce) return;   // reduced-motion: blijven zitten
+      var home=HOMES[key], spots=ACTIES[key];
+      var pos={i:home.i,j:home.j}, busy=false;
+      function place(i,j,anim,t){
+        roam.style.transition = anim ? ('left '+t+'s linear, bottom '+t+'s linear') : 'none';
+        if(pctL(i,j) < pctL(pos.i,pos.j)) roam.classList.add('links'); else if(pctL(i,j) > pctL(pos.i,pos.j)) roam.classList.remove('links');
+        roam.style.left=pctL(i,j)+'%'; roam.style.bottom=pctB(i,j)+'%'; pos={i:i,j:j};
+      }
+      function seg(i,j,cb){   // één iso-as-segment (alleen i óf j verandert)
+        var dist=Math.abs(i-pos.i)+Math.abs(j-pos.j);
+        var t=Math.max(0.45, dist*0.42);
+        place(i,j,true,t);
         setTimeout(cb, t*1000+30);
       }
-      function walk(to, cb){ roam.classList.add('loopt'); face(to.l-pos.l);
-        leg('left', to.l, function(){ leg('bottom', to.b, function(){ roam.classList.remove('loopt'); cb(); }); }); }
-      function stretch(){ desk.classList.add('rekt'); setTimeout(function(){ desk.classList.remove('rekt'); plan(); }, 2300); }
-      // Loop van huis naar een bestemming, wacht daar, en loop terug.
-      function trip(dest, opts){
-        busy=true; actief=true; desk.classList.add('away');
-        // Zet de roamer eerst zonder animatie op zijn werkplek en forceer een reflow, zodat de
-        // startpositie vaststaat vóór de eerste stap — geen zichtbare teleport (DIR-44 AC-5).
-        roam.style.transition='none'; roam.style.left=home.l+'%'; roam.style.bottom=home.b+'%'; pos={l:home.l,b:home.b};
+      function walk(to,cb){ roam.classList.add('loopt');
+        seg(to.i,pos.j,function(){ seg(to.i,to.j,function(){ roam.classList.remove('loopt'); cb(); }); }); }
+      function stretch(){ if(seat){ seat.classList.add('rekt'); setTimeout(function(){ seat.classList.remove('rekt'); plan(); },2300); } else plan(); }
+      function trip(dest,opts){
+        busy=true; actief=true;
+        if(seat) seat.style.visibility='hidden';        // bureau leeg terwijl weg (DIR-51 #4)
+        place(home.i,home.j,false);                     // zonder animatie op de zit-tegel
         roam.classList.add('zichtbaar');
-        void roam.getBoundingClientRect();
+        void roam.getBoundingClientRect();              // reflow → geen teleport (DIR-51 #2)
         requestAnimationFrame(function(){ requestAnimationFrame(function(){
-          walk(dest, function(){
+          walk(dest,function(){
             if(opts.drag) roam.classList.add('draagt-'+opts.drag);
             if(opts.bend) roam.classList.add('aait');
             setTimeout(function(){
               roam.classList.remove('aait');
-              walk(home, function(){
+              walk(home,function(){
                 roam.classList.remove('zichtbaar','links','draagt-koffie','draagt-papier','draagt-gieter');
-                desk.classList.remove('away'); busy=false; actief=false; plan();
+                if(seat) seat.style.visibility='';
+                busy=false; actief=false; plan();
               });
-            }, opts.wacht || 1700);
+            }, opts.wacht||1700);
           });
         }); });
       }
-      // Overleggen: loop naar de zijkant van een ander bureau, sta daar even, ga terug.
       function overleg(){
         var andere=['gsc','ga4','ads','anton'].filter(function(x){ return x!==key; });
         var o=HOMES[andere[Math.floor(Math.random()*andere.length)]];
-        trip({ l: o.l + (home.l < o.l ? -9 : 9), b: o.b }, { wacht:3000 });
+        trip({ i:o.i+0.9, j:o.j }, { wacht:2600 });     // naast een collega-bureau
       }
-      // Naar de hondenmand links-achter lopen en zichtbaar bukken/aaien (DIR-44 AC-6).
-      function petDog(){ trip({l:16,b:20}, { wacht:1900, bend:true }); }
+      function petDog(){ trip(DOGTILE, { wacht:1900, bend:true }); }   // bukken bij de mand
       function act(){
         var r=Math.random();
-        // Rekken/strekken gebeurt aan het eigen bureau (geen looplock nodig) → mag altijd, dus zichtbaar vaak.
-        if(r<0.30){ stretch(); return; }
-        if(busy||actief){ plan(); return; }   // roamen: er loopt al iemand → wacht tot vrij (max 1)
+        if(r<0.30){ stretch(); return; }                // rekken in-place (geen lock)
+        if(busy||actief){ plan(); return; }             // er loopt al iemand → wacht (max 1)
         if(r<0.45){ overleg(); return; }
-        if(key!=='ads' && r<0.72){ petDog(); return; }   // Ilona watert planten i.p.v. hond aaien
+        if(key!=='ads' && r<0.72){ petDog(); return; }  // Ilona watert planten i.p.v. hond aaien
         var s=spots[Math.floor(Math.random()*spots.length)];
-        if(s) trip(s, { drag:s.drag, wacht:1700 }); else stretch();
+        if(s) trip(s, { drag:s.drag, bend:s.bend, wacht:1700 }); else stretch();
       }
       function plan(){ setTimeout(act, 8000+Math.random()*9000); }
       plan();
     }
-    maakRoamer(agent, document.getElementById('albert-roam'), 'gsc');
-    maakRoamer(gertjanDesk, document.getElementById('gertjan-roam'), 'ga4');
-    maakRoamer(ilonaDesk, document.getElementById('ilona-roam'), 'ads');
-    maakRoamer(antonDesk, document.getElementById('anton-roam'), 'anton');
+    ['gsc','ga4','ads','anton'].forEach(maakRoamer);
   })();
 
   // Bij (her)laden: al gekoppeld? Eén koppeling dekt beide agents. Open de agent die
