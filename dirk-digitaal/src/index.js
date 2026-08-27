@@ -616,9 +616,34 @@ async function fetchMetaInsights(env, act, args) {
 // ------------------------------------------------------------------ agent ---
 
 const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_MODEL = "claude-sonnet-5";
+const ANTHROPIC_MODEL = "claude-sonnet-5";   // standaard + fallback (DIR-77)
 const ANTHROPIC_VERSION = "2023-06-01";
 const CHAT_MAX_TOKENS = 4096;
+
+// DIR-77 · motor voor ALLE agents. De admin kiest er één; de keuze staat in KV en
+// geldt globaal. Opus is fors duurder dan Sonnet en dit is een publieke klant-tool,
+// dus de waarde wordt server-side tegen deze lijst gevalideerd — een bezoeker kan
+// het model nergens meegeven of beïnvloeden.
+const MODEL_KEUZES = [
+  { id: "claude-sonnet-5", label: "Sonnet 5" },
+  { id: "claude-opus-4-8", label: "Opus 4.8" },
+  { id: "claude-opus-5", label: "Opus 5" },
+];
+const MODEL_KV_SLEUTEL = "config:model";
+
+// Alleen een exact bekende model-id komt erdoor; al het andere valt terug op de
+// standaard. Zo kan er nooit een vrije waarde naar de Anthropic-API lekken.
+export function kiesModel(waarde) {
+  return MODEL_KEUZES.some((m) => m.id === waarde) ? waarde : ANTHROPIC_MODEL;
+}
+
+// Actief model uit KV (met fallback als er niets staat of KV onbereikbaar is).
+async function actiefModel(env) {
+  try {
+    if (env.CLIENTS) return kiesModel(await env.CLIENTS.get(MODEL_KV_SLEUTEL));
+  } catch (e) { /* KV onbereikbaar → standaard */ }
+  return ANTHROPIC_MODEL;
+}
 
 // De vraag die de SEO-analyse uitlokt. Vraagt om een dashboard met vaste secties
 // (## koppen), zodat de frontend het als kaarten kan renderen (AC-4/AC-5).
@@ -1254,7 +1279,7 @@ async function callAnthropic(env, system, messages, tools) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
+      model: await actiefModel(env),        // DIR-77: door de admin gekozen motor
       max_tokens: CHAT_MAX_TOKENS,
       system,
       messages,
@@ -1851,9 +1876,37 @@ const OFFICE_HTML = `<!doctype html>
     --leesfont:'Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif; }
   *{ box-sizing:border-box; }
   body{ margin:0; background:#0e1116; color:#e8e2d8; image-rendering:pixelated;
-    font-family:'VT323',monospace; -webkit-font-smoothing:none; }
-  .scene-host{ min-height:100vh; display:flex; align-items:center; justify-content:center;
+    font-family:'VT323',monospace; -webkit-font-smoothing:none; display:flex; align-items:stretch; }
+  .scene-host{ flex:1; min-width:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
     overflow:hidden; background:radial-gradient(120% 90% at 50% 20%,#1a2129 0%,#0e1116 70%); }
+  /* ---- DIR-77 · vast linker menu (voor iedereen zichtbaar) ---- */
+  .zijmenu{ flex:0 0 232px; width:232px; box-sizing:border-box; padding:14px 14px 20px;
+    background:#171b22; border-right:3px solid #000; box-shadow:3px 0 0 rgba(0,0,0,.45) inset;
+    display:flex; flex-direction:column; gap:14px; overflow-y:auto; max-height:100vh; }
+  .zm-merk{ font-family:'Press Start 2P',monospace; font-size:11px; line-height:1.7; color:var(--accent);
+    letter-spacing:1px; text-shadow:2px 2px 0 #0b2a45; }
+  .zm-merk span{ display:block; color:#cdd9e4; font-size:9px; letter-spacing:2px; }
+  .zm-blok{ display:flex; flex-direction:column; gap:8px; padding-top:12px; border-top:2px solid #262c36; }
+  .zm-kop{ margin:0; font-family:'Press Start 2P',monospace; font-size:9px; color:#8fb7d9; letter-spacing:1px; }
+  .zm-tekst{ margin:0; font-size:1.05rem; line-height:1.35; color:#aab3bf; }
+  .zm-label{ font-size:1rem; color:#8f97a3; }
+  .zm-knop{ font-family:'Press Start 2P',monospace; font-size:9px; line-height:1.5; cursor:pointer;
+    padding:9px 10px; color:#111; background:var(--accent); border:2px solid #000;
+    box-shadow:3px 3px 0 #000; text-align:center; text-decoration:none; display:block; }
+  .zm-knop:hover{ filter:brightness(1.08); }
+  .zm-knop:active{ transform:translate(2px,2px); box-shadow:1px 1px 0 #000; }
+  .zm-knop.zm-sub{ background:#2b3138; color:#e8e2d8; }
+  .zm-invoer{ font-family:'VT323',monospace; font-size:1.15rem; padding:6px 8px; color:#111;
+    background:#f4f0e6; border:2px solid #000; box-shadow:3px 3px 0 #000; width:100%; box-sizing:border-box; }
+  .zm-actief{ margin:0; font-size:1.05rem; color:#aab3bf; }
+  .zm-actief b{ color:#3fd06a; }
+  .zm-fout{ margin:0; font-size:1.05rem; color:#ff8a7a; }
+  .zijmenu .verborgen{ display:none; }
+  @media (max-width:720px){
+    body{ flex-direction:column; }
+    .zijmenu{ flex:0 0 auto; width:100%; max-height:none; border-right:0; border-bottom:3px solid #000; }
+    .scene-host{ min-height:60vh; }
+  }
   /* ---- kantoor-scène (blauwdruk DIR-21, front-cutaway) ---- */
   @keyframes dd-blink{0%,60%{opacity:1}61%,100%{opacity:.25}}
   @keyframes dd-bulb{0%,100%{opacity:.9}50%{opacity:.6}}
@@ -1871,7 +1924,7 @@ const OFFICE_HTML = `<!doctype html>
     1.5%,4.5%,7.5%,10.5%,13.5%,16.5%,19.5%,22.5%,25.5%,28.5%,59%,62%,65%,68%,71%{transform:translateY(-2px)}
   }
   @keyframes dd-albert-idle{0%,58%,100%{transform:translateY(0)}28%{transform:translateY(-1px)}70%,82%{transform:translate(1.5px,0)}}
-  .scene-wrap{ position:relative; width:min(100vw,177.78vh); aspect-ratio:16/9; max-height:100vh; }
+  .scene-wrap{ position:relative; width:min(100%,177.78vh); aspect-ratio:16/9; max-height:100vh; }
   #agent-desk{ cursor:pointer; transition:filter .12s; }
   #agent-desk:hover, #agent-desk:focus{ outline:none;
     filter:drop-shadow(0 0 6px #F18E02) drop-shadow(0 0 14px rgba(241,142,2,.6)); }
@@ -2048,6 +2101,34 @@ const OFFICE_HTML = `<!doctype html>
     .stage{ height:280px; } h1.titel{ font-size:1.5rem; } }
 </style>
 </head><body>
+<!-- DIR-77: vast linker menu. De gast-kant (uitleg + Inloggen) staat er voor
+     iedereen; de admin-sectie verschijnt pas na een geldige admin-sessie. -->
+<nav class="zijmenu" aria-label="Menu">
+  <div class="zm-merk">DIRK<span>DIGITAAL</span></div>
+  <div class="zm-blok" style="border-top:0;padding-top:0">
+    <p class="zm-tekst">Je AI-collega&#39;s zitten klaar. Klik een bureau aan om met een agent te praten.</p>
+  </div>
+  <div class="zm-blok" id="zm-gast">
+    <button class="zm-knop" id="zm-open-inlog" type="button">Inloggen</button>
+  </div>
+  <form class="zm-blok verborgen" id="zm-inlog" autocomplete="on">
+    <h2 class="zm-kop">Inloggen</h2>
+    <label class="zm-label" for="zm-pw">Admin-wachtwoord</label>
+    <input class="zm-invoer" id="zm-pw" type="password" autocomplete="current-password">
+    <button class="zm-knop" id="zm-doe-inlog" type="submit">Log in</button>
+    <button class="zm-knop zm-sub" id="zm-annuleer" type="button">Annuleren</button>
+    <p class="zm-fout verborgen" id="zm-fout" role="alert"></p>
+  </form>
+  <div class="zm-blok verborgen" id="zm-admin">
+    <h2 class="zm-kop">Admin</h2>
+    <label class="zm-label" for="zm-model">Motor voor alle agents</label>
+    <select class="zm-invoer" id="zm-model"></select>
+    <p class="zm-actief">Actief: <b id="zm-actief">…</b></p>
+    <p class="zm-fout verborgen" id="zm-model-fout" role="alert"></p>
+    <a class="zm-knop zm-sub" href="/admin">Klantbeheer</a>
+    <button class="zm-knop zm-sub" id="zm-uitlog" type="button">Uitloggen</button>
+  </div>
+</nav>
 <div class="scene-host">
   <div class="scene-wrap">
     <!-- DIR-54: strakkere viewBox rond de iso-kamer (16:9) → vult het scherm
@@ -2735,6 +2816,74 @@ const OFFICE_HTML = `<!doctype html>
     else{ setConnected(false); } }).catch(function(){ setConnected(false); });
 })();
 
+// DIR-77 · linker menu: inloggen via de BESTAANDE admin-auth (HMAC-sessiecookie) en
+// daarna de motor-kiezer. De kiezer wordt pas opgehaald én gevuld als de server een
+// geldige admin-sessie ziet; zonder sessie geeft /api/admin/model 401 en blijft de
+// gast-weergave staan. De keuze zelf wordt server-side gevalideerd en bewaard.
+(function(){
+  var menu=document.querySelector('.zijmenu'); if(!menu) return;
+  var gast=document.getElementById('zm-gast'), form=document.getElementById('zm-inlog');
+  var admin=document.getElementById('zm-admin'), fout=document.getElementById('zm-fout');
+  var modelFout=document.getElementById('zm-model-fout');
+  var sel=document.getElementById('zm-model'), actief=document.getElementById('zm-actief');
+  var pw=document.getElementById('zm-pw');
+  function toon(el,ja){ if(ja) el.classList.remove('verborgen'); else el.classList.add('verborgen'); }
+  function melding(el,tekst){ el.textContent=tekst||''; toon(el,!!tekst); }
+  function api(methode,url,body){
+    return fetch(url,{ method:methode, headers:{'Content-Type':'application/json'},
+      body: body? JSON.stringify(body) : undefined })
+      .then(function(r){ return r.json().catch(function(){ return {}; })
+        .then(function(j){ return { ok:r.ok, status:r.status, j:j }; }); });
+  }
+  function labelVan(id){
+    for(var i=0;i<sel.options.length;i++) if(sel.options[i].value===id) return sel.options[i].textContent;
+    return id;
+  }
+  function toonGast(){ toon(gast,true); toon(form,false); toon(admin,false); melding(fout,''); }
+  function toonAdmin(res){
+    sel.innerHTML='';
+    (res.keuzes||[]).forEach(function(k){
+      var o=document.createElement('option'); o.value=k.id; o.textContent=k.label; sel.appendChild(o);
+    });
+    sel.value=res.model; actief.textContent=labelVan(res.model);
+    melding(modelFout,''); toon(gast,false); toon(form,false); toon(admin,true);
+  }
+  function haalStatus(){
+    // Eerst de goedkope status (altijd 200 → geen 401-ruis in de console van een
+    // gewone bezoeker); pas bij een geldige sessie de modellenlijst ophalen.
+    return api('GET','/api/admin/status').then(function(st){
+      if(!(st.ok && st.j && st.j.admin)){ toonGast(); return false; }
+      return api('GET','/api/admin/model').then(function(res){
+        if(res.ok) toonAdmin(res.j); else toonGast();
+        return res.ok;
+      });
+    }).catch(function(){ toonGast(); return false; });
+  }
+  document.getElementById('zm-open-inlog').addEventListener('click',function(){
+    toon(gast,false); toon(form,true); melding(fout,''); pw.focus();
+  });
+  document.getElementById('zm-annuleer').addEventListener('click',function(){ pw.value=''; toonGast(); });
+  form.addEventListener('submit',function(e){
+    e.preventDefault(); melding(fout,'');
+    api('POST','/api/admin/login',{ password: pw.value }).then(function(res){
+      if(!res.ok){ melding(fout, res.j.error || 'Inloggen mislukt.'); return; }
+      pw.value=''; haalStatus();
+    }).catch(function(){ melding(fout,'Inloggen mislukt — probeer het opnieuw.'); });
+  });
+  document.getElementById('zm-uitlog').addEventListener('click',function(){
+    api('POST','/api/admin/logout').then(toonGast).catch(toonGast);
+  });
+  sel.addEventListener('change',function(){
+    var gekozen=sel.value; melding(modelFout,'');
+    api('POST','/api/admin/model',{ model:gekozen }).then(function(res){
+      if(res.status===401){ toonGast(); return; }              // sessie verlopen
+      if(!res.ok){ melding(modelFout, res.j.error || 'Opslaan mislukt.'); haalStatus(); return; }
+      actief.textContent=labelVan(res.j.model);
+    }).catch(function(){ melding(modelFout,'Opslaan mislukt — probeer het opnieuw.'); });
+  });
+  haalStatus();
+})();
+
 </script>
 </body></html>`;
 
@@ -3208,6 +3357,29 @@ export default {
     }
     if (path === "/api/admin/logout" && request.method === "POST") {
       return json({ ok: true }, 200, { "Set-Cookie": `${ADMIN_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0` });
+    }
+    // DIR-77 — admin: motor (model) voor alle agents lezen/zetten. Zowel lezen als
+    // zetten vereist een geldige admin-sessie: een bezoeker ziet de kiezer dus niet
+    // en kan de waarde ook niet zetten. De waarde wordt tegen de vaste lijst
+    // gevalideerd voordat hij in KV gaat.
+    // Alleen: is DEZE browser ingelogd? Geeft altijd 200, zodat het menu bij elke
+    // gewone bezoeker geen 401 in de console schiet. Verklapt niets: de browser kent
+    // zijn eigen cookie al, en de modellenlijst blijft achter de admin-check.
+    if (path === "/api/admin/status" && request.method === "GET") {
+      return json({ admin: await isAdmin(request, env) });
+    }
+    if (path === "/api/admin/model") {
+      if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
+      if (request.method === "GET") return json({ model: await actiefModel(env), keuzes: MODEL_KEUZES });
+      if (request.method === "POST") {
+        if (!env.CLIENTS) return json({ error: "KV (CLIENTS) is nog niet geconfigureerd." }, 500);
+        let b = {}; try { b = await request.json(); } catch (e) { /* leeg */ }
+        const gekozen = String((b && b.model) || "");
+        if (!MODEL_KEUZES.some((m) => m.id === gekozen)) return json({ error: "Onbekend model." }, 400);
+        await env.CLIENTS.put(MODEL_KV_SLEUTEL, gekozen);
+        return json({ ok: true, model: gekozen });
+      }
+      return json({ error: "Methode niet toegestaan." }, 405);
     }
     // DIR-40 — admin: Meta ad-accounts automatisch oplijsten via het system-token.
     if (path === "/api/admin/meta-accounts" && request.method === "GET") {
