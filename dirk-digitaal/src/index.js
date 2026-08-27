@@ -1595,30 +1595,25 @@ function isoRoomInner() {
 // ilona-desk/anton-desk) zodat de bestaande event-binding blijft werken. De
 // zichtbare sprite zit in de scène (occlusie); hier de klik-hitzone + naamtag.
 function isoAgentsOverlay() {
-  // DIR-50: standaard schoon — alleen een subtiele marker (klein bolletje) boven
-  // de agent; de volledige naamtag verschijnt op hover/focus (CSS .iso-agent).
+  // DIR-57 #1: dot-markers weg; klein PERMANENT label (naam · functie) boven elke
+  // agent, altijd zichtbaar (vervangt de hover-only DIR-50). Hover-glow + klik +
+  // aria-label blijven. Compact — mag de kamer niet domineren.
+  const shortFn = { gsc: "GSC/SEO", ga4: "GA4", ads: "Google Ads", anton: "Content" };
   let s = "";
   for (const d of ISO_DESKS) {
     const f = isoAgentFeet(d);
     const fx = isoX(f.i, f.j), fy = isoY(f.i, f.j, 0);
     const headY = fy - 37;                    // bovenkant sprite
-    const tagW = 96, tagH = 22;
-    const tx = fx - tagW / 2, ty = headY - tagH - 4;
-    const deskFrontY = isoY(d.i0 + 2.4, d.j0 + 1.4, 0); // voorrand bureau
-    const hitH = Math.max(40, deskFrontY - ty + 8);
+    const label = d.naam + " · " + shortFn[d.key];
+    const lw = Math.max(44, Math.round(label.length * 4.3) + 10), lh = 12;
+    const lx = fx - lw / 2, ly = headY - lh - 3;
+    const deskFrontY = isoY(d.i0 + 2.4, d.j0 + 1.4, 0);   // voorrand bureau
+    const hitH = Math.max(40, deskFrontY - ly + 8);
     s += '<g id="' + d.id + '" class="iso-agent" role="button" tabindex="0" aria-label="Open ' + d.label + ' (' + d.naam + ', ' + d.spec + ')">';
-    s += '<rect x="' + tx + '" y="' + ty + '" width="' + tagW + '" height="' + hitH + '" fill="#000" opacity="0"/>'; // klik-hitzone
-    // Subtiele default-marker (rustige kamer): klein bolletje met donkere ring.
-    s += '<g class="marker"><circle cx="' + fx + '" cy="' + (headY - 7) + '" r="4.5" fill="#0b1219"/>';
-    s += '<circle cx="' + fx + '" cy="' + (headY - 7) + '" r="3" fill="' + d.dot + '"/></g>';
-    // Volledige naamtag — alleen op hover/focus (opacity via CSS).
-    s += '<g class="nametag">';
-    s += '<rect x="' + tx + '" y="' + ty + '" width="' + tagW + '" height="' + tagH + '" fill="#0b1219"/>';
-    s += '<rect x="' + tx + '" y="' + ty + '" width="' + tagW + '" height="' + tagH + '" fill="none" stroke="' + d.tag + '" stroke-width="1.5"/>';
-    s += '<circle cx="' + (tx + 10) + '" cy="' + (ty + 8) + '" r="3.5" fill="' + d.dot + '"/>';
-    s += '<text x="' + fx + '" y="' + (ty + 10) + '" text-anchor="middle" font-family="\'Segoe UI\',system-ui,Arial,sans-serif" font-weight="700" font-size="9" fill="#f4f0e6">' + d.naam + '</text>';
-    s += '<text x="' + fx + '" y="' + (ty + 19) + '" text-anchor="middle" font-family="\'Segoe UI\',system-ui,Arial,sans-serif" font-weight="600" font-size="6.5" fill="#c2ccd4">' + d.spec + '</text>';
-    s += '</g>';
+    s += '<rect x="' + (fx - 42) + '" y="' + ly + '" width="84" height="' + hitH + '" fill="#000" opacity="0"/>'; // klik-hitzone
+    s += '<rect x="' + lx + '" y="' + ly + '" width="' + lw + '" height="' + lh + '" rx="2" fill="#0b1219" opacity="0.92"/>';
+    s += '<rect x="' + lx + '" y="' + ly + '" width="' + lw + '" height="' + lh + '" rx="2" fill="none" stroke="' + d.tag + '" stroke-width="1"/>';
+    s += '<text x="' + fx + '" y="' + (ly + 8.6) + '" text-anchor="middle" font-family="\'Segoe UI\',system-ui,Arial,sans-serif" font-weight="700" font-size="7" fill="#f4f0e6">' + label + '</text>';
     s += '</g>';
   }
   return s;
@@ -1667,12 +1662,8 @@ const OFFICE_HTML = `<!doctype html>
   #anton-desk{ cursor:pointer; transition:filter .12s; }
   #anton-desk:hover, #anton-desk:focus{ outline:none;
     filter:drop-shadow(0 0 6px #3285D1) drop-shadow(0 0 14px rgba(50,133,209,.6)); }
-  /* DIR-50: naamtags default verborgen (schone kamer), op hover/focus zichtbaar
-     (JS-gestuurd via display); de subtiele marker verdwijnt dan (geen dubbel). */
+  /* DIR-57 #1: klein permanent naam+functie-label boven de agent (altijd zichtbaar). */
   .iso-agent{ cursor:pointer; }
-  .iso-agent .nametag{ display:none; pointer-events:none; }
-  .iso-agent:hover .nametag, .iso-agent:focus .nametag, .iso-agent:focus-visible .nametag{ display:block; }
-  .iso-agent:hover .marker, .iso-agent:focus .marker, .iso-agent:focus-visible .marker{ display:none; }
   /* Hond (DIR-32): JS-gedreven, orthogonaal, zit/ligt bij de mand. */
   .dog{ position:absolute; bottom:6%; left:6%; width:9%; pointer-events:none;
     transition:left .6s linear, bottom .6s linear; }
@@ -1753,19 +1744,9 @@ const OFFICE_HTML = `<!doctype html>
   .portret .avatar.aantypen svg{ animation:dd-portret-typ .5s ease-in-out infinite; transform-origin:50% 100%; }
   .portret .avatar.aantypen .ooglid{ animation:dd-eyelid 1.4s steps(1,end) infinite; }
   @keyframes dd-portret-typ{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-3px); } }
-  /* Zichtbare typ-indicator: '···'-ballonnetje boven de kop terwijl het antwoord streamt (DIR-46 D) */
-  .portret .typ-indicator{ display:none; position:absolute; top:2px; left:50%; transform:translateX(-50%);
-    align-items:center; gap:4px; background:#f4f0e6; border:2px solid var(--ink); border-radius:11px; padding:4px 8px; z-index:2; }
-  .portret .typ-indicator::after{ content:''; position:absolute; bottom:-6px; left:50%; transform:translateX(-50%);
-    border-left:5px solid transparent; border-right:5px solid transparent; border-top:6px solid var(--ink); }
-  .portret .typ-indicator span{ width:6px; height:6px; border-radius:50%; background:#2a2f36; display:inline-block;
-    animation:dd-typdot 1s ease-in-out infinite; }
-  .portret .typ-indicator span:nth-child(2){ animation-delay:.18s; }
-  .portret .typ-indicator span:nth-child(3){ animation-delay:.36s; }
-  #chat-avatar.aantypen ~ .typ-indicator{ display:inline-flex; }
-  @keyframes dd-typdot{ 0%,100%{ transform:translateY(0); opacity:.35; } 50%{ transform:translateY(-4px); opacity:1; } }
+  /* DIR-58: '···'-typ-ballon uit het portret verwijderd; ogen blijven knipperen. */
   @media (prefers-reduced-motion: reduce){ .scene-wrap *{ animation:none !important; }
-    .portret .avatar .ooglid, .portret .avatar.aantypen svg, .portret .typ-indicator span{ animation:none !important; } }
+    .portret .avatar .ooglid, .portret .avatar.aantypen svg{ animation:none !important; } }
   @media (max-width:640px){ .portret{ flex-basis:60px; }
     .portret .avatar{ width:48px; height:48px; font-size:1.5rem; } }
 
@@ -1961,7 +1942,6 @@ const OFFICE_HTML = `<!doctype html>
       <div class="portret" aria-hidden="true">
         <div class="avatar" id="chat-avatar"><svg viewBox="0 0 40 48" width="100%" height="100%" shape-rendering="crispEdges" aria-hidden="true"><use href="#albert"/><rect class="ooglid" x="14" y="17" width="12" height="4" fill="#e8b98a"/></svg></div>
         <div class="pnaam" id="chat-pnaam">&#9679; Albert</div>
-        <div class="typ-indicator" aria-hidden="true"><span></span><span></span><span></span></div>
       </div>
       <div class="chatmain">
         <div class="msgs" id="chat-msgs">
@@ -2201,17 +2181,8 @@ const OFFICE_HTML = `<!doctype html>
     antonDesk.addEventListener('click',function(){ openAgent('anton'); });
     antonDesk.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent('anton'); } });
   }
-  // DIR-50: naamtag op hover én toetsenbord-focus tonen. SVG <g>:hover/:focus is
-  // niet overal betrouwbaar → JS-gestuurd (inline opacity wint altijd). Marker
-  // verdwijnt wanneer de tag verschijnt zodat er geen dubbel staat.
-  ['agent-desk','gertjan-desk','ilona-desk','anton-desk'].forEach(function(id){
-    var el=document.getElementById(id); if(!el) return;
-    var tag=el.querySelector('.nametag'), mark=el.querySelector('.marker');
-    function show(){ if(tag) tag.style.display='block'; if(mark) mark.style.display='none'; }
-    function hide(){ if(tag) tag.style.display='none'; if(mark) mark.style.display=''; }
-    el.addEventListener('mouseenter',show); el.addEventListener('mouseleave',hide);
-    el.addEventListener('focus',show); el.addEventListener('blur',hide);
-  });
+  // DIR-57 #1: labels staan nu permanent in de SVG (isoAgentsOverlay) — geen
+  // hover-toggle-JS meer nodig; hover-glow blijft via de #...-desk:hover-CSS.
   document.getElementById('chat-close').addEventListener('click',closeChat);
   connectBtn.addEventListener('click',connect);
   if(metaBtn) metaBtn.addEventListener('click',metaKlik);
@@ -2238,12 +2209,6 @@ const OFFICE_HTML = `<!doctype html>
       kids.sort(function(a,b){ return (parseFloat(a.getAttribute('data-k'))||0)-(parseFloat(b.getAttribute('data-k'))||0); });
       kids.forEach(function(n){ depth.appendChild(n); });
     }
-    function setTile(el,i,j,anim,t){
-      el.style.transition = anim ? ('transform '+t+'s linear') : 'none';
-      el.style.transform = 'translate('+sx(i,j).toFixed(1)+'px,'+sy(i,j).toFixed(1)+'px)';
-      el.setAttribute('data-k',(i+j).toFixed(3));
-      restack();
-    }
     // Orthogonaal pad A→B langs de iso-assen (eerst i, dan j): 2 enkel-as-stappen.
     function ortho(a,b){ return [{i:b.i,j:a.j},{i:b.i,j:b.j}]; }
     var HUB={i:4.45,j:3.75};   // centrale gang-hub (vrij van meubels)
@@ -2256,13 +2221,35 @@ const OFFICE_HTML = `<!doctype html>
     var ACTIES={ gsc:GEWONE, ga4:GEWONE, ads:ILONA, anton:GEWONE };
     var actief=false;   // gedeelde lock: max ÉÉN loper tegelijk
 
+    // DIR-56: vloeiend lopen via rAF-tween — de transform wordt elke frame
+    // continu geïnterpoleerd (geen CSS-transition die restack onderbreekt).
+    // restack alleen als de diepte-band (afgerond) wisselt → correcte back-to-
+    // front zonder zichtbaar verspringen.
+    // CSS-transition (niet rAF): loopt óók door als de tab op de achtergrond staat,
+    // en glijdt vloeiend. restack gebeurt ÉÉN keer aan het begin van elk segment
+    // (met de doel-diepte), dan draait de transition ononderbroken — geen sprong.
     function walker(el){
       var pos={i:0,j:0};
       function face(toi,toj){ var dx=sx(toi,toj)-sx(pos.i,pos.j); if(dx<0) el.classList.add('links'); else if(dx>0) el.classList.remove('links'); }
-      function seg(i,j,cb){ var dist=Math.abs(i-pos.i)+Math.abs(j-pos.j); var t=Math.max(0.4,dist*0.42); face(i,j); setTile(el,i,j,true,t); pos={i:i,j:j}; setTimeout(cb,t*1000+30); }
-      function jumpTo(i,j){ setTile(el,i,j,false); pos={i:i,j:j}; }
+      function put(i,j){ el.style.transform='translate('+sx(i,j).toFixed(1)+'px,'+sy(i,j).toFixed(1)+'px)'; }
+      function jumpTo(i,j){ el.style.transition='none'; put(i,j); el.setAttribute('data-k',(i+j).toFixed(3)); pos={i:i,j:j}; restack(); }
+      function setDepth(k){ el.setAttribute('data-k',(+k).toFixed(3)); restack(); }
+      function seg(ti,tj,cb){
+        var fi=pos.i, fj=pos.j, dist=Math.abs(ti-fi)+Math.abs(tj-fj);
+        if(dist<0.001){ cb&&cb(); return; }
+        face(ti,tj);
+        // Diepte voor dit segment eerst zetten + restack (vóór de transition, zodat
+        // appendChild de lopende transition niet onderbreekt).
+        el.setAttribute('data-k',(ti+tj).toFixed(3)); restack();
+        var dur=Math.max(0.35, dist*0.42);
+        el.style.transition='none'; put(fi,fj); void el.getBoundingClientRect();  // start vast
+        el.style.transition='transform '+dur+'s linear';
+        put(ti,tj);                                                                // glijd naar doel
+        pos={i:ti,j:tj};
+        setTimeout(cb, dur*1000+40);
+      }
       function walkPath(pts,cb){ el.classList.add('loopt'); (function nxt(k){ if(k>=pts.length){ el.classList.remove('loopt'); cb&&cb(); return; } seg(pts[k].i,pts[k].j,function(){ nxt(k+1); }); })(0); }
-      return { pos:function(){return pos;}, jumpTo:jumpTo, walkPath:walkPath };
+      return { pos:function(){return pos;}, jumpTo:jumpTo, setDepth:setDepth, walkPath:walkPath };
     }
 
     function maakRoamer(key){
@@ -2279,8 +2266,10 @@ const OFFICE_HTML = `<!doctype html>
         if(seat) seat.style.visibility='hidden';        // bureau leeg terwijl weg
         w.jumpTo(home.i,home.j);                        // zonder animatie op de zit-tegel
         roam.style.display='block';
-        void roam.getBoundingClientRect();              // reflow → geen teleport
-        requestAnimationFrame(function(){ requestAnimationFrame(function(){
+        void roam.getBoundingClientRect();              // reflow → geen teleport (start staat vast)
+        // Directe start (geen requestAnimationFrame — dat pauzeert op een verborgen
+        // tab en zou de roamer laten vasthangen). setTimeout(0) volstaat.
+        setTimeout(function(){
           var out=ortho(home,HUB).concat(ortho(HUB,dest));
           w.walkPath(out,function(){
             if(opts.drag) roam.classList.add('draagt-'+opts.drag);
@@ -2296,7 +2285,7 @@ const OFFICE_HTML = `<!doctype html>
               });
             }, opts.wacht||1700);
           });
-        }); });
+        }, 20);
       }
       function stretch(){ if(seat){ seat.classList.add('rekt'); setTimeout(function(){ seat.classList.remove('rekt'); plan(); },2300); } else plan(); }
       function overleg(){ var andere=['gsc','ga4','ads','anton'].filter(function(x){ return x!==key; });
@@ -2324,12 +2313,16 @@ const OFFICE_HTML = `<!doctype html>
       var SPOTS=[{i:4.4,j:3.7},{i:6.4,j:3.2},{i:3.2,j:6.2},{i:5.6,j:6.2}];
       var w=walker(dog);
       w.jumpTo(BED.i,BED.j);
+      function inBed(){ dog.style.transform='translate('+sx(BED.i,BED.j).toFixed(1)+'px,'+(sy(BED.i,BED.j)-5).toFixed(1)+'px)'; w.setDepth(14.45); }
+      inBed();
       if(reduce){ dog.classList.add('ligt'); return; }
       function rust(cb){ dog.classList.add('zit');
         setTimeout(function(){ dog.classList.remove('zit'); dog.classList.add('ligt');
           setTimeout(function(){ dog.classList.remove('ligt'); cb(); }, 6000); }, 3000); }
+      // inBed(): zichtbaar IN de mand — iets omhoog (op het kussen, boven de
+      // bodem) + hogere data-k dan de mand (14.1) zodat de hond ná de mand tekent.
       function loop(){
-        if(Math.random()<0.55){ var p=w.pos(); w.walkPath(ortho(p,HUB).concat(ortho(HUB,BED)),function(){ rust(function(){ setTimeout(loop,2500); }); }); }
+        if(Math.random()<0.55){ var p=w.pos(); w.walkPath(ortho(p,HUB).concat(ortho(HUB,BED)),function(){ inBed(); rust(function(){ setTimeout(loop,2500); }); }); }
         else { var g=SPOTS[Math.floor(Math.random()*SPOTS.length)]; var q=w.pos(); w.walkPath(ortho(q,HUB).concat(ortho(HUB,g)),function(){ setTimeout(loop,2200+Math.random()*3000); }); }
       }
       setTimeout(loop,1500);
