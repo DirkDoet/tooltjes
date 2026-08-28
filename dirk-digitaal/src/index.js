@@ -594,6 +594,79 @@ async function huidigeKlant(request, env) {
   return { key: sessie.key, email: sessie.email, rec: rec || null };
 }
 
+// ============================================================================
+// DIR-87 — GEBRUIKSREGISTRATIE
+// ============================================================================
+// Dirk wil zien wie de tool gebruikt. Wat we vastleggen: WIE (klantnaam +
+// Google-adres), WANNEER, en WAT (inloggen / welke collega geopend). Wat we NOOIT
+// vastleggen: de inhoud van gesprekken — geen vragen, geen antwoorden, geen
+// opgehaalde cijfers, geen bijlagen. Mislukte inlogpogingen tellen we alleen als
+// aantal, zonder adres: iemand die geen klant is heeft daar nooit toestemming voor
+// gegeven.
+const GEBRUIK_VENSTER_MS = 30 * 60 * 1000;        // ontdubbelen: 1 regel per agent per half uur
+const GEBRUIK_MAX_REGELS = 1000;                  // harde bovengrens
+const GEBRUIK_MAX_LEEFTIJD_MS = 90 * 24 * 60 * 60 * 1000;   // en niets ouder dan 90 dagen
+
+// Sleutel die chronologisch sorteert: de DO geeft `list()` op sleutelvolgorde terug,
+// dus een vaste breedte houdt oud vóór nieuw.
+export function gebruikSleutel(tijd, rand) {
+  return "g:" + String(Math.max(0, Math.floor(Number(tijd) || 0))).padStart(14, "0") + "-" + (rand || "");
+}
+
+// Ontdubbelen: dezelfde klant die binnen het venster opnieuw dezelfde agent opent,
+// levert geen nieuwe regel op. Zonder dit wordt het een berichtenteller.
+export function magLoggen(laatsteTijd, nu, vensterMs) {
+  if (!laatsteTijd) return true;
+  return (Number(nu) - Number(laatsteTijd)) >= (vensterMs == null ? GEBRUIK_VENSTER_MS : vensterMs);
+}
+
+// Wie is "dezelfde gebruiker" voor het ontdubbelen? Op alleen het e-mailadres
+// sleutelen gaat mis zodra twee klanten nog geen adres hebben: die vallen dan in
+// dezelfde bak en verbergen elkaars gebruik. Naam erbij lost dat op.
+export function gebruikerSleutel(regel) {
+  const r = regel || {};
+  return String(r.email || "") + "|" + String(r.naam || "");
+}
+
+// Welke regels mogen weg? Te oud, of over de bovengrens (oudste eerst). Pure functie
+// zodat de bewaartermijn te testen is zonder opslag.
+export function snoeiGebruik(regels, nu, opties) {
+  const o = opties || {};
+  const maxAantal = o.maxAantal == null ? GEBRUIK_MAX_REGELS : o.maxAantal;
+  const maxLeeftijd = o.maxLeeftijdMs == null ? GEBRUIK_MAX_LEEFTIJD_MS : o.maxLeeftijdMs;
+  const opTijd = (regels || []).slice().sort((a, b) => (a.tijd || 0) - (b.tijd || 0));
+  const weg = [];
+  const houden = [];
+  for (const r of opTijd) {
+    if (Number(nu) - Number(r.tijd || 0) > maxLeeftijd) weg.push(r.sleutel);
+    else houden.push(r);
+  }
+  const teveel = Math.max(0, houden.length - maxAantal);
+  for (let i = 0; i < teveel; i++) weg.push(houden[i].sleutel);
+  return weg;
+}
+
+// Hoeveel onbekende inlogpogingen sinds middernacht? Alleen een getal — er staat
+// geen adres in die regels.
+// "Vandaag" is Dirks dag, niet die van de server: een Worker draait in UTC, dus
+// tussen middernacht en 02:00 Nederlandse tijd zou de teller anders al op de
+// volgende dag staan. We bepalen de dag daarom expliciet in Europe/Amsterdam.
+const DAG_TIJDZONE = "Europe/Amsterdam";
+export function dagSleutel(tijd, tijdzone) {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: tijdzone || DAG_TIJDZONE,
+      year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date(Number(tijd) || 0));
+  } catch (e) {
+    return new Date(Number(tijd) || 0).toISOString().slice(0, 10);   // valt terug op UTC
+  }
+}
+export function telOnbekendVandaag(regels, nu, tijdzone) {
+  const vandaag = dagSleutel(Number(nu) || Date.now(), tijdzone);
+  return (regels || []).filter((r) => r.wat === "onbekend" && dagSleutel(r.tijd, tijdzone) === vandaag).length;
+}
+
 // ---- DIR-86 · identiteit uit Google -----------------------------------------
 // Het e-mailadres bepaalt bij welk klantrecord iemand hoort. Wie die koppeling kan
 // sturen, ÍS die klant — dus het adres mag uitsluitend uit een geverifieerde bron
@@ -1307,6 +1380,48 @@ export class SessionDO {
       return json({ ok: true });
     }
 
+    // DIR-87 — gebruikslog. Deze DO-instantie is GEEN browsersessie: de aanroeper
+    // kiest hem via idFromName("log:gebruik"). Bewust een DO en geen KV, omdat KV's
+    // list() tot een minuut achterloopt op een put(): Dirk zou dan inloggen, meteen
+    // in /admin kijken en zichzelf er niet zien staan. Een DO is strikt consistent en
+    // geeft list() op sleutelvolgorde, wat hier precies chronologie is.
+    // Er komt NOOIT gespreksinhoud in deze opslag — alleen wie/wanneer/wat.
+    if (url.pathname === "/gebruik/log") {
+      const inv = await request.json();
+      const wat = String(inv.wat || "");
+      const email = String(inv.email || "");
+      const agent = String(inv.agent || "");
+      const alles = await this.state.storage.list({ prefix: "g:" });
+      const regels = [];
+      for (const [sleutel, waarde] of alles) regels.push(Object.assign({ sleutel }, waarde));
+
+      // Ontdubbelen: zelfde klant + zelfde agent binnen het venster → niets nieuws.
+      if (wat === "agent") {
+        const wie = gebruikerSleutel(inv);
+        let laatste = 0;
+        for (const r of regels) {
+          if (r.wat === "agent" && r.agent === agent && gebruikerSleutel(r) === wie) laatste = Math.max(laatste, r.tijd || 0);
+        }
+        if (!magLoggen(laatste, now, GEBRUIK_VENSTER_MS)) return json({ ok: true, overgeslagen: true });
+      }
+
+      const regel = { tijd: now, wat, email, naam: String(inv.naam || ""), agent };
+      const nieuweSleutel = gebruikSleutel(now, crypto.randomUUID().slice(0, 8));
+      await this.state.storage.put(nieuweSleutel, regel);
+      // Bewaartermijn afdwingen bij elke schrijfactie: te oud, of over de bovengrens
+      // (oudste eerst). De zojuist geschreven regel telt mee.
+      const weg = snoeiGebruik(regels.concat([{ sleutel: nieuweSleutel, tijd: now }]), now);
+      for (const sleutel of weg) await this.state.storage.delete(sleutel);
+      return json({ ok: true });
+    }
+    if (url.pathname === "/gebruik/lijst") {
+      const alles = await this.state.storage.list({ prefix: "g:" });
+      const regels = [];
+      for (const [sleutel, waarde] of alles) regels.push(Object.assign({ sleutel }, waarde));
+      regels.sort((a, b) => (b.tijd || 0) - (a.tijd || 0));            // nieuwste eerst
+      return json({ regels, onbekendVandaag: telOnbekendVandaag(regels, now) });
+    }
+
     // Sessie aanmaken/aanraken zonder Google-token (DIR-30).
     if (url.pathname === "/touch") {
       await this.state.storage.put("lastActive", now);
@@ -1345,13 +1460,60 @@ export class SessionDO {
 
 // ------------------------------------------------------------- Worker-router
 
+// DIR-87 — één vaste instantie houdt de gebruikslog bij.
+// De naam begint met "log:" en bezoekerssessies met "sess:", zodat een door de
+// bezoeker gekozen cookiewaarde deze instantie NOOIT kan adresseren. Zonder die
+// scheiding kon iemand `dd_session=gebruik-log` zetten en via /api/disconnect de
+// hele registratie wissen: dat gaat langs dezelfde `idFromName`.
+function gebruikStub(env) {
+  return env.SESSIONS.get(env.SESSIONS.idFromName("log:gebruik"));
+}
+// DIR-87 — noteert DAT een ingelogde klant een collega opende. Alleen de agent-
+// sleutel, nooit de vraag of het antwoord. Een bezoeker zonder klant-sessie levert
+// geen regel op: we hebben dan geen naam om aan te hangen. De DO ontdubbelt zelf,
+// zodat een gesprek van twintig berichten één regel is en geen twintig.
+function noteerAgentGebruik(env, ctxData, agent, ctx) {
+  // DIR-88: iedereen die is ingelogd telt mee, ook zonder klantrecord. Het adres
+  // komt uit de sessie; de naam alleen als Dirk die klant kent.
+  if (!ctxData || ctxData.soort !== "klant") return;
+  const werk = logGebruik(env, {
+    wat: "agent",
+    agent,
+    email: ctxData.email || "",
+    naam: (ctxData.rec && ctxData.rec.naam) || "",
+  });
+  if (ctx && ctx.waitUntil) ctx.waitUntil(werk);        // vertraagt het antwoord niet
+}
+
+// Fire-and-forget: een mislukte logregel mag nooit een gebruiker in de weg zitten.
+async function logGebruik(env, regel) {
+  try {
+    await gebruikStub(env).fetch("https://do/gebruik/log", { method: "POST", body: JSON.stringify(regel || {}) });
+  } catch (e) { /* registratie is bijzaak, de tool blijft werken */ }
+}
+
+// Bezoekerssessies zitten in hun eigen naamruimte ("sess:"). De aanroeper geeft een
+// id dat uit een cookie komt, dus die waarde mag nooit rechtstreeks een DO-naam zijn.
 function sessionStub(env, id) {
-  return env.SESSIONS.get(env.SESSIONS.idFromName(id));
+  return env.SESSIONS.get(env.SESSIONS.idFromName("sess:" + id));
+}
+
+// Sessie-ids maken we met crypto.randomUUID(); alles wat daar niet op lijkt is geen
+// sessie van ons. Dit is de tweede rem naast de gescheiden naamruimte: een
+// verzonnen cookiewaarde komt zo niet eens tot een DO-aanroep.
+const SESSIE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function geldigSessieId(id) {
+  return SESSIE_ID.test(String(id || ""));
+}
+
+// Het sessie-id uit de cookie, of null als het er niet op lijkt.
+function sessieIdUitCookie(request) {
+  const id = parseCookies(request.headers.get("Cookie"))[COOKIE];
+  return geldigSessieId(id) ? id : null;
 }
 
 async function huidigeToken(request, env) {
-  const cookies = parseCookies(request.headers.get("Cookie"));
-  const id = cookies[COOKIE];
+  const id = sessieIdUitCookie(request);
   if (!id) return null;
   const resp = await sessionStub(env, id).fetch("https://do/get");
   if (!resp.ok) return null;
@@ -2870,7 +3032,7 @@ const OFFICE_HTML = `<!doctype html>
         <div class="msgs" id="chat-msgs">
           <div class="bubble agent">Hoi! Ik ben Albert, je GSC-agent. Koppel je Google-account, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.</div>
         </div>
-        <div class="notice" id="privacy-notice">Privacy: je koppeling, dit gesprek en bestanden die je meestuurt leven alleen in deze sessie. Ze wissen zichzelf als je weggaat of na 30 minuten. Er wordt niets blijvend opgeslagen. Klik hieronder op "Koppel Google" om te beginnen.</div>
+        <div class="notice" id="privacy-notice">Privacy: je koppeling, dit gesprek en bestanden die je meestuurt leven alleen in deze sessie. Ze wissen zichzelf als je weggaat of na 30 minuten — de inhoud van je gesprek wordt nergens bewaard. Dirk ziet w&eacute;l dat je hebt ingelogd en welke collega je opende, zodat hij weet hoe de tool gebruikt wordt. Klik hieronder op "Koppel Google" om te beginnen.</div>
         <div class="bar">
           <button class="knop" id="chat-connect">Koppel Google</button>
           <button class="knop" id="chat-meta" style="display:none">Meta Ads</button>
@@ -3291,7 +3453,7 @@ const OFFICE_HTML = `<!doctype html>
   async function disconnect(){ try{ await fetch('/api/disconnect'); }catch(e){}
     setConnected(false); setActive(false); started=false; msgs.innerHTML='';
     bijlagen=[]; toonBijlagen(); bijFout('');            // DIR-81: klaarstaande bestanden weg
-    notice.textContent='Je sessie en de bestanden die je meestuurde zijn gewist. Er is niets bewaard.'; notice.classList.add('flash'); }
+    notice.textContent='Je sessie, dit gesprek en de bestanden die je meestuurde zijn gewist. Van je bezoek blijft alleen staan dát je inlogde en welke collega je opende.'; notice.classList.add('flash'); }
 
   // DIR-83 · de poort. Kijken mag voor iedereen (de scène is de etalage), chatten
   // pas met een geldige sessie. De echte afdwinging staat server-side: elk chat- en
@@ -3791,6 +3953,7 @@ const ADMIN_HTML = `<!doctype html>
     <div class="tabs">
       <button id="tabKlanten" class="tab actief">Klantbeheer</button>
       <button id="tabAgents" class="tab">Agents</button>
+      <button id="tabGebruik" class="tab">Gebruik</button>
     </div>
     <div id="sectieKlanten">
       <div class="dash">
@@ -3803,6 +3966,15 @@ const ADMIN_HTML = `<!doctype html>
         </aside>
         <section class="paneel" id="detail"></section>
       </div>
+    </div>
+    <div id="sectieGebruik" class="verborgen">
+      <p class="muted">Wie heeft de tool gebruikt, en wanneer. Alleen wie/wanneer/welke collega &mdash; nooit de inhoud van gesprekken. Regels ouder dan 90 dagen worden automatisch opgeruimd; hetzelfde bezoek aan dezelfde collega telt eens per half uur.</p>
+      <div class="balk">
+        <label class="balk-label" for="gebruikFilter">Filter op klant</label>
+        <select id="gebruikFilter"></select>
+        <p class="muted" id="gebruikSamenvatting"></p>
+      </div>
+      <div id="gebruikLijst"></div>
     </div>
     <div id="sectieAgents" class="verborgen">
       <p class="muted">Pas hier aan hoe je agents heten en hoe ze antwoorden. Wijzigingen gelden direct, zonder deploy. De databron per agent ligt vast — alleen de weergave en de teksten zijn aanpasbaar.</p>
@@ -4098,15 +4270,78 @@ const ADMIN_HTML = `<!doctype html>
       }
     });
   }
-  function kiesTab(agentsAan){
-    document.getElementById('tabKlanten').className='tab'+(agentsAan?'':' actief');
-    document.getElementById('tabAgents').className='tab'+(agentsAan?' actief':'');
-    toon(document.getElementById('sectieKlanten'), !agentsAan);
-    toon(document.getElementById('sectieAgents'), agentsAan);
-    if(agentsAan && !agents.length) laadAgents();
+  // DIR-87: drie secties, dus kiezen op naam in plaats van een ja/nee-vlag.
+  function kiesTab(welke){
+    var namen=['Klanten','Agents','Gebruik'];
+    namen.forEach(function(n){
+      document.getElementById('tab'+n).className = 'tab' + (n===welke ? ' actief' : '');
+      toon(document.getElementById('sectie'+n), n===welke);
+    });
+    if(welke==='Agents' && !agents.length) laadAgents();
+    if(welke==='Gebruik') laadGebruik();
   }
-  document.getElementById('tabKlanten').addEventListener('click',function(){ kiesTab(false); });
-  document.getElementById('tabAgents').addEventListener('click',function(){ kiesTab(true); });
+  document.getElementById('tabKlanten').addEventListener('click',function(){ kiesTab('Klanten'); });
+  document.getElementById('tabAgents').addEventListener('click',function(){ kiesTab('Agents'); });
+  document.getElementById('tabGebruik').addEventListener('click',function(){ kiesTab('Gebruik'); });
+
+  // ── DIR-87 · Gebruik-sectie ───────────────────────────────────────────────
+  var gebruikRegels=[], onbekendVandaag=0;
+  var AGENTNAAM={ gsc:'Albert (GSC)', ga4:'Gertjan (GA4)', ads:'Ilona (Ads)', anton:'Anton (content)' };
+  function tijdTekst(ms){
+    var d=new Date(ms||0);
+    function tw(n){ return (n<10?'0':'')+n; }
+    return tw(d.getDate())+'-'+tw(d.getMonth()+1)+'-'+d.getFullYear()+' '+tw(d.getHours())+':'+tw(d.getMinutes());
+  }
+  function laadGebruik(){
+    api('GET','/api/admin/gebruik').then(function(res){
+      if(!res.ok){ meld((res.j&&res.j.error)||'Kon het gebruik niet laden.'); return; }
+      gebruikRegels = (res.j&&res.j.regels)||[];
+      onbekendVandaag = (res.j&&res.j.onbekendVandaag)||0;
+      vulFilter(); renderGebruik();
+    });
+  }
+  function vulFilter(){
+    var sel=document.getElementById('gebruikFilter');
+    var gekozen=sel.value||'';
+    var namen=[];
+    gebruikRegels.forEach(function(r){ if(r.naam && namen.indexOf(r.naam)<0) namen.push(r.naam); });
+    namen.sort();
+    sel.innerHTML='';
+    var o=document.createElement('option'); o.value=''; o.textContent='Alle klanten'; sel.appendChild(o);
+    namen.forEach(function(n){ var x=document.createElement('option'); x.value=n; x.textContent=n; sel.appendChild(x); });
+    sel.value = namen.indexOf(gekozen)>=0 ? gekozen : '';
+  }
+  function renderGebruik(){
+    var doel=document.getElementById('gebruikLijst'); doel.textContent='';
+    var filter=document.getElementById('gebruikFilter').value||'';
+    var regels=gebruikRegels.filter(function(r){ return !filter || r.naam===filter; });
+    var sam=document.getElementById('gebruikSamenvatting');
+    // De teller van onbekende pogingen gaat over ALLE regels; die hoort dus niet in
+    // dezelfde zin als een gefilterd aantal.
+    var tekst = filter
+      ? regels.length + ' gebeurtenis' + (regels.length===1?'':'sen') + ' voor ' + filter
+        + ' (van ' + gebruikRegels.length + ' in totaal)'
+      : regels.length + ' gebeurtenis' + (regels.length===1?'':'sen')
+        + (onbekendVandaag ? ' — ' + onbekendVandaag + ' onbekende inlogpoging' + (onbekendVandaag===1?'':'en') + ' vandaag (zonder adres bewaard)' : '');
+    sam.textContent = tekst;
+    if(!regels.length){
+      var p=document.createElement('p'); p.className='leeg';
+      p.textContent='Nog geen gebruik geregistreerd.'; doel.appendChild(p); return;
+    }
+    regels.forEach(function(r){
+      var rij=document.createElement('div'); rij.className='rij';
+      var b=document.createElement('b');
+      b.textContent = r.wat==='onbekend' ? 'Onbekend Google-account' : (r.naam || r.email || 'Onbekend');
+      rij.appendChild(b);
+      var sp=document.createElement('span'); sp.className='muted';
+      var wat = r.wat==='login' ? 'ingelogd'
+        : (r.wat==='agent' ? ('opende ' + (AGENTNAAM[r.agent]||r.agent)) : 'inlogpoging geweigerd');
+      sp.textContent = tijdTekst(r.tijd) + ' — ' + wat + (r.email && r.wat!=='onbekend' ? ' — ' + r.email : '');
+      rij.appendChild(sp);
+      doel.appendChild(rij);
+    });
+  }
+  document.getElementById('gebruikFilter').addEventListener('change',renderGebruik);
 
   laadModel(); laad();
 </script>
@@ -4130,8 +4365,10 @@ async function handleChat(request, env, ctx) {
   // en uitsluitend op de site uit zijn eigen record; een extern bedrijf op zijn
   // eigen OAuth-token, precies als voorheen.
   const ctxData = await dataContext(request, env);
-  const cookies = parseCookies(request.headers.get("Cookie"));
-  let id = cookies[COOKIE];
+  noteerAgentGebruik(env, ctxData, "gsc", ctx);
+  // DIR-87-fix: een cookiewaarde die niet op een sessie-id lijkt behandelen we als
+  // 'geen sessie'. Zo kan niemand met een verzonnen waarde een andere DO adresseren.
+  let id = sessieIdUitCookie(request);
   let setCookie = null;
   if (!id) {
     // Een klant hoeft niets te koppelen: die krijgt hier zijn gesprekssessie.
@@ -4249,8 +4486,10 @@ async function handleGa4Chat(request, env, ctx) {
   }
   // DIR-84: klant → agency-token + uitsluitend de property uit zijn record.
   const ctxData = await dataContext(request, env);
-  const cookies = parseCookies(request.headers.get("Cookie"));
-  let id = cookies[COOKIE];
+  noteerAgentGebruik(env, ctxData, "ga4", ctx);
+  // DIR-87-fix: een cookiewaarde die niet op een sessie-id lijkt behandelen we als
+  // 'geen sessie'. Zo kan niemand met een verzonnen waarde een andere DO adresseren.
+  let id = sessieIdUitCookie(request);
   let setCookie = null;
   if (!id) {
     if (ctxData.soort !== "klant") return json({ error: "Niet gekoppeld. Koppel eerst je Google-account." }, 401);
@@ -4359,8 +4598,10 @@ async function handleAdsChat(request, env, ctx) {
   // DIR-84: klant → agency-token, en uitsluitend het Ads-account en Meta-account
   // uit zijn eigen record. Extern bedrijf → eigen OAuth-token, ongewijzigd.
   const ctxData = await dataContext(request, env);
-  const cookies = parseCookies(request.headers.get("Cookie"));
-  let id = cookies[COOKIE];
+  noteerAgentGebruik(env, ctxData, "ads", ctx);
+  // DIR-87-fix: een cookiewaarde die niet op een sessie-id lijkt behandelen we als
+  // 'geen sessie'. Zo kan niemand met een verzonnen waarde een andere DO adresseren.
+  let id = sessieIdUitCookie(request);
   let setCookie = null;
   if (!id) {
     if (ctxData.soort !== "klant") return json({ error: "Niet gekoppeld. Koppel eerst Google Ads via /oauth/start." }, 401);
@@ -4497,8 +4738,9 @@ async function handleContentChat(request, env, ctx) {
   if (!env.ANTHROPIC_API_KEY) {
     return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
   }
-  const cookies = parseCookies(request.headers.get("Cookie"));
-  let id = cookies[COOKIE];
+  // DIR-87-fix: een cookiewaarde die niet op een sessie-id lijkt behandelen we als
+  // 'geen sessie'. Zo kan niemand met een verzonnen waarde een andere DO adresseren.
+  let id = sessieIdUitCookie(request);
   let setCookie = null;
   if (!id) { id = crypto.randomUUID(); setCookie = sessionCookie(id, Math.floor(SESSION_TTL_MS / 1000)); }
   const stub = sessionStub(env, id);
@@ -4521,6 +4763,7 @@ async function handleContentChat(request, env, ctx) {
   // agency-token en op de bron uit zijn klantrecord — niet op een eigen OAuth-token
   // en nooit op de eerste bron uit het agency-account.
   const ctxData = await dataContext(request, env);
+  noteerAgentGebruik(env, ctxData, "anton", ctx);
   let token = null;
   if (ctxData.soort === "klant") token = ctxData.token;
   else { try { const s = await (await stub.fetch("https://do/chat/state")).json(); token = s && s.token; } catch (e) {} }
@@ -4586,7 +4829,7 @@ export default {
     // browser. Het token is van de klant zelf, dus laten staan zou betekenen dat de
     // volgende gebruiker van dezelfde browser er nog bij kan.
     if (path === "/api/klant/logout" && request.method === "POST") {
-      const sid = parseCookies(request.headers.get("Cookie"))[COOKIE];
+      const sid = sessieIdUitCookie(request);
       if (sid) {
         try {
           const resp = await sessionStub(env, sid).fetch("https://do/destroy");
@@ -4654,6 +4897,18 @@ export default {
         return json({ agent: await actieveAgent(env, key) });
       }
       return json({ error: "Methode niet toegestaan." }, 405);
+    }
+    // DIR-87 — gebruiksoverzicht. Alleen achter de admin-sessie: dit gaat over
+    // andere mensen. Zonder sessie 401, net als de rest van /api/admin/*.
+    if (path === "/api/admin/gebruik" && request.method === "GET") {
+      if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
+      try {
+        const r = await gebruikStub(env).fetch("https://do/gebruik/lijst");
+        const j = await r.json();
+        return json({ regels: j.regels || [], onbekendVandaag: j.onbekendVandaag || 0 });
+      } catch (e) {
+        return json({ error: "Kon het gebruiksoverzicht niet laden." }, 502);
+      }
     }
     if (path === "/api/admin/model") {
       if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
@@ -4806,13 +5061,19 @@ export default {
 
       // Zonder geverifieerd adres weten we niet wie dit is: dan geen sessie. Dat is
       // geen weigering op persoon, maar op ontbrekende identiteit — Google gaf geen
-      // bevestigd e-mailadres terug.
+      // bevestigd e-mailadres terug. DIR-87: dit telt als mislukte poging, en wel
+      // zonder adres, want dat hebben we juist niet.
       if (!email) {
+        ctx.waitUntil(logGebruik(env, { wat: "onbekend" }));
         const mis = new Headers({ Location: origin + "/?login=mislukt" });
         mis.append("Set-Cookie", `${STATE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
         mis.append("Set-Cookie", `${PKCE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
         return new Response(null, { status: 302, headers: mis });
       }
+
+      // DIR-87: vastleggen DAT er is ingelogd — wie en wanneer, verder niets. De naam
+      // komt uit het klantrecord als Dirk dat heeft; anders staat er alleen het adres.
+      ctx.waitUntil(logGebruik(env, { wat: "login", email, naam: (klant && klant.rec.naam) || "" }));
 
       // Sessie-cookies zetten, state- en PKCE-cookie wissen, terug naar de scène.
       // De sessie draagt het geverifieerde adres; de klantsleutel gaat mee als Dirk
@@ -4827,8 +5088,7 @@ export default {
 
     // AC-8 — disconnect: token revoken + sessie vernietigen.
     if (path === "/api/disconnect") {
-      const cookies = parseCookies(request.headers.get("Cookie"));
-      const id = cookies[COOKIE];
+      const id = sessieIdUitCookie(request);
       if (id) {
         const resp = await sessionStub(env, id).fetch("https://do/destroy");
         const { token } = await resp.json();

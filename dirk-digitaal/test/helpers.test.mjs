@@ -57,6 +57,13 @@ import {
   emailUitUserinfo,
   pkceVerifier,
   pkceChallenge,
+  gebruikSleutel,
+  magLoggen,
+  snoeiGebruik,
+  telOnbekendVandaag,
+  dagSleutel,
+  gebruikerSleutel,
+  geldigSessieId,
   klantBron,
   bronToegestaan,
   bronOfNiets,
@@ -822,4 +829,84 @@ test("pkce: verifier is niet te raden en de challenge is de S256 ervan", async (
   assert.equal(/^[A-Za-z0-9_-]+$/.test(ch), true);   // base64url, geen opvulling
   assert.equal(ch, await pkceChallenge(a));          // stabiel voor dezelfde verifier
   assert.notEqual(ch, await pkceChallenge(b));
+});
+
+
+// ---- DIR-87: gebruiksregistratie ----
+const UUR = 60 * 60 * 1000;
+const DAG = 24 * UUR;
+
+test("gebruikSleutel: sorteert chronologisch, ook over cijferlengtes heen", () => {
+  const vroeg = gebruikSleutel(1000, "aa");
+  const laat = gebruikSleutel(1787946000000, "bb");
+  assert.equal(vroeg < laat, true);                 // vaste breedte, dus tekstsortering = tijd
+  assert.match(gebruikSleutel(5, "x"), /^g:0{13}5-x$/);
+});
+
+test("magLoggen: dezelfde agent binnen het venster levert geen tweede regel op", () => {
+  const nu = 1_000_000_000;
+  assert.equal(magLoggen(0, nu, 30 * 60 * 1000), true);          // nog niets gezien
+  assert.equal(magLoggen(nu - 5 * 60 * 1000, nu, 30 * 60 * 1000), false);
+  assert.equal(magLoggen(nu - 31 * 60 * 1000, nu, 30 * 60 * 1000), true);
+});
+
+test("snoeiGebruik: gooit te oude regels weg en houdt de bovengrens aan", () => {
+  const nu = 1_000_000_000_000;
+  const regels = [
+    { sleutel: "a", tijd: nu - 100 * DAG },      // ouder dan 90 dagen
+    { sleutel: "b", tijd: nu - 10 * DAG },
+    { sleutel: "c", tijd: nu - 1 * DAG },
+    { sleutel: "d", tijd: nu },
+  ];
+  const weg = snoeiGebruik(regels, nu, { maxAantal: 100, maxLeeftijdMs: 90 * DAG });
+  assert.deepEqual(weg, ["a"]);
+  // Bovengrens: oudste eerst weg, nieuwste blijven staan.
+  const weg2 = snoeiGebruik(regels, nu, { maxAantal: 2, maxLeeftijdMs: 90 * DAG });
+  assert.deepEqual(weg2, ["a", "b"]);
+  assert.deepEqual(snoeiGebruik([], nu, {}), []);
+});
+
+test("telOnbekendVandaag: telt alleen weigeringen van vandaag, en niets persoonlijks", () => {
+  const nu = new Date(2026, 7, 28, 14, 0, 0).getTime();
+  const regels = [
+    { wat: "onbekend", tijd: nu - UUR },
+    { wat: "onbekend", tijd: nu - 2 * UUR },
+    { wat: "onbekend", tijd: nu - 20 * UUR },              // gisteren
+    { wat: "login", tijd: nu - UUR, email: "baas@klant-a.nl" },
+  ];
+  assert.equal(telOnbekendVandaag(regels, nu), 2);
+  // Een onbekende poging bevat geen adres: dat is de hele afspraak.
+  assert.equal(regels.filter((r) => r.wat === "onbekend").every((r) => !r.email), true);
+});
+
+test("dagSleutel: 'vandaag' is Dirks dag, niet die van de server (UTC)", () => {
+  // 28 augustus 00:30 Nederlandse tijd = 27 augustus 22:30 UTC. In UTC zou dit
+  // gisteren zijn; voor Dirk is het vandaag.
+  const nachtNL = Date.parse("2026-08-27T22:30:00Z");
+  assert.equal(dagSleutel(nachtNL, "Europe/Amsterdam"), "2026-08-28");
+  assert.equal(dagSleutel(nachtNL, "UTC"), "2026-08-27");
+  // En de teller volgt die dag: een poging van 00:30 NL telt bij 10:00 NL mee.
+  const ochtendNL = Date.parse("2026-08-28T08:00:00Z");
+  const regels = [{ wat: "onbekend", tijd: nachtNL }];
+  assert.equal(telOnbekendVandaag(regels, ochtendNL, "Europe/Amsterdam"), 1);
+  assert.equal(telOnbekendVandaag(regels, ochtendNL, "UTC"), 0);
+});
+
+test("gebruikerSleutel: twee klanten zonder e-mailadres vallen niet samen", () => {
+  const a = { email: "", naam: "Klant A" };
+  const b = { email: "", naam: "Klant B" };
+  assert.notEqual(gebruikerSleutel(a), gebruikerSleutel(b));
+  // Zelfde persoon blijft dezelfde sleutel, ook als de naam ontbreekt.
+  assert.equal(gebruikerSleutel({ email: "x@y.nl" }), gebruikerSleutel({ email: "x@y.nl", naam: "" }));
+  assert.notEqual(gebruikerSleutel({ email: "x@y.nl" }), gebruikerSleutel({ email: "z@y.nl" }));
+});
+
+test("geldigSessieId: alleen een UUID telt als sessie-id", () => {
+  assert.equal(geldigSessieId("3f2504e0-4f89-41d3-9a0c-0305e82c3301"), true);
+  // Dit is de aanval die het gebruikslog wiste: een verzonnen naam in het cookie.
+  assert.equal(geldigSessieId("gebruik-log"), false);
+  assert.equal(geldigSessieId("log:gebruik"), false);
+  assert.equal(geldigSessieId(""), false);
+  assert.equal(geldigSessieId(null), false);
+  assert.equal(geldigSessieId("3f2504e0-4f89-41d3-9a0c-0305e82c3301x"), false);
 });
