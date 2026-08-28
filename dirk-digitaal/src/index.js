@@ -83,7 +83,7 @@ const AGENT_INSTRUCTIES = {
       "Search Console-data van deze sessie (top zoekwoorden en pagina's, laatste periode):",
     ],
     // DIR-90: wat de bezoeker als eerste ziet, nog vóór de data er is.
-    opening: "Hoi! Ik kijk even naar je zoekprestaties, momentje\u2026",
+    opening: "Ik kijk even naar je zoekprestaties, momentje\u2026",
     // DIR-90: kort houden. De uitgebreide analyse (secties, tabellen) komt pas als
     // erom gevraagd wordt — dat scheelt wachttijd en kosten bij elk eerste bezoek.
     analyse:
@@ -110,7 +110,7 @@ const AGENT_INSTRUCTIES = {
       "GA4-data van deze sessie (overzicht van de gekozen property):",
     ],
     // DIR-90: eerst een menselijke opening, dan pas cijfers.
-    opening: "Hoi! Ik kijk even naar je bezoekcijfers, momentje\u2026",
+    opening: "Ik kijk even naar je bezoekcijfers, momentje\u2026",
     analyse:
       "Geef een KORT eerste beeld van de gekozen property, in gewone zinnen: maximaal vijf " +
       "regels, geen koppen, geen tabellen. Noem hooguit drie dingen die opvallen, met echte " +
@@ -135,7 +135,7 @@ const AGENT_INSTRUCTIES = {
       "Google Ads-data van deze sessie (overzicht van het gekozen account):",
     ],
     // DIR-90: eerst een menselijke opening, dan pas cijfers.
-    opening: "Hoi! Ik kijk even naar je campagnes, momentje\u2026",
+    opening: "Ik kijk even naar je campagnes, momentje\u2026",
     analyse:
       "Geef een KORT eerste beeld van het gekozen account, in gewone zinnen: maximaal vijf " +
       "regels, geen koppen, geen tabellen. Noem hooguit drie dingen die opvallen, met echte " +
@@ -3259,7 +3259,7 @@ const OFFICE_HTML = `<!doctype html>
     (items||[]).forEach(function(it){ var val=cur.itemValue(it), label=cur.itemLabel(it);
       var b=document.createElement('button'); b.className='knop sitebtn';
       b.textContent=label; b.addEventListener('click',function(){ box.remove(); addBubble('user',cur.prefix+label);
-        var payload={}; payload[cur.selKey]=val; streamChat(payload, true); }); box.appendChild(b); });
+        var payload={}; payload[cur.selKey]=val; startAnalyse(payload); }); box.appendChild(b); });
     msgs.appendChild(box); msgs.scrollTop=msgs.scrollHeight;
   }
 
@@ -3375,8 +3375,14 @@ const OFFICE_HTML = `<!doctype html>
   function wisOpening(){ if(openingBubbel){ openingBubbel.remove(); openingBubbel=null; } }
   async function startFlow(){
     if(started) return; started=true;
+    await startAnalyse({});
+  }
+
+  // DIR-90: de "momentje"-regel hoort vlak vóór de analyse. Bij één bron start die
+  // meteen; heb je er meer, dan komt eerst de keuzelijst en pas daarna dit.
+  async function startAnalyse(payload){
     openingBubbel = cur.opening ? addBubble('agent', cur.opening) : null;
-    await streamChat({}, true);
+    await streamChat(payload, true);
     openingBubbel=null;               // hoorde bij dít antwoord; daarna niet meer opruimen
   }
 
