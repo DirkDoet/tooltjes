@@ -41,8 +41,7 @@ import {
   buildContentSystemPrompt,
   kiesModel,
   schoonKlantRecord,
-  normaliseerGebruikersnaam,
-  hashKlantWachtwoord,
+  normaliseerEmail,
   agentStandaard,
   samenAgent,
   leesBijlagen,
@@ -54,7 +53,10 @@ import {
   isAdmin,
   maakKlantSessie,
   leesKlantSessie,
-  klantOpGebruikersnaam,
+  klantOpEmail,
+  emailUitUserinfo,
+  pkceVerifier,
+  pkceChallenge,
   klantBron,
   bronToegestaan,
   bronOfNiets,
@@ -72,6 +74,8 @@ test("buildGoogleAuthUrl: read-only scopes (GSC + GA4) + online (geen refresh-to
   assert.match(scope, /webmasters\.readonly/);
   assert.match(scope, /analytics\.readonly/);   // DIR-28: GA4-scope erbij
   assert.match(scope, /auth\/adwords/);          // DIR-30: Google Ads-scope erbij
+  assert.match(scope, /(^|\s)openid(\s|$)/);      // DIR-86: identiteit erbij
+  assert.match(scope, /(^|\s)email(\s|$)/);
   assert.equal(u.searchParams.get("access_type"), "online");
   assert.equal(u.searchParams.get("response_type"), "code");
   assert.equal(u.searchParams.get("redirect_uri"), "https://dd.example.workers.dev/oauth/callback");
@@ -458,51 +462,29 @@ test("kiesModel: alles wat niet in de lijst staat valt terug op Sonnet 5", () =>
 });
 
 // DIR-78: het admin-antwoord mag nooit het wachtwoord-materiaal bevatten.
-test("schoonKlantRecord: geeft koppelingen terug, nooit salt of hash", () => {
+test("schoonKlantRecord: geeft koppelingen + Google-adres, nooit een oud login-blok", () => {
   const c = schoonKlantRecord("abc", {
     naam: "Klant", adAccountId: "act_1", gscSite: "sc-domain:k.nl",
     ga4Property: "properties/7", adsCustomerId: "123", adsLoginCustomerId: "456",
+    googleEmail: "baas@k.nl",
+    // Een record van vóór DIR-86 kan nog een wachtwoord-hash bevatten; die mag de
+    // beheer-UI nooit zien.
     login: { gebruikersnaam: "klant", salt: "S4LTS4LT", hash: "H4SHH4SH", rondes: 210000 },
   });
-  assert.equal(c.gebruikersnaam, "klant");
-  assert.equal(c.heeftWachtwoord, true);
+  assert.equal(c.googleEmail, "baas@k.nl");
   assert.equal(JSON.stringify(c).includes("S4LTS4LT"), false);
   assert.equal(JSON.stringify(c).includes("H4SHH4SH"), false);
-  assert.equal("salt" in c, false);
-  assert.equal("hash" in c, false);
   assert.equal("login" in c, false);
+  assert.equal("gebruikersnaam" in c, false);
+  assert.equal("heeftWachtwoord" in c, false);
 });
 
-test("schoonKlantRecord: klant zonder login meldt heeftWachtwoord false", () => {
+test("schoonKlantRecord: klant zonder Google-adres kan niet inloggen", () => {
   const c = schoonKlantRecord("abc", { naam: "Klant" });
-  assert.equal(c.gebruikersnaam, "");
-  assert.equal(c.heeftWachtwoord, false);
+  assert.equal(c.googleEmail, "");
   assert.equal(c.gscSite, "");
 });
 
-test("normaliseerGebruikersnaam: trim + kleine letters (uniciteit case-insensitief)", () => {
-  assert.equal(normaliseerGebruikersnaam("  TestKlant "), "testklant");
-  assert.equal(normaliseerGebruikersnaam("TESTKLANT"), normaliseerGebruikersnaam("testklant"));
-  assert.equal(normaliseerGebruikersnaam(null), "");
-});
-
-test("hashKlantWachtwoord: PBKDF2-SHA256, salted, herhaalbaar met dezelfde salt", async () => {
-  const a = await hashKlantWachtwoord("geheim12345");
-  assert.equal(a.alg, "PBKDF2-SHA256");
-  assert.ok(a.rondes >= 100000);
-  assert.match(a.salt, /^[0-9a-f]{32}$/);
-  assert.match(a.hash, /^[0-9a-f]{64}$/);
-  assert.equal(a.hash.includes("geheim"), false);
-  const zelfde = await hashKlantWachtwoord("geheim12345", a.salt);
-  assert.equal(zelfde.hash, a.hash);
-  const ander = await hashKlantWachtwoord("geheim12346", a.salt);
-  assert.notEqual(ander.hash, a.hash);
-  const andereSalt = await hashKlantWachtwoord("geheim12345");
-  assert.notEqual(andereSalt.salt, a.salt);
-  assert.notEqual(andereSalt.hash, a.hash);
-});
-
-// DIR-80: de code-tekst blijft de standaard; een override legt er alleen bovenop.
 test("agentStandaard: vaste sleutel + databron, teksten uit de code", () => {
   const a = agentStandaard("gsc");
   assert.equal(a.key, "gsc");
@@ -646,10 +628,9 @@ function nepKv(store) {
   };
 }
 async function nepEnv(extra) {
-  const wachtwoord = await hashKlantWachtwoord("klantgeheim123");
   const store = {
-    [KLANT_A]: JSON.stringify({ naam: "Klant A", login: { gebruikersnaam: "Klant.A", ...wachtwoord } }),
-    [KLANT_B]: JSON.stringify({ naam: "Klant B" }),                 // geen login ingesteld
+    [KLANT_A]: JSON.stringify({ naam: "Klant A", googleEmail: "baas@klant-a.nl" }),
+    [KLANT_B]: JSON.stringify({ naam: "Klant B" }),                  // nog geen adres → kan niet inloggen
     "config:model": "claude-opus-5",                                 // geen klantrecord
   };
   return { ADMIN_PASSWORD: "geheim", CLIENTS: nepKv(store), ...(extra || {}) };
@@ -700,25 +681,33 @@ test("klant-sessie: een verwijderde klant komt er niet meer in", async () => {
   assert.equal(await magChatten(req, env), false);
 });
 
-test("klantOpGebruikersnaam: hoofdletterongevoelig, en alleen klanten met wachtwoord", async () => {
+test("klantOpEmail: hoofdletterongevoelig, en alleen klanten met een adres", async () => {
   const env = await nepEnv();
-  const gevonden = await klantOpGebruikersnaam(env, "  KLANT.a ");
+  const gevonden = await klantOpEmail(env, "  BAAS@Klant-A.nl ");
   assert.equal(gevonden.key, KLANT_A);
-  assert.equal(gevonden.rec.login.gebruikersnaam, "Klant.A");
-  assert.equal(await klantOpGebruikersnaam(env, "Klant B"), null);   // geen login ingesteld
-  assert.equal(await klantOpGebruikersnaam(env, "bestaatniet"), null);
-  assert.equal(await klantOpGebruikersnaam(env, ""), null);
+  assert.equal(gevonden.rec.naam, "Klant A");
+  // Klant B heeft geen adres: die is niet bereikbaar via login, ook niet met "".
+  assert.equal(await klantOpEmail(env, ""), null);
+  assert.equal(await klantOpEmail(env, "iemand@anders.nl"), null);
 });
 
-test("klantOpGebruikersnaam: geeft een hash terug die met veiligGelijk klopt", async () => {
-  const env = await nepEnv();
-  const gevonden = await klantOpGebruikersnaam(env, "klant.a");
-  const goed = await hashKlantWachtwoord("klantgeheim123", gevonden.rec.login.salt);
-  const fout = await hashKlantWachtwoord("verkeerd", gevonden.rec.login.salt);
-  assert.equal(goed.hash, gevonden.rec.login.hash);
-  assert.notEqual(fout.hash, gevonden.rec.login.hash);
+test("emailUitUserinfo: alleen een BEVESTIGD adres telt", () => {
+  assert.equal(emailUitUserinfo({ email: "Baas@Klant-A.nl", email_verified: true }), "baas@klant-a.nl");
+  assert.equal(emailUitUserinfo({ email: "baas@klant-a.nl", email_verified: "true" }), "baas@klant-a.nl");
+  assert.equal(emailUitUserinfo({ email: "baas@klant-a.nl", email_verified: false }), null);
+  assert.equal(emailUitUserinfo({ email: "baas@klant-a.nl" }), null);     // vlag ontbreekt
+  assert.equal(emailUitUserinfo({ email_verified: true }), null);          // geen adres
+  assert.equal(emailUitUserinfo(null), null);
 });
 
+test("normaliseerEmail: alleen kleine letters en spaties trimmen, verder niets", () => {
+  assert.equal(normaliseerEmail("  Baas@Klant-A.NL "), "baas@klant-a.nl");
+  // Punten en +tag NIET strippen: bij Google zijn dit verschillende accounts, en
+  // samenvoegen zou iemand op andermans klantrecord kunnen laten landen.
+  assert.equal(normaliseerEmail("b.a.a.s@gmail.com"), "b.a.a.s@gmail.com");
+  assert.equal(normaliseerEmail("baas+test@gmail.com"), "baas+test@gmail.com");
+  assert.notEqual(normaliseerEmail("b.a.a.s@gmail.com"), normaliseerEmail("baas@gmail.com"));
+});
 
 // ---- DIR-84: klant-afscherming (allowlist) ----
 // Het agency-account kan bij alle klanten; deze functies zijn het enige dat klant A
@@ -763,11 +752,17 @@ test("bronToegestaan: niets meegegeven betekent 'mijn eigen bron'", () => {
   assert.equal(bronOfNiets(REC_A, "gsc", undefined), "sc-domain:klant-a.nl");
 });
 
-test("bronToegestaan: zonder vastgelegde bron is niets toegestaan", () => {
-  assert.equal(bronToegestaan(REC_B, "adsLogin", "customers/9998887776"), false);
-  assert.equal(bronToegestaan({}, "gsc", "sc-domain:klant-a.nl"), false);
-  assert.equal(bronToegestaan({}, "gsc", ""), false);
-  assert.equal(bronOfNiets({}, "ga4", ""), null);
+test("bronToegestaan: zonder vastgelegde bron kiest de klant zelf (DIR-86)", () => {
+  // Sinds DIR-86 draait een klant op zijn EIGEN Google-koppeling. Een leeg veld is
+  // dus geen hek meer maar 'geen voorkeur': alles wat hij kan opvragen is van hem.
+  assert.equal(bronToegestaan(REC_B, "adsLogin", "customers/9998887776"), true);
+  assert.equal(bronToegestaan({}, "gsc", "sc-domain:van-mezelf.nl"), true);
+  assert.equal(bronToegestaan({}, "gsc", ""), true);
+  assert.equal(bronOfNiets({}, "ga4", ""), "");                    // nog niets gekozen
+  assert.equal(bronOfNiets({}, "ga4", "properties/999"), "properties/999");
+  // Maar staat er WEL een voorkeur, dan is dat de enige die telt.
+  assert.equal(bronOfNiets(REC_A, "ga4", ""), "properties/111");
+  assert.equal(bronOfNiets(REC_A, "ga4", "properties/222"), null);
 });
 
 test("bronToegestaan: een andere schrijfwijze komt er niet langs", () => {
@@ -789,4 +784,23 @@ test("bronOfNiets: geeft de eigen bron of niets — nooit die van een ander", ()
   assert.equal(bronOfNiets(REC_A, "ga4", "properties/111"), "properties/111");
   assert.equal(bronOfNiets(REC_A, "ga4", "properties/222"), null);
   assert.equal(bronOfNiets(REC_A, "gsc", "sc-domain:klant-b.nl"), null);
+});
+
+
+test("buildGoogleAuthUrl: PKCE alleen als er een challenge is (DIR-86)", () => {
+  const zonder = new URL(buildGoogleAuthUrl({ clientId: "a", redirectUri: "https://x/cb", state: "s" }));
+  assert.equal(zonder.searchParams.get("code_challenge"), null);
+  const met = new URL(buildGoogleAuthUrl({ clientId: "a", redirectUri: "https://x/cb", state: "s", codeChallenge: "CH" }));
+  assert.equal(met.searchParams.get("code_challenge"), "CH");
+  assert.equal(met.searchParams.get("code_challenge_method"), "S256");
+});
+
+test("pkce: verifier is niet te raden en de challenge is de S256 ervan", async () => {
+  const a = pkceVerifier(), b = pkceVerifier();
+  assert.equal(a.length >= 43, true);          // ruim boven de RFC-ondergrens
+  assert.notEqual(a, b);                        // elke poging een nieuwe
+  const ch = await pkceChallenge(a);
+  assert.equal(/^[A-Za-z0-9_-]+$/.test(ch), true);   // base64url, geen opvulling
+  assert.equal(ch, await pkceChallenge(a));          // stabiel voor dezelfde verifier
+  assert.notEqual(ch, await pkceChallenge(b));
 });

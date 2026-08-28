@@ -23,11 +23,3 @@ id = "d9d3026f28f24ab38d20080d757fd981"
 #   wrangler secret put META_SYSTEM_TOKEN     # Meta System User-token (Ilona)
 #   wrangler secret put META_APP_SECRET       # voor appsecret_proof
 #   wrangler secret put ADMIN_PASSWORD        # admin-beheer klanten
-#   wrangler secret put GOOGLE_REFRESH_TOKEN  # DIR-84: agency-account voor klanten
-#
-# GOOGLE_REFRESH_TOKEN (DIR-84): het refresh-token van Dirk's eigen Google-account.
-# Ingelogde klanten draaien hierop; zij koppelen zelf niets. Zonder dit token krijgt
-# een klant netjes 'je gegevens staan nog niet klaar' en NOOIT data van iemand anders.
-# Eenmalig ophalen: doorloop de OAuth-consent voor dit account met access_type=offline
-# en prompt=consent (de inlogknop in de app gebruikt access_type=online en levert dus
-# geen refresh-token op).
