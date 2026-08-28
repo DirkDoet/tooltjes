@@ -14,6 +14,10 @@
 // Eén Google-koppeling dekt GSC (Albert), GA4 (Gertjan) en Google Ads (Ilona):
 // read-only scopes worden samen aangevraagd (DIR-28/DIR-30).
 const SCOPES = [
+  // DIR-86: identiteit erbij. Dezelfde toestemming levert nu WIE je bent (een
+  // geverifieerd e-mailadres) en WAAR je bij mag — geen aparte inlogstap meer.
+  "openid",
+  "email",
   "https://www.googleapis.com/auth/webmasters.readonly",
   "https://www.googleapis.com/auth/analytics.readonly",
   "https://www.googleapis.com/auth/adwords", // Google Ads (Ilona, DIR-30)
@@ -22,6 +26,7 @@ const SCOPE = SCOPES.join(" ");
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 min inactiviteit
 const COOKIE = "dd_session";
 const STATE_COOKIE = "dd_oauth_state";
+const PKCE_COOKIE = "dd_oauth_pkce";   // DIR-86: PKCE-verifier, alleen server-side
 
 const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
@@ -36,15 +41,10 @@ const META_VERSION = "v21.0";
 const META_GRAPH_BASE = "https://graph.facebook.com/" + META_VERSION;
 const ADMIN_COOKIE = "dd_admin";   // admin-sessie (klantbeheer)
 // DIR-82 — klant-sessie: eigen cookie, eigen TTL, volledig los van de admin-sessie.
-// De magic-link-cookie (dd_klant) is vervallen: een klant logt in met gebruikersnaam
-// en wachtwoord, niet met een link die je kunt doorsturen.
+// De magic-link-cookie (dd_klant) is vervallen. DIR-86: een klant logt in met zijn
+// Google-account; dezelfde toestemming levert zowel zijn identiteit als zijn data.
 const KLANT_SESSIE_COOKIE = "dd_klant_sessie";
 const KLANT_SESSIE_TTL_MS = 8 * 60 * 60 * 1000;   // 8 uur — een werkdag, daarna opnieuw inloggen
-// Brute-force-rem op de klant-login. Zonder rem is een PBKDF2-hash weinig waard: dan
-// mag een aanvaller onbeperkt gokken. Tellers per gebruikersnaam én per IP.
-const LOGIN_VENSTER_MS = 15 * 60 * 1000;
-const LOGIN_MAX_PER_NAAM = 5;
-const LOGIN_MAX_PER_IP = 20;
 
 // ============================================================================
 // ===== AGENT-INSTRUCTIES — HIER AANPASSEN, daarna `wrangler deploy` ==========
@@ -171,7 +171,7 @@ const AGENT_INSTRUCTIES = {
 // ---------------------------------------------------------------- helpers ---
 
 // Google's toestemmings-URL opbouwen. access_type "online" → geen refresh-token.
-export function buildGoogleAuthUrl({ clientId, redirectUri, state }) {
+export function buildGoogleAuthUrl({ clientId, redirectUri, state, codeChallenge }) {
   const p = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
@@ -182,7 +182,28 @@ export function buildGoogleAuthUrl({ clientId, redirectUri, state }) {
     prompt: "consent",
     state,
   });
+  // DIR-86: PKCE naast de state-controle. De state stopt een aangesmeerde callback,
+  // PKCE stopt het inwisselen van een onderschepte code door iemand anders.
+  if (codeChallenge) {
+    p.set("code_challenge", codeChallenge);
+    p.set("code_challenge_method", "S256");
+  }
   return AUTH_ENDPOINT + "?" + p.toString();
+}
+
+// PKCE-verifier (hoge entropie) + bijbehorende S256-challenge.
+export function pkceVerifier() {
+  const b = new Uint8Array(32);
+  crypto.getRandomValues(b);
+  let s = "";
+  for (const x of b) s += x.toString(16).padStart(2, "0");
+  return s;
+}
+export async function pkceChallenge(verifier) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(verifier || "")));
+  let bin = "";
+  for (const b of new Uint8Array(digest)) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 export function parseCookies(header) {
@@ -551,6 +572,36 @@ async function huidigeKlant(request, env) {
   return rec ? { key, rec } : null;
 }
 
+// ---- DIR-86 · identiteit uit Google -----------------------------------------
+// Het e-mailadres bepaalt bij welk klantrecord iemand hoort. Wie die koppeling kan
+// sturen, ÍS die klant — dus het adres mag uitsluitend uit een geverifieerde bron
+// komen. We halen het op bij Google's userinfo-endpoint, over TLS, met het token dat
+// we net zelf hebben ingewisseld. Geen JWT uit het verzoek, en ook geen zelf
+// gedecodeerd id_token zonder handtekeningcontrole.
+const USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo";
+
+// Pure controle op het antwoord van userinfo. `email_verified` MOET waar zijn: een
+// onbevestigd adres zegt niets over wie je bent, en juist dat adres is hier de
+// sleutel tot een klantaccount. Google stuurt de vlag soms als string.
+export function emailUitUserinfo(data) {
+  if (!data || typeof data !== "object") return null;
+  const bevestigd = data.email_verified === true || data.email_verified === "true";
+  if (!bevestigd) return null;
+  const email = normaliseerEmail(data.email);
+  return email || null;
+}
+
+// Haalt het geverifieerde e-mailadres op bij Google. Geeft null bij elke twijfel.
+// Het token gaat alleen in de Authorization-header en wordt nergens gelogd.
+async function googleEmailVanToken(accessToken) {
+  if (!accessToken) return null;
+  try {
+    const resp = await fetch(USERINFO_ENDPOINT, { headers: { Authorization: "Bearer " + accessToken } });
+    if (!resp.ok) return null;
+    return emailUitUserinfo(await resp.json());
+  } catch (e) { return null; }
+}
+
 function klantSessieCookie(waarde) {
   return `${KLANT_SESSIE_COOKIE}=${waarde}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(KLANT_SESSIE_TTL_MS / 1000)}`;
 }
@@ -572,14 +623,17 @@ function metaConfigured(env) {
 // wonen in dezelfde KV-namespace, dus filteren we de lijst daarop (DIR-77/78).
 const KLANT_SLEUTEL = /^[0-9a-f]{36}$/;
 
-export function normaliseerGebruikersnaam(naam) {
-  return String(naam || "").trim().toLowerCase();
+// DIR-86: klanten worden herkend aan hun Google-e-mailadres. Vergelijken doen we
+// hoofdletterongevoelig en zonder omliggende spaties — verder exact.
+export function normaliseerEmail(adres) {
+  return String(adres || "").trim().toLowerCase();
 }
 
-// Alles wat de admin-UI mag zien: nooit salt of hash, alleen of er een login staat.
+// Alles wat de admin-UI mag zien. DIR-86: het klant-wachtwoord bestaat niet meer;
+// een klant wordt herkend aan zijn Google-e-mailadres. Een oud `login`-blok in een
+// bestaand record blijft gewoon staan maar wordt nergens meer gebruikt of getoond.
 export function schoonKlantRecord(key, rec) {
   const r = rec || {};
-  const login = r.login || null;
   return {
     key,
     naam: r.naam || "",
@@ -588,37 +642,7 @@ export function schoonKlantRecord(key, rec) {
     ga4Property: r.ga4Property || "",
     adsCustomerId: r.adsCustomerId || "",
     adsLoginCustomerId: r.adsLoginCustomerId || "",
-    gebruikersnaam: (login && login.gebruikersnaam) || "",
-    heeftWachtwoord: !!(login && login.hash),
-  };
-}
-
-// PBKDF2-SHA256 met een random salt per klant. Bewust geen enkelvoudige SHA-256:
-// die is te snel om een wachtwoord mee te beschermen als de KV ooit uitlekt.
-const KLANT_PBKDF2_RONDES = 210000;
-function bytesNaarHex(bytes) {
-  let s = "";
-  for (const b of bytes) s += b.toString(16).padStart(2, "0");
-  return s;
-}
-function hexNaarBytes(hex) {
-  const uit = new Uint8Array(Math.floor(String(hex || "").length / 2));
-  for (let i = 0; i < uit.length; i++) uit[i] = parseInt(hex.substr(i * 2, 2), 16);
-  return uit;
-}
-export async function hashKlantWachtwoord(wachtwoord, saltHex) {
-  const salt = saltHex ? hexNaarBytes(saltHex) : crypto.getRandomValues(new Uint8Array(16));
-  const sleutel = await crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(String(wachtwoord)), "PBKDF2", false, ["deriveBits"],
-  );
-  const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: KLANT_PBKDF2_RONDES, hash: "SHA-256" }, sleutel, 256,
-  );
-  return {
-    salt: bytesNaarHex(salt),
-    hash: bytesNaarHex(new Uint8Array(bits)),
-    rondes: KLANT_PBKDF2_RONDES,
-    alg: "PBKDF2-SHA256",
+    googleEmail: r.googleEmail || "",
   };
 }
 
@@ -672,30 +696,28 @@ async function kvListClients(env) {
   if (gezien.length !== idxNu.length || gezien.some((k) => !idxNu.includes(k))) await kvIndexSchrijf(env, gezien);
   return uit;
 }
-// Gebruikersnaam moet uniek zijn over alle klanten (case-insensitief), anders kan
-// een latere klant-login niet bepalen wélke klant inlogt.
-async function gebruikersnaamBezet(env, gebruikersnaam, eigenKey) {
-  const wil = normaliseerGebruikersnaam(gebruikersnaam);
+// DIR-86 — het e-mailadres moet uniek zijn over alle klanten, anders is bij het
+// inloggen niet te bepalen wélke klant er binnenkomt.
+async function emailBezet(env, email, eigenKey) {
+  const wil = normaliseerEmail(email);
   if (!wil) return false;
   for (const c of await kvListClients(env)) {
     if (c.key === eigenKey) continue;
-    if (normaliseerGebruikersnaam(c.gebruikersnaam) === wil) return true;
+    if (normaliseerEmail(c.googleEmail) === wil) return true;
   }
   return false;
 }
-// DIR-82 — het RUWE klantrecord bij een gebruikersnaam (inclusief salt/hash), voor
-// de klant-login. Bewust niet via kvListClients: die schoont salt en hash er juist
-// uit. Geeft null als de naam niet bestaat of er geen wachtwoord is ingesteld.
-export async function klantOpGebruikersnaam(env, gebruikersnaam) {
-  const wil = normaliseerGebruikersnaam(gebruikersnaam);
+// DIR-86 — welk klantrecord hoort bij dit (geverifieerde) Google-e-mailadres?
+// Geeft null als het adres bij niemand staat: dan is er geen toegang. Gebruikt
+// dezelfde sleutelbron als de beheerlijst, zodat een net toegevoegde klant meteen
+// kan inloggen (KV's list() loopt achter, de index niet).
+export async function klantOpEmail(env, email) {
+  const wil = normaliseerEmail(email);
   if (!wil || !env.CLIENTS) return null;
-  const list = await env.CLIENTS.list({ limit: 1000 });
-  for (const k of list.keys || []) {
-    if (!KLANT_SLEUTEL.test(k.name)) continue;         // config-sleutels overslaan
-    const rec = await kvGetClient(env, k.name);
-    const login = rec && rec.login;
-    if (!login || !login.gebruikersnaam || !login.hash || !login.salt) continue;
-    if (normaliseerGebruikersnaam(login.gebruikersnaam) === wil) return { key: k.name, rec };
+  for (const c of await kvListClients(env)) {
+    if (normaliseerEmail(c.googleEmail) !== wil) continue;
+    const rec = await kvGetClient(env, c.key);
+    if (rec) return { key: c.key, rec };
   }
   return null;
 }
@@ -1263,30 +1285,6 @@ export class SessionDO {
       return json({ ok: true });
     }
 
-    // DIR-82 — brute-force-rem op de klant-login. Deze DO-instantie hoort niet bij
-    // een browser-sessie maar bij één teller (per gebruikersnaam of per IP): de
-    // aanroeper kiest de instantie via idFromName("login:<sleutel>"). Een DO geeft
-    // een strikt consistente teller; KV zou hier te laat kunnen zijn.
-    // Er komt nooit een wachtwoord of gebruikersnaam in de opslag — alleen een getal.
-    if (url.pathname === "/login/poging") {
-      const { max, vensterMs } = await request.json();
-      const venster = Number(vensterMs) || 0;
-      let stand = (await this.state.storage.get("pogingen")) || { tot: 0, start: now };
-      if (now - stand.start > venster) stand = { tot: 0, start: now };   // venster verlopen → opnieuw
-      stand.tot += 1;
-      await this.state.storage.put("pogingen", stand);
-      await this.state.storage.setAlarm(now + venster);                  // ruimt zichzelf op
-      return json({
-        geblokkeerd: stand.tot > Number(max),
-        wachtMs: Math.max(0, venster - (now - stand.start)),
-      });
-    }
-    // Gelukte inlog wist de teller, zodat een vergeetachtige klant niet blijft hangen.
-    if (url.pathname === "/login/reset") {
-      await this.state.storage.delete("pogingen");
-      return json({ ok: true });
-    }
-
     // Sessie aanmaken/aanraken zonder Google-token (DIR-30).
     if (url.pathname === "/touch") {
       await this.state.storage.put("lastActive", now);
@@ -1325,29 +1323,6 @@ export class SessionDO {
 
 // ------------------------------------------------------------- Worker-router
 
-// DIR-82 — tellerinstantie voor de brute-force-rem. Eigen DO-instantie per teller,
-// dus los van de browser-sessies.
-function loginTellerStub(env, sleutel) {
-  return env.SESSIONS.get(env.SESSIONS.idFromName("login-teller:" + sleutel));
-}
-async function telInlogpoging(env, sleutel, max) {
-  try {
-    const r = await loginTellerStub(env, sleutel).fetch("https://do/login/poging", {
-      method: "POST",
-      body: JSON.stringify({ max, vensterMs: LOGIN_VENSTER_MS }),
-    });
-    return await r.json();
-  } catch (e) {
-    // Valt de teller uit, dan blokkeren we niet — anders sluit een storing iedereen
-    // buiten. De PBKDF2-kosten per poging blijven dan de rem.
-    return { geblokkeerd: false, wachtMs: 0 };
-  }
-}
-async function wisInlogpogingen(env, sleutel) {
-  try { await loginTellerStub(env, sleutel).fetch("https://do/login/reset", { method: "POST" }); }
-  catch (e) { /* niet erg: de teller loopt vanzelf af */ }
-}
-
 function sessionStub(env, id) {
   return env.SESSIONS.get(env.SESSIONS.idFromName(id));
 }
@@ -1370,37 +1345,9 @@ async function huidigeToken(request, env) {
 // klant B scheidt. Vandaar: één plek waar de bron wordt bepaald, één plek waar hij
 // wordt gecontroleerd, en een weigering die niets prijsgeeft.
 //
-// Het agency-token komt uit een refresh-token in de secrets (GOOGLE_REFRESH_TOKEN).
-// De korte cache hieronder houdt ALLEEN dat access-token vast — dat is van Dirk,
-// niet van een klant, en is voor iedere klant hetzelfde. Er wordt nergens
-// klant-DATA gecachet: geen KV-cache, geen isolate-map, geen cache-headers.
-let agencyTokenCache = { token: null, tot: 0 };
-async function agencyToken(env) {
-  if (!env.GOOGLE_REFRESH_TOKEN || !env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return null;
-  const nu = Date.now();
-  if (agencyTokenCache.token && nu < agencyTokenCache.tot) return agencyTokenCache.token;
-  const body = new URLSearchParams({
-    client_id: env.GOOGLE_CLIENT_ID,
-    client_secret: env.GOOGLE_CLIENT_SECRET,
-    refresh_token: env.GOOGLE_REFRESH_TOKEN,
-    grant_type: "refresh_token",
-  });
-  let tok = null;
-  try {
-    const resp = await fetch(TOKEN_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
-    if (!resp.ok) return null;                       // bewust geen token in een log
-    tok = await resp.json();
-  } catch (e) { return null; }
-  if (!tok || !tok.access_token) return null;
-  const levenMs = Math.max(60, Number(tok.expires_in || 3600) - 60) * 1000;
-  agencyTokenCache = { token: tok.access_token, tot: nu + levenMs };
-  return tok.access_token;
-}
-
+// Een klant draait op ZIJN EIGEN Google-koppeling (DIR-86). Er is geen agency-token
+// meer dat bij alle klanten kan: het token in de sessie is dat van de ingelogde
+// bezoeker zelf. Wat het klantrecord nog doet is de bron VOORKIEZEN.
 // De vastgelegde bron van één klant. Leeg = niet gekoppeld door Dirk.
 export function klantBron(rec, soort) {
   const r = rec || {};
@@ -1412,12 +1359,17 @@ export function klantBron(rec, soort) {
   return "";
 }
 
-// Mag deze klant deze bron opvragen? Leeg gevraagd = "geef me mijn eigen bron".
-// Vergelijkt genormaliseerd, zodat "properties/123" en "123" hetzelfde zijn en een
-// klant niet met een andere schrijfwijze langs de controle komt.
+// Mag deze klant deze bron opvragen?
+// DIR-86 verandert de betekenis van een LEEG veld. De klant draait nu op zijn eigen
+// Google-koppeling, dus alles wat hij kan opvragen is per definitie van hemzelf. Het
+// klantrecord is daarmee geen hek meer maar een VOORKEUR: staat er een bron in, dan
+// is dat de enige die telt (zo kan een verkeerd verzoek nooit een andere property
+// van hem raken en houdt Dirk de regie); staat er niets, dan kiest de klant zelf uit
+// zijn eigen accounts. Onder DIR-84 betekende leeg "niets mag", want toen liep het
+// via Dirks agency-account — dat gevaar bestaat niet meer.
 export function bronToegestaan(rec, soort, gevraagd) {
   const eigen = klantBron(rec, soort);
-  if (!eigen) return false;                          // niets vastgelegd → niets toegestaan
+  if (!eigen) return true;                           // geen voorkeur → hij kiest zelf
   const wil = String(gevraagd == null ? "" : gevraagd).trim();
   if (!wil) return true;                             // geen keuze meegegeven → eigen bron
   if (soort === "ga4") return ga4PropertyId(wil) === ga4PropertyId(eigen);
@@ -1431,10 +1383,17 @@ export function bronToegestaan(rec, soort, gevraagd) {
   return wil === eigen;                              // GSC-site: exacte string van Google
 }
 
-// De bron die we daadwerkelijk gebruiken, of null als het niet mag. Dit is de
-// controle die VLAK VOOR elke API-call staat — niet alleen bij een keuzelijst.
+// De bron die we daadwerkelijk gebruiken. Deze controle staat VLAK VOOR elke
+// API-call, niet alleen bij een keuzelijst.
+//   - staat er een voorkeur in het record → die, en alleen die;
+//   - geen voorkeur → wat de klant zelf koos (uit zijn eigen account), of leeg als
+//     hij nog niets koos (dan volgt de gewone kies-stap);
+//   - vraagt hij iets dat botst met zijn voorkeur → null = weigeren.
 export function bronOfNiets(rec, soort, gevraagd) {
-  return bronToegestaan(rec, soort, gevraagd) ? klantBron(rec, soort) : null;
+  if (!bronToegestaan(rec, soort, gevraagd)) return null;
+  const eigen = klantBron(rec, soort);
+  if (eigen) return eigen;
+  return String(gevraagd == null ? "" : gevraagd).trim();
 }
 
 // Eén weigering voor alle gevallen: bestaat niet, hoort niet bij jou, of nog niet
@@ -1443,24 +1402,22 @@ function geenBron() {
   return json({ error: "Deze gegevensbron is niet beschikbaar voor jouw account." }, 403);
 }
 
-// Wel een geldige klant en een toegestane bron, maar het agency-account is niet
-// (goed) geconfigureerd. Aparte melding, want dit is een zaak voor Dirk - en er
-// staat niets klantspecifieks in.
-function geenAgency() {
-  return json({ error: "Je gegevens staan nog niet klaar. Vraag Dirk om je account te koppelen." }, 503);
+// DIR-86: de klant draait op zijn eigen Google-koppeling. Is die er niet (meer),
+// dan is opnieuw inloggen met Google het antwoord — niet wachten op Dirk.
+function geenKoppeling() {
+  return json({ error: "Je Google-koppeling is verlopen. Log opnieuw in met Google." }, 401);
 }
 
-// WIE vraagt dit op, en met welk recht?
-//   soort "klant" → agency-token + uitsluitend de bronnen uit zijn klantrecord;
-//   soort "eigen" → het eigen OAuth-token van deze browsersessie (extern bedrijf).
-// De klant komt ALLEEN uit de ondertekende sessie (DIR-82), nooit uit een
-// parameter, header of body. De twee paden raken elkaar nergens: een extern
-// bedrijf komt niet door de klant-allowlist, en een klant niet bij het eigen
-// OAuth-token.
+// WIE vraagt dit op, en met welk recht? Enige trechter naar een token.
+// Beide soorten draaien op het OAuth-token van DEZE browsersessie (DIR-86); het
+// verschil is dat we van een klant weten wie hij is, en dat zijn record een
+// voorkeursbron kan vastleggen. De klant-identiteit komt ALLEEN uit de ondertekende
+// sessie (DIR-82) — nooit uit een parameter, header of body.
 async function dataContext(request, env) {
+  const token = await huidigeToken(request, env);
   const klant = await huidigeKlant(request, env);
-  if (klant) return { soort: "klant", key: klant.key, rec: klant.rec, token: await agencyToken(env) };
-  return { soort: "eigen", key: null, rec: null, token: await huidigeToken(request, env) };
+  if (klant) return { soort: "klant", key: klant.key, rec: klant.rec, token };
+  return { soort: "eigen", key: null, rec: null, token };
 }
 
 async function fetchGscSites(token) {
@@ -1849,15 +1806,14 @@ const AGENT_NAAM = { gsc: "Albert (GSC/SEO)", ga4: "Gertjan (GA4)", ads: "Ilona 
 // van de eerste bron als er nog niets gekozen is). Geeft null als niet bruikbaar
 // (bv. niet gekoppeld). GSC/GA4/Ads vallen onder dezelfde Google-token.
 async function collegaPack(env, stub, token, key, ctxData) {
-  // DIR-84: bij een ingelogde klant komt de bron ALTIJD uit zijn record. Zonder deze
-  // tak zou de auto-selectie hieronder de eerste site/property/account uit het
-  // agency-account pakken — dat is dan de data van een andere klant.
+  // DIR-84/DIR-86: heeft de klant een vastgelegde bron, dan gebruikt de collega
+  // die — nooit de auto-selectie hieronder. Zonder vastgelegde bron pakt de
+  // auto-selectie de eerste uit ZIJN EIGEN koppeling, en dat is zijn eigen data.
   const klant = ctxData && ctxData.soort === "klant" ? ctxData.rec : null;
   if (key === "gsc") {
     if (!token) return null;
-    if (klant) {
+    if (klant && klantBron(klant, "gsc")) {
       const site = klantBron(klant, "gsc");
-      if (!site) return null;
       return { tool: gscTool(), note: "Albert (GSC/SEO) haakt aan — gebruik `gsc_query` voor live Search Console-data van " + site + ".",
         dispatch: { gsc_query: (input) => fetchGscQuery(token, site, input) } };
     }
@@ -1875,9 +1831,8 @@ async function collegaPack(env, stub, token, key, ctxData) {
   }
   if (key === "ga4") {
     if (!token) return null;
-    if (klant) {
+    if (klant && klantBron(klant, "ga4")) {
       const property = klantBron(klant, "ga4");
-      if (!property) return null;
       return { tool: ga4Tool(), note: "Gertjan (GA4) haakt aan — gebruik `ga4_report` voor live Google Analytics 4-data van " + property + ".",
         dispatch: { ga4_report: (input) => fetchGa4Query(token, property, input) } };
     }
@@ -1895,9 +1850,8 @@ async function collegaPack(env, stub, token, key, ctxData) {
   }
   if (key === "ads") {
     if (!token || !env.GOOGLE_ADS_DEVELOPER_TOKEN) return null;
-    if (klant) {
+    if (klant && klantBron(klant, "ads")) {
       const customer = klantBron(klant, "ads");
-      if (!customer) return null;
       const loginCid = klantBron(klant, "adsLogin") || customer;
       return { tool: adsTool(), note: "Ilona (Google Ads) haakt aan — gebruik `ads_report` voor live Google Ads-data.",
         dispatch: { ads_report: (input) => fetchAdsReport(token, env, customer, input, loginCid) } };
@@ -2697,21 +2651,18 @@ const OFFICE_HTML = `<!doctype html>
     <p class="zm-tekst">Je AI-collega&#39;s zitten klaar. Klik een bureau aan om met een agent te praten.</p>
   </div>
   <div class="zm-blok" id="zm-gast">
-    <button class="zm-knop" id="zm-open-klant" type="button">Inloggen</button>
+    <button class="zm-knop" id="zm-open-klant" type="button">Inloggen met Google</button>
     <button class="zm-knop zm-sub" id="zm-open-inlog" type="button">Beheer</button>
   </div>
-  <!-- DIR-82: klant-login met de gebruikersnaam en het wachtwoord uit het
-       klantbeheer. Staat los van de beheer-login hieronder. -->
-  <form class="zm-blok verborgen" id="zm-klant-inlog" autocomplete="on">
+  <!-- DIR-86: klanten loggen in met Google. Diezelfde toestemming geeft ons wie je
+       bent en waar je bij mag; een apart wachtwoord bestaat niet meer. -->
+  <div class="zm-blok verborgen" id="zm-klant-inlog">
     <h2 class="zm-kop">Inloggen</h2>
-    <label class="zm-label" for="zm-gebruiker">Gebruikersnaam</label>
-    <input class="zm-invoer" id="zm-gebruiker" type="text" autocomplete="username">
-    <label class="zm-label" for="zm-klantpw">Wachtwoord</label>
-    <input class="zm-invoer" id="zm-klantpw" type="password" autocomplete="current-password">
-    <button class="zm-knop" type="submit">Log in</button>
+    <p class="zm-tekst">Log in met het Google-account waarin je Search Console, Analytics of Ads staan.</p>
+    <a class="zm-knop" id="zm-google" href="/oauth/start">Inloggen met Google</a>
     <button class="zm-knop zm-sub" id="zm-klant-annuleer" type="button">Annuleren</button>
     <p class="zm-fout verborgen" id="zm-klant-fout" role="alert"></p>
-  </form>
+  </div>
   <div class="zm-blok verborgen" id="zm-klant">
     <h2 class="zm-kop">Ingelogd</h2>
     <p class="zm-tekst">Je bent ingelogd als <b id="zm-klant-naam">klant</b>. Klik een collega aan om te beginnen.</p>
@@ -3629,7 +3580,6 @@ const OFFICE_HTML = `<!doctype html>
   // DIR-82 · klant-login: eigen formulier, eigen blok, eigen endpoints.
   var klantForm=document.getElementById('zm-klant-inlog'), klantBlok=document.getElementById('zm-klant');
   var klantFout=document.getElementById('zm-klant-fout'), klantNaam=document.getElementById('zm-klant-naam');
-  var gebruiker=document.getElementById('zm-gebruiker'), klantPw=document.getElementById('zm-klantpw');
   function toon(el,ja){ if(ja) el.classList.remove('verborgen'); else el.classList.add('verborgen'); }
   function melding(el,tekst){ el.textContent=tekst||''; toon(el,!!tekst); }
   function api(methode,url,body){
@@ -3675,22 +3625,15 @@ const OFFICE_HTML = `<!doctype html>
     }).catch(function(){ toonGast(); return false; });
   }
   // Het menu is het enige inlogscherm; de poort-modal (DIR-83) stuurt hierheen.
+  // DIR-86: inloggen is één klik naar Google; de sessie wordt in de callback gezet.
   function openKlantForm(){
-    toon(gast,false); toon(klantForm,true); melding(klantFout,''); gebruiker.focus();
+    toon(gast,false); toon(klantForm,true); melding(klantFout,'');
+    var g=document.getElementById('zm-google'); if(g) g.focus();
   }
   window.ddOpenKlantInlog=openKlantForm;
   document.getElementById('zm-open-klant').addEventListener('click',openKlantForm);
-  document.getElementById('zm-klant-annuleer').addEventListener('click',function(){
-    gebruiker.value=''; klantPw.value=''; toonGast();
-  });
-  klantForm.addEventListener('submit',function(e){
-    e.preventDefault(); melding(klantFout,'');
-    api('POST','/api/klant/login',{ gebruikersnaam:gebruiker.value, wachtwoord:klantPw.value }).then(function(res){
-      if(!res.ok){ melding(klantFout, res.j.error || 'Inloggen mislukt.'); klantPw.value=''; return; }
-      gebruiker.value=''; klantPw.value=''; toonKlant(res.j.naam);
-      if(window.ddToegangVernieuwen) window.ddToegangVernieuwen();
-    }).catch(function(){ melding(klantFout,'Inloggen mislukt — probeer het opnieuw.'); });
-  });
+  document.getElementById('zm-klant-annuleer').addEventListener('click',toonGast);
+
   document.getElementById('zm-klant-uitlog').addEventListener('click',function(){
     function na(){ toonGast(); if(window.ddToegangVernieuwen) window.ddToegangVernieuwen(); }
     api('POST','/api/klant/logout').then(na).catch(na);
@@ -3720,7 +3663,16 @@ const OFFICE_HTML = `<!doctype html>
       actief.textContent=labelVan(res.j.model);
     }).catch(function(){ melding(modelFout,'Opslaan mislukt — probeer het opnieuw.'); });
   });
-  haalStatus();
+  // Kwam je terug van Google met een adres dat Dirk niet kent, dan is er geen sessie.
+  // Dit moet NA haalStatus(): die zet het menu terug op 'gast' en wist meldingen.
+  haalStatus().then(function(){
+    try{
+      if(new URLSearchParams(location.search).get('login')!=='onbekend') return;
+      openKlantForm();
+      melding(klantFout,'Dit Google-account is nog niet gekoppeld. Vraag Dirk om je toe te voegen.');
+      history.replaceState(null,'',location.pathname);   // niet opnieuw tonen bij herladen
+    }catch(e){}
+  });
 })();
 
 </script>
@@ -3796,7 +3748,7 @@ const ADMIN_HTML = `<!doctype html>
   .aangepast{ font-size:.85rem; color:#7a5f14; }
 </style></head><body>
   <h1>Dirk Digitaal — klantbeheer</h1>
-  <p class="muted">Per klant leg je hier de koppelingen vast: Meta, Search Console, GA4 en Google Ads. Alles is optioneel — een klant hoeft niet alles te hebben. Inloggen doet de klant met de gebruikersnaam en het wachtwoord die je hieronder instelt.</p>
+  <p class="muted">Per klant leg je hier de koppelingen vast: Meta, Search Console, GA4 en Google Ads. Alles is optioneel — een klant hoeft niet alles te hebben. De klant logt in met Google; het e-mailadres dat je hieronder invult bepaalt wie er als deze klant binnenkomt.</p>
   <div id="login">
     <h2>Inloggen</h2>
     <input id="pw" type="password" placeholder="Admin-wachtwoord" autocomplete="current-password">
@@ -3857,8 +3809,7 @@ const ADMIN_HTML = `<!doctype html>
     { id:'ga4Property', label:'GA4-property', hint:'Bijv. properties/123456789', groep:'Google-koppelingen' },
     { id:'adsCustomerId', label:'Google Ads-account', hint:'Customer-id, bijv. 123-456-7890', groep:'Google-koppelingen' },
     { id:'adsLoginCustomerId', label:'Google Ads login-customer-id (MCC)', hint:'Alleen nodig bij een subaccount onder een MCC', groep:'Google-koppelingen' },
-    { id:'gebruikersnaam', label:'Gebruikersnaam', hint:'Waarmee de klant straks zelf inlogt; moet uniek zijn', groep:'Klant-login' },
-    { id:'wachtwoord', label:'Wachtwoord', hint:'Minstens 8 tekens. Leeg laten = ongewijzigd. Wordt versleuteld opgeslagen en nooit teruggetoond.', type:'password', groep:'Klant-login' }
+    { id:'googleEmail', label:'Google e-mailadres', hint:'Het adres waarmee de klant bij Google inlogt. Precies dit adres geeft toegang; leeg = deze klant kan niet inloggen.', groep:'Klant-login' }
   ];
   var gekozenKlant=null;   // sleutel van de klant die in het paneel staat ('' = nieuw)
   var klantenNu=[];        // laatst getoonde lijst, zodat een net bewaarde klant meteen zichtbaar is
@@ -3889,7 +3840,7 @@ const ADMIN_HTML = `<!doctype html>
       k.appendChild(badge('GSC', !!c.gscSite));
       k.appendChild(badge('GA4', !!c.ga4Property));
       k.appendChild(badge('Ads', !!c.adsCustomerId));
-      k.appendChild(badge('Login', !!(c.gebruikersnaam && c.heeftWachtwoord)));
+      k.appendChild(badge('Login', !!c.googleEmail));
       k.addEventListener('click',function(){ gekozenKlant=c.key; render(clients); toonDetail(c); });
       lijst.appendChild(k);
     });
@@ -3899,12 +3850,11 @@ const ADMIN_HTML = `<!doctype html>
     var doel=document.getElementById('detail'); doel.textContent=''; meld('');
     var h=document.createElement('h2'); h.textContent = c ? (c.naam || '(naamloos)') : 'Nieuwe klant'; doel.appendChild(h);
     if(c){
-      // DIR-82: magic-links zijn vervallen. De klant logt voortaan in met de
-      // gebruikersnaam en het wachtwoord die hieronder staan.
+      // DIR-86: de klant logt in met Google. Alleen het adres hieronder geeft toegang.
       var uitleg=document.createElement('p'); uitleg.className='muted';
-      uitleg.textContent = c.gebruikersnaam
-        ? 'Deze klant logt in op de startpagina met gebruikersnaam "'+c.gebruikersnaam+'".'
-        : 'Deze klant kan nog niet inloggen: stel hieronder een gebruikersnaam en wachtwoord in.';
+      uitleg.textContent = c.googleEmail
+        ? 'Deze klant logt in met Google op het adres ' + c.googleEmail + '.'
+        : 'Deze klant kan nog niet inloggen: vul hieronder zijn Google-adres in.';
       doel.appendChild(uitleg);
     }
     var invoeren={}, groep='';
@@ -3914,9 +3864,9 @@ const ADMIN_HTML = `<!doctype html>
         var kop=document.createElement('h3'); kop.textContent=groep; doel.appendChild(kop);
         if(groep==='Klant-login'){
           var st=document.createElement('p'); st.className='muted';
-          st.textContent = (c && c.heeftWachtwoord)
-            ? 'Wachtwoord is ingesteld. Vul alleen iets in als je het wilt vervangen.'
-            : 'Nog geen wachtwoord ingesteld.';
+          st.textContent = (c && c.googleEmail)
+            ? 'Deze klant logt in met "Inloggen met Google" op dit adres.'
+            : 'Nog geen Google-adres: deze klant kan niet inloggen.';
           doel.appendChild(st);
         }
       }
@@ -3930,7 +3880,6 @@ const ADMIN_HTML = `<!doctype html>
       var body={}; VELDEN.forEach(function(def){ body[def.id]=invoeren[def.id].value; });
       api(c?'PUT':'POST', '/api/admin/clients'+(c?'?key='+encodeURIComponent(c.key):''), body).then(function(res){
         if(!res.ok){ meld((res.j&&res.j.error)||'Opslaan mislukt.'); return; }
-        invoeren.wachtwoord.value='';
         melding.textContent = c ? 'Opgeslagen.' : 'Klant toegevoegd.';
         var opgeslagen = res.j && res.j.client;
         gekozenKlant = (opgeslagen && opgeslagen.key) || gekozenKlant;
@@ -4184,13 +4133,16 @@ async function handleChat(request, env, ctx) {
   let promptText;              // wat naar het model gaat
   let storedUser = userText;   // wat in de historie komt
 
-  if (ctxData.soort === "klant") {
-    // DIR-84 · klant-pad: de site komt uit het klantrecord. Een site meesturen die
-    // niet van hem is, stopt hier — geen lijst, geen keuze, geen andermans data.
-    const eigenSite = bronOfNiets(ctxData.rec, "gsc", wantSite);
-    if (!eigenSite) return geenBron();
-    token = ctxData.token;
-    if (!token) return geenAgency();
+  const voorkeurSite = ctxData.soort === "klant" ? klantBron(ctxData.rec, "gsc") : "";
+  if (ctxData.soort === "klant" && wantSite && !bronToegestaan(ctxData.rec, "gsc", wantSite)) {
+    return geenBron();          // botst met de vastgelegde voorkeur van deze klant
+  }
+  if (voorkeurSite) {
+    // DIR-86 · klant met een vastgelegde site: die staat vast, dus geen lijst en
+    // geen keuze. Zonder vastgelegde site valt hij hieronder in de gewone flow en
+    // kiest hij uit zijn EIGEN accounts — dat is veilig, het is zijn koppeling.
+    const eigenSite = voorkeurSite;
+    if (!token) return geenKoppeling();
     if (!gsc || gsc.actief !== eigenSite) {
       gsc = await selectSite(stub, token, eigenSite, [eigenSite]);
       if (!gsc) return json({ error: "Kon de prestaties van je site niet laden." }, 502);
@@ -4297,12 +4249,14 @@ async function handleGa4Chat(request, env, ctx) {
   let promptText;
   let storedUser = userText;
 
-  if (ctxData.soort === "klant") {
-    // DIR-84 · klant-pad: property uit het record, geen lijst, geen keuze.
-    const eigenProp = bronOfNiets(ctxData.rec, "ga4", wantProp);
-    if (!eigenProp) return geenBron();
-    token = ctxData.token;
-    if (!token) return geenAgency();
+  const voorkeurProp = ctxData.soort === "klant" ? klantBron(ctxData.rec, "ga4") : "";
+  if (ctxData.soort === "klant" && wantProp && !bronToegestaan(ctxData.rec, "ga4", wantProp)) {
+    return geenBron();
+  }
+  if (voorkeurProp) {
+    // DIR-86 · vastgelegde property → die, en alleen die. Anders de gewone flow.
+    const eigenProp = voorkeurProp;
+    if (!token) return geenKoppeling();
     if (!ga4 || ga4.actief !== eigenProp) {
       ga4 = await selectGa4Property(stub, token, eigenProp, [{ property: eigenProp, displayName: ctxData.rec.naam || "" }]);
       if (!ga4) return json({ error: "Kon de GA4-cijfers van je property niet laden." }, 502);
@@ -4413,10 +4367,9 @@ async function handleAdsChat(request, env, ctx) {
     return geenBron();
   }
 
-  const googleAds = !!(token && env.GOOGLE_ADS_DEVELOPER_TOKEN
-    && (ctxData.soort !== "klant" || klantBron(ctxData.rec, "ads")));
+  const googleAds = !!(token && env.GOOGLE_ADS_DEVELOPER_TOKEN);
   if (!googleAds && !metaOn) {
-    if (ctxData.soort === "klant") return ctxData.token ? geenBron() : geenAgency();
+    if (ctxData.soort === "klant" && !token) return geenKoppeling();
     return json({ error: "Nog geen advertentie-bron. Klik op \"Koppel Google Ads\" om te beginnen." }, 401);
   }
 
@@ -4426,11 +4379,11 @@ async function handleAdsChat(request, env, ctx) {
   let promptText;
   let storedUser = userText;
 
-  if (ctxData.soort === "klant" && googleAds) {
-    // DIR-84 · klant-pad: account en MCC-id komen uit het record. Een ander account
-    // meesturen stopt hier; er wordt nooit een accountlijst opgehaald of getoond.
-    const eigenCust = bronOfNiets(ctxData.rec, "ads", wantCustomer);
-    if (!eigenCust) return geenBron();
+  const voorkeurCust = ctxData.soort === "klant" ? klantBron(ctxData.rec, "ads") : "";
+  if (voorkeurCust && googleAds) {
+    // DIR-86 · vastgelegd Ads-account → geen lijst, geen keuze. Zonder vastgelegd
+    // account kiest de klant hieronder uit zijn eigen accounts.
+    const eigenCust = voorkeurCust;
     const eigenLogin = klantBron(ctxData.rec, "adsLogin") || eigenCust;
     if (!ads || ads.actief !== eigenCust) {
       ads = await selectAdsCustomer(stub, token, env, eigenCust,
@@ -4573,9 +4526,8 @@ export default {
     const redirectUri = origin + "/oauth/callback";
 
     // Startpagina: het 2D retro-kantoor (DIR-14).
-    // DIR-82: de magic-link-ingang (`/?k=<sleutel>`) is vervallen. Een oude link opent
-    // gewoon het kantoor en geeft geen toegang meer — inloggen gaat via
-    // gebruikersnaam + wachtwoord. Klantrecords zelf blijven bestaan.
+    // DIR-82/DIR-86: de magic-link-ingang (`/?k=<sleutel>`) is vervallen en inloggen
+    // gaat met Google. Een oude link opent gewoon het kantoor en geeft geen toegang.
     if (path === "/" && request.method === "GET") {
       return new Response(await officeHtml(env), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
@@ -4601,44 +4553,27 @@ export default {
       return json({ ok: true }, 200, { "Set-Cookie": `${ADMIN_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0` });
     }
 
-    // DIR-82 — klant-login: gebruikersnaam + wachtwoord uit het klantbeheer (DIR-78).
-    // Los van de admin-login: dit zet uitsluitend het klant-cookie en geeft dus nooit
-    // toegang tot /admin of de admin-endpoints.
-    if (path === "/api/klant/login" && request.method === "POST") {
-      // Zonder ADMIN_PASSWORD kunnen we geen sessie ondertekenen. Geen detail naar buiten.
-      if (!env.ADMIN_PASSWORD) return json({ error: "Inloggen is nog niet geconfigureerd." }, 500);
-      if (!env.CLIENTS) return json({ error: "Inloggen is nog niet geconfigureerd." }, 500);
-      let b = {}; try { b = await request.json(); } catch (e) { /* leeg */ }
-      const gebruikersnaam = normaliseerGebruikersnaam((b && b.gebruikersnaam) || "").slice(0, 80);
-      const wachtwoord = String((b && b.wachtwoord) || "");
-      const ip = request.headers.get("CF-Connecting-IP") || "onbekend";
-
-      // Eerst tellen, dan pas rekenen: een geblokkeerde poging kost geen PBKDF2.
-      // Twee tellers: één per gebruikersnaam (gericht raden) en één per IP (breed
-      // raden over veel namen). Beide moeten door.
-      const perNaam = await telInlogpoging(env, "naam:" + (gebruikersnaam || "(leeg)"), LOGIN_MAX_PER_NAAM);
-      const perIp = await telInlogpoging(env, "ip:" + ip, LOGIN_MAX_PER_IP);
-      if (perNaam.geblokkeerd || perIp.geblokkeerd) {
-        const minuten = Math.ceil(Math.max(perNaam.wachtMs, perIp.wachtMs) / 60000);
-        return json({ error: "Te veel inlogpogingen. Probeer het over " + minuten + " minuten opnieuw." }, 429);
-      }
-
-      const gevonden = gebruikersnaam ? await klantOpGebruikersnaam(env, gebruikersnaam) : null;
-      // Ook bij een onbekende naam één keer doorrekenen met een verzonnen salt: zo
-      // duurt een mislukte poging even lang en verraadt de tijd niet of de naam
-      // bestaat. De foutmelding is hoe dan ook voor beide gevallen dezelfde.
-      const salt = gevonden ? gevonden.rec.login.salt : "00000000000000000000000000000000";
-      const berekend = await hashKlantWachtwoord(wachtwoord, salt);
-      const klopt = !!gevonden && veiligGelijk(berekend.hash, gevonden.rec.login.hash);
-      if (!klopt) return json({ error: "Onjuiste gebruikersnaam of wachtwoord." }, 401);
-
-      await wisInlogpogingen(env, "naam:" + gebruikersnaam);
-      await wisInlogpogingen(env, "ip:" + ip);
-      const waarde = await maakKlantSessie(env, gevonden.key);
-      return json({ ok: true, naam: gevonden.rec.naam || "" }, 200, { "Set-Cookie": klantSessieCookie(waarde) });
-    }
+    // DIR-86 — de klant-login met wachtwoord is vervallen; inloggen gaat via Google
+    // (/oauth/start → /oauth/callback). Er is dus bewust geen POST-route meer die een
+    // gebruikersnaam en wachtwoord aanneemt: één inlogweg is veiliger dan twee.
+    // DIR-86: uitloggen wist zowel de klant-sessie als de Google-koppeling van deze
+    // browser. Het token is van de klant zelf, dus laten staan zou betekenen dat de
+    // volgende gebruiker van dezelfde browser er nog bij kan.
     if (path === "/api/klant/logout" && request.method === "POST") {
-      return json({ ok: true }, 200, { "Set-Cookie": klantSessieWissen() });
+      const sid = parseCookies(request.headers.get("Cookie"))[COOKIE];
+      if (sid) {
+        try {
+          const resp = await sessionStub(env, sid).fetch("https://do/destroy");
+          const { token } = await resp.json();
+          if (token) await fetch(REVOKE_ENDPOINT + "?token=" + encodeURIComponent(token), { method: "POST" });
+        } catch (e) { /* opruimen is best-effort; de cookies gaan hoe dan ook weg */ }
+      }
+      const headers = new Headers();
+      headers.append("Set-Cookie", klantSessieWissen());
+      headers.append("Set-Cookie", `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+      headers.append("Content-Type", "application/json; charset=utf-8");
+      headers.append("Cache-Control", "no-store");
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
     }
     // DIR-77 — admin: motor (model) voor alle agents lezen/zetten. Zowel lezen als
     // zetten vereist een geldige admin-sessie: een bezoeker ziet de kiezer dus niet
@@ -4735,13 +4670,17 @@ export default {
         const naam = tekst(b && b.naam, 120);
         if (!bewerken && !naam) return json({ error: "Naam is verplicht." }, 400);
 
-        const gebruikersnaam = tekst(b && b.gebruikersnaam, 80);
-        const wachtwoord = String((b && b.wachtwoord) || "");
-        if (gebruikersnaam && await gebruikersnaamBezet(env, gebruikersnaam, key)) {
-          return json({ error: "Die gebruikersnaam is al in gebruik bij een andere klant." }, 409);
+        // DIR-86: het Google-e-mailadres bepaalt wie er als deze klant binnenkomt.
+        // Uniciteit wordt hier in de OPSLAG afgedwongen, niet alleen in het formulier:
+        // twee klanten met hetzelfde adres zou betekenen dat niet vaststaat wie er
+        // inlogt. Alleen lowercase normaliseren — geen punten strippen, geen +tag
+        // weghalen, want dat zijn bij Google verschillende accounts.
+        const googleEmail = normaliseerEmail(tekst(b && b.googleEmail, 160));
+        if (googleEmail && !/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(googleEmail)) {
+          return json({ error: "Dat lijkt geen geldig e-mailadres." }, 400);
         }
-        if (wachtwoord && wachtwoord.length < 8) {
-          return json({ error: "Kies een wachtwoord van minstens 8 tekens." }, 400);
+        if (googleEmail && await emailBezet(env, googleEmail, key)) {
+          return json({ error: "Dat Google-adres staat al bij een andere klant." }, 409);
         }
 
         const uit = Object.assign({}, rec || {});
@@ -4752,12 +4691,11 @@ export default {
         if (b && b.adsCustomerId !== undefined) uit.adsCustomerId = tekst(b.adsCustomerId, 40);
         if (b && b.adsLoginCustomerId !== undefined) uit.adsLoginCustomerId = tekst(b.adsLoginCustomerId, 40);
 
-        // Login: gebruikersnaam mag los worden bijgewerkt; het wachtwoord komt er
-        // alleen bij als er een nieuw wachtwoord is ingevuld — en dan als salted hash.
-        const login = Object.assign({}, uit.login || {});
-        if (gebruikersnaam) login.gebruikersnaam = gebruikersnaam;
-        if (wachtwoord) Object.assign(login, await hashKlantWachtwoord(wachtwoord));
-        if (login.gebruikersnaam || login.hash) uit.login = login;
+        // Het adres mag ook leeggemaakt worden; die klant kan dan niet inloggen.
+        if (b && b.googleEmail !== undefined) uit.googleEmail = googleEmail;
+        // DIR-86: oude wachtwoord-login opruimen. Bestaande records blijven werken,
+        // maar de hash heeft geen functie meer en hoort niet te blijven staan.
+        if (uit.login) delete uit.login;
 
         const bewaardeKey = bewerken ? key : randomKey();
         await kvPutClient(env, bewaardeKey, uit);
@@ -4777,14 +4715,17 @@ export default {
     if (path === "/oauth/start") {
       if (!env.GOOGLE_CLIENT_ID) return json({ error: "Koppeling niet geconfigureerd (client-ID ontbreekt)." }, 500);
       const state = crypto.randomUUID();
-      const authUrl = buildGoogleAuthUrl({ clientId: env.GOOGLE_CLIENT_ID, redirectUri, state });
-      return new Response(null, {
-        status: 302,
-        headers: {
-          Location: authUrl,
-          "Set-Cookie": `${STATE_COOKIE}=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
-        },
+      const verifier = pkceVerifier();
+      const authUrl = buildGoogleAuthUrl({
+        clientId: env.GOOGLE_CLIENT_ID, redirectUri, state,
+        codeChallenge: await pkceChallenge(verifier),
       });
+      // State tegen een aangesmeerde callback, PKCE-verifier tegen het inwisselen van
+      // een onderschepte code. Beide alleen server-side leesbaar en kort geldig.
+      const headers = new Headers({ Location: authUrl });
+      headers.append("Set-Cookie", `${STATE_COOKIE}=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`);
+      headers.append("Set-Cookie", `${PKCE_COOKIE}=${verifier}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`);
+      return new Response(null, { status: 302, headers });
     }
 
     // AC-4 — callback: code → access token → sessie in DO + cookie.
@@ -4806,6 +4747,8 @@ export default {
         redirect_uri: redirectUri,
         grant_type: "authorization_code",
       });
+      const verifier = cookies[PKCE_COOKIE];
+      if (verifier) body.set("code_verifier", verifier);
       const tokenResp = await fetch(TOKEN_ENDPOINT, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -4818,16 +4761,29 @@ export default {
       const accessToken = tok.access_token;
       if (!accessToken) return json({ error: "Geen toegang gekregen van Google." }, 502);
 
+      // DIR-86: dezelfde toestemming levert de identiteit. Het adres komt van
+      // Google's userinfo over TLS met dit verse token — niet uit een parameter en
+      // niet uit een zelf gedecodeerd token.
+      const email = await googleEmailVanToken(accessToken);
+      // Opzoeken, meer niet: er wordt in dit pad NOOIT een klantrecord aangemaakt,
+      // aangevuld of bijgewerkt. Een record zonder e-mailadres is dus niet
+      // bereikbaar via login; Dirk vult dat adres eerst in /admin in.
+      const klant = email ? await klantOpEmail(env, email) : null;
+
       const sessionId = crypto.randomUUID();
       await sessionStub(env, sessionId).fetch("https://do/put", {
         method: "POST",
         body: JSON.stringify({ token: accessToken }),
       });
 
-      // Sessie-cookie zetten, state-cookie wissen, terug naar de startpagina.
-      const headers = new Headers({ Location: origin + "/" });
+      // Sessie-cookie zetten, state- en PKCE-cookie wissen, terug naar de startpagina.
+      // Onbekend adres → wel een Google-koppeling in deze browsersessie, maar GEEN
+      // klant-sessie: zonder klantrecord is er geen toegang (de poort blijft dicht).
+      const headers = new Headers({ Location: origin + (klant ? "/" : "/?login=onbekend") });
       headers.append("Set-Cookie", sessionCookie(sessionId, Math.floor(SESSION_TTL_MS / 1000)));
       headers.append("Set-Cookie", `${STATE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+      headers.append("Set-Cookie", `${PKCE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+      if (klant) headers.append("Set-Cookie", klantSessieCookie(await maakKlantSessie(env, klant.key)));
       return new Response(null, { status: 302, headers });
     }
 
@@ -4874,15 +4830,13 @@ export default {
       return json({ chatten: false, soort: null, naam: "" });
     }
 
-    // AC-6 — GSC-sites. DIR-84: een ingelogde klant krijgt NOOIT de lijst uit het
-    // agency-account (die lekt de namen van andere klanten), alleen zijn eigen,
-    // vastgelegde site.
+    // AC-6 — GSC-sites. DIR-86: heeft de klant een vastgelegde site, dan is dat de
+    // enige die hij ziet. Anders zijn eigen lijst uit zijn eigen koppeling — dat
+    // lekt niets, want het is zijn account.
     if (path === "/api/gsc/sites") {
       const ctxData = await dataContext(request, env);
-      if (ctxData.soort === "klant") {
-        const site = klantBron(ctxData.rec, "gsc");
-        return json({ sites: site ? [{ siteUrl: site, permissionLevel: "siteOwner" }] : [] });
-      }
+      const voorkeur = ctxData.soort === "klant" ? klantBron(ctxData.rec, "gsc") : "";
+      if (voorkeur) return json({ sites: [{ siteUrl: voorkeur, permissionLevel: "siteOwner" }] });
       if (!ctxData.token) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console via /oauth/start." }, 401);
       const sites = await fetchGscSites(ctxData.token);
       if (!sites) return json({ error: "Kon je sites niet ophalen bij Google." }, 502);
@@ -4894,10 +4848,11 @@ export default {
       const ctxData = await dataContext(request, env);
       let site = url.searchParams.get("site");
       if (ctxData.soort === "klant") {
-        // Allowlist vlak vóór de call: vraagt hij een andere site, dan stopt het hier.
+        // Vlak vóór de call: botst het verzoek met de vastgelegde voorkeur, dan stopt
+        // het hier. Zonder voorkeur mag hij zijn eigen site opgeven.
         site = bronOfNiets(ctxData.rec, "gsc", site);
         if (!site) return geenBron();
-        if (!ctxData.token) return geenAgency();
+        if (!ctxData.token) return geenKoppeling();
       } else {
         if (!ctxData.token) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console via /oauth/start." }, 401);
         if (!site) return json({ error: "Geef een site op via ?site=<url>." }, 400);
@@ -4913,14 +4868,12 @@ export default {
     }
 
     // DIR-28 — GA4/Gertjan: properties oplijsten (AC-2).
-    // DIR-84: klant krijgt alleen zijn eigen property terug, nooit de lijst van het
-    // agency-account.
+    // DIR-86: met een vastgelegde property ziet de klant alleen die; anders zijn
+    // eigen lijst uit zijn eigen koppeling.
     if (path === "/api/ga4/properties") {
       const ctxData = await dataContext(request, env);
-      if (ctxData.soort === "klant") {
-        const prop = klantBron(ctxData.rec, "ga4");
-        return json({ properties: prop ? [{ property: prop, displayName: ctxData.rec.naam || "" }] : [] });
-      }
+      const voorkeur = ctxData.soort === "klant" ? klantBron(ctxData.rec, "ga4") : "";
+      if (voorkeur) return json({ properties: [{ property: voorkeur, displayName: ctxData.rec.naam || "" }] });
       if (!ctxData.token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
       const props = await fetchGa4Properties(ctxData.token);
       if (!props) return json({ error: "Kon je GA4-properties niet ophalen bij Google." }, 502);
@@ -4934,7 +4887,7 @@ export default {
       if (ctxData.soort === "klant") {
         property = bronOfNiets(ctxData.rec, "ga4", property);
         if (!property) return geenBron();
-        if (!ctxData.token) return geenAgency();
+        if (!ctxData.token) return geenKoppeling();
       } else {
         if (!ctxData.token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
         if (!property) return json({ error: "Geef een property op via ?property=properties/<id>." }, 400);
@@ -4956,13 +4909,14 @@ export default {
     }
 
     // DIR-30 — Google Ads/Ilona: toegankelijke accounts (AC-2).
-    // DIR-84: klant krijgt alleen zijn eigen account, nooit de MCC-lijst.
+    // DIR-86: met een vastgelegd account ziet de klant alleen dat; anders de
+    // accounts uit zijn eigen koppeling.
     if (path === "/api/ads/customers") {
       const ctxData = await dataContext(request, env);
-      if (ctxData.soort === "klant") {
-        const cust = klantBron(ctxData.rec, "ads");
-        const login = klantBron(ctxData.rec, "adsLogin") || cust;
-        return json({ accounts: cust ? [{ customer: cust, loginCid: login, naam: ctxData.rec.naam || "" }] : [] });
+      const voorkeurCust = ctxData.soort === "klant" ? klantBron(ctxData.rec, "ads") : "";
+      if (voorkeurCust) {
+        const login = klantBron(ctxData.rec, "adsLogin") || voorkeurCust;
+        return json({ accounts: [{ customer: voorkeurCust, loginCid: login, naam: ctxData.rec.naam || "" }] });
       }
       if (!ctxData.token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
       if (!env.GOOGLE_ADS_DEVELOPER_TOKEN) return json({ error: "Google Ads is nog niet geconfigureerd (developer-token ontbreekt)." }, 500);
@@ -4984,8 +4938,8 @@ export default {
         const gevraagdLogin = url.searchParams.get("login_customer");
         if (gevraagdLogin && !bronToegestaan(ctxData.rec, "adsLogin", gevraagdLogin)
             && !bronToegestaan(ctxData.rec, "ads", gevraagdLogin)) return geenBron();
-        loginCustomer = klantBron(ctxData.rec, "adsLogin") || customer;
-        if (!ctxData.token) return geenAgency();
+        loginCustomer = klantBron(ctxData.rec, "adsLogin") || loginCustomer || customer;
+        if (!ctxData.token) return geenKoppeling();
         if (!env.GOOGLE_ADS_DEVELOPER_TOKEN) return json({ error: "Google Ads is nog niet geconfigureerd (developer-token ontbreekt)." }, 500);
       } else {
         if (!ctxData.token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
