@@ -512,64 +512,86 @@ export async function isAdmin(request, env) {
 // chat- en data-endpoints, zodat er nooit één deurtje open blijft staan. Kijken
 // mag voor iedereen (de scène is de etalage); chatten kost API-geld en vraagt dus
 // een geldige sessie.
-// Nu telt alleen de admin-sessie. DIR-82 voegt hier straks de klant-sessie toe —
-// dat is één regel erbij in DEZE functie, niet op tien plekken in de router.
+// DIR-88: dat is de admin-sessie, of iemand die met Google is ingelogd.
 export async function magChatten(request, env) {
   if (await isAdmin(request, env)) return true;
-  if (await huidigeKlantSleutel(request, env)) return true;
+  if (await huidigeSessie(request, env)) return true;
   return false;
 }
 
-// ---- DIR-82 · klant-sessie -------------------------------------------------
-// De sessie is een ondertekende cookie: <klantsleutel>.<verlooptijd>.<hmac>. De
-// handtekening gaat over sleutel + verlooptijd, met een eigen label zodat een
-// admin-cookie nooit als klant-cookie kan doorgaan (en omgekeerd). Ondertekend
-// i.p.v. in KV, zodat een verse sessie niet op KV-consistentie hoeft te wachten.
-// Een klant-sessie geeft NOOIT admin-rechten: `isAdmin` kijkt uitsluitend naar het
+// ---- DIR-82/DIR-88 · sessie van een ingelogde gebruiker ---------------------
+// De sessie is een ondertekende cookie:
+//     <adres in base64url>.<klantsleutel of leeg>.<verlooptijd>.<hmac>
+// De handtekening dekt alle drie de delen, met een eigen label zodat een
+// admin-cookie hier nooit voor door kan gaan. Ondertekend in plaats van in KV,
+// zodat een verse sessie niet op KV-consistentie hoeft te wachten. Een
+// gebruikerssessie geeft NOOIT admin-rechten: `isAdmin` kijkt uitsluitend naar het
 // admin-cookie en wordt hier niet aangeraakt.
-async function klantSessieHandtekening(env, key, verloopt) {
-  return hmacHex(env.ADMIN_PASSWORD || "", "dd-klant-sessie-v1|" + key + "|" + verloopt);
+//
+// DIR-88: het geverifieerde adres IS de identiteit. Het klantrecord is alleen nog
+// een voorkeur voor de databron; wie geen record heeft komt gewoon binnen en kiest
+// zelf uit zijn eigen accounts.
+function b64urlEnc(tekst) {
+  let bin = "";
+  for (const b of new TextEncoder().encode(String(tekst || ""))) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/[+]/g, "-").replace(/[/]/g, "_").replace(/=+$/, "");
+}
+function b64urlDec(tekst) {
+  try {
+    const b64 = String(tekst || "").replace(/-/g, "+").replace(/_/g, "/");
+    const opgevuld = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const bin = atob(opgevuld);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  } catch (e) { return ""; }
+}
+
+async function sessieHandtekening(env, kern) {
+  return hmacHex(env.ADMIN_PASSWORD || "", "dd-klant-sessie-v1|" + kern);
 }
 
 // Waarde voor het cookie. `nu` is injecteerbaar zodat de test niet hoeft te wachten.
-export async function maakKlantSessie(env, key, nu) {
+export async function maakSessie(env, email, klantKey, nu) {
   const verloopt = (nu == null ? Date.now() : nu) + KLANT_SESSIE_TTL_MS;
-  return key + "." + verloopt + "." + (await klantSessieHandtekening(env, key, verloopt));
+  const kern = b64urlEnc(normaliseerEmail(email)) + "." + (klantKey || "") + "." + verloopt;
+  return kern + "." + (await sessieHandtekening(env, kern));
 }
 
-// Leest de sessie uit een cookiewaarde. Geeft de klantsleutel of null. Weigert een
+// Leest de sessie uit een cookiewaarde: { email, key } of null. Weigert een
 // verlopen of geknoeide waarde; vergelijkt de handtekening in constante tijd.
-export async function leesKlantSessie(env, waarde, nu) {
+export async function leesSessie(env, waarde, nu) {
   if (!env || !env.ADMIN_PASSWORD || !waarde) return null;
   const delen = String(waarde).split(".");
-  if (delen.length !== 3) return null;
-  const [key, verlooptTekst, gotSig] = delen;
-  if (!KLANT_SLEUTEL.test(key)) return null;
+  if (delen.length !== 4) return null;
+  const [emailB64, key, verlooptTekst, gotSig] = delen;
+  if (key && !KLANT_SLEUTEL.test(key)) return null;
   const verloopt = Number(verlooptTekst);
   if (!Number.isFinite(verloopt)) return null;
   if ((nu == null ? Date.now() : nu) >= verloopt) return null;
-  const wil = await klantSessieHandtekening(env, key, verlooptTekst);
+  const wil = await sessieHandtekening(env, emailB64 + "." + key + "." + verlooptTekst);
   if (!veiligGelijk(gotSig, wil)) return null;
-  return key;
+  const email = normaliseerEmail(b64urlDec(emailB64));
+  if (!email) return null;
+  return { email, key: key || "" };
 }
 
-// De actieve klantsleutel voor dit verzoek — uitsluitend uit de ondertekende
-// sessie, nooit uit een parameter, header of body. Een klant die intussen uit het
-// beheer is verwijderd, heeft daarmee ook meteen geen toegang meer.
-async function huidigeKlantSleutel(request, env) {
+// De ingelogde gebruiker voor dit verzoek — uitsluitend uit de ondertekende sessie,
+// nooit uit een parameter, header of body.
+async function huidigeSessie(request, env) {
   const waarde = parseCookies(request.headers.get("Cookie"))[KLANT_SESSIE_COOKIE];
-  const key = await leesKlantSessie(env, waarde);
-  if (!key) return null;
-  const rec = await kvGetClient(env, key);
-  return rec ? key : null;
+  return await leesSessie(env, waarde);
 }
 
-// Het klantrecord achter de sessie (of null). Alleen voor server-side gebruik.
+// De gebruiker plus zijn klantrecord als dat er is. `rec` mag null zijn: dan heeft
+// Dirk niets vastgelegd en kiest de gebruiker zelf. Is het record intussen
+// verwijderd, dan valt hij netjes terug op zelf kiezen — zijn toegang hangt er niet
+// aan, want die komt van zijn eigen Google-koppeling.
 async function huidigeKlant(request, env) {
-  const key = await huidigeKlantSleutel(request, env);
-  if (!key) return null;
-  const rec = await kvGetClient(env, key);
-  return rec ? { key, rec } : null;
+  const sessie = await huidigeSessie(request, env);
+  if (!sessie) return null;
+  const rec = sessie.key ? await kvGetClient(env, sessie.key) : null;
+  return { key: sessie.key, email: sessie.email, rec: rec || null };
 }
 
 // ---- DIR-86 · identiteit uit Google -----------------------------------------
@@ -1416,8 +1438,10 @@ function geenKoppeling() {
 async function dataContext(request, env) {
   const token = await huidigeToken(request, env);
   const klant = await huidigeKlant(request, env);
-  if (klant) return { soort: "klant", key: klant.key, rec: klant.rec, token };
-  return { soort: "eigen", key: null, rec: null, token };
+  // DIR-88: "klant" betekent nu "ingelogd met Google". `rec` is de voorkeur van
+  // Dirk als die er is, en anders null — dan kiest de gebruiker zelf.
+  if (klant) return { soort: "klant", key: klant.key, email: klant.email, rec: klant.rec, token };
+  return { soort: "eigen", key: null, email: "", rec: null, token };
 }
 
 async function fetchGscSites(token) {
@@ -2658,7 +2682,7 @@ const OFFICE_HTML = `<!doctype html>
        bent en waar je bij mag; een apart wachtwoord bestaat niet meer. -->
   <div class="zm-blok verborgen" id="zm-klant-inlog">
     <h2 class="zm-kop">Inloggen</h2>
-    <p class="zm-tekst">Log in met het Google-account waarin je Search Console, Analytics of Ads staan.</p>
+    <p class="zm-tekst">Log in met het Google-account waarin je Search Console, Analytics of Ads staan. Je ziet daarna je eigen cijfers &mdash; niemand anders komt erbij.</p>
     <a class="zm-knop" id="zm-google" href="/oauth/start">Inloggen met Google</a>
     <button class="zm-knop zm-sub" id="zm-klant-annuleer" type="button">Annuleren</button>
     <p class="zm-fout verborgen" id="zm-klant-fout" role="alert"></p>
@@ -3663,13 +3687,14 @@ const OFFICE_HTML = `<!doctype html>
       actief.textContent=labelVan(res.j.model);
     }).catch(function(){ melding(modelFout,'Opslaan mislukt — probeer het opnieuw.'); });
   });
-  // Kwam je terug van Google met een adres dat Dirk niet kent, dan is er geen sessie.
-  // Dit moet NA haalStatus(): die zet het menu terug op 'gast' en wist meldingen.
+  // DIR-88: iedereen met een Google-account komt binnen, dus er is geen "onbekend
+  // adres" meer. Wat er nog wel mis kan gaan: Google gaf geen bevestigd e-mailadres
+  // terug. Dit moet NA haalStatus(): die zet het menu terug op 'gast' en wist meldingen.
   haalStatus().then(function(){
     try{
-      if(new URLSearchParams(location.search).get('login')!=='onbekend') return;
+      if(new URLSearchParams(location.search).get('login')!=='mislukt') return;
       openKlantForm();
-      melding(klantFout,'Dit Google-account is nog niet gekoppeld. Vraag Dirk om je toe te voegen.');
+      melding(klantFout,'Inloggen is niet gelukt. Google gaf geen bevestigd e-mailadres terug — probeer het opnieuw.');
       history.replaceState(null,'',location.pathname);   // niet opnieuw tonen bij herladen
     }catch(e){}
   });
@@ -3748,7 +3773,7 @@ const ADMIN_HTML = `<!doctype html>
   .aangepast{ font-size:.85rem; color:#7a5f14; }
 </style></head><body>
   <h1>Dirk Digitaal — klantbeheer</h1>
-  <p class="muted">Per klant leg je hier de koppelingen vast: Meta, Search Console, GA4 en Google Ads. Alles is optioneel — een klant hoeft niet alles te hebben. De klant logt in met Google; het e-mailadres dat je hieronder invult bepaalt wie er als deze klant binnenkomt.</p>
+  <p class="muted">Per klant leg je hier de koppelingen vast: Meta, Search Console, GA4 en Google Ads. Alles is optioneel — een klant hoeft niet alles te hebben. Iedereen logt in met zijn eigen Google-account en ziet zijn eigen cijfers; het e-mailadres hieronder zorgt er alleen voor dat we voor déze klant meteen de juiste bron kiezen.</p>
   <div id="login">
     <h2>Inloggen</h2>
     <input id="pw" type="password" placeholder="Admin-wachtwoord" autocomplete="current-password">
@@ -3809,7 +3834,7 @@ const ADMIN_HTML = `<!doctype html>
     { id:'ga4Property', label:'GA4-property', hint:'Bijv. properties/123456789', groep:'Google-koppelingen' },
     { id:'adsCustomerId', label:'Google Ads-account', hint:'Customer-id, bijv. 123-456-7890', groep:'Google-koppelingen' },
     { id:'adsLoginCustomerId', label:'Google Ads login-customer-id (MCC)', hint:'Alleen nodig bij een subaccount onder een MCC', groep:'Google-koppelingen' },
-    { id:'googleEmail', label:'Google e-mailadres', hint:'Het adres waarmee de klant bij Google inlogt. Precies dit adres geeft toegang; leeg = deze klant kan niet inloggen.', groep:'Klant-login' }
+    { id:'googleEmail', label:'Google e-mailadres', hint:'Het adres waarmee de klant bij Google inlogt. Herkennen we het, dan kiezen we zijn vastgelegde bronnen automatisch. Leeg laten mag: hij kan dan gewoon inloggen en kiest zelf.', groep:'Klant-herkenning' }
   ];
   var gekozenKlant=null;   // sleutel van de klant die in het paneel staat ('' = nieuw)
   var klantenNu=[];        // laatst getoonde lijst, zodat een net bewaarde klant meteen zichtbaar is
@@ -3840,7 +3865,7 @@ const ADMIN_HTML = `<!doctype html>
       k.appendChild(badge('GSC', !!c.gscSite));
       k.appendChild(badge('GA4', !!c.ga4Property));
       k.appendChild(badge('Ads', !!c.adsCustomerId));
-      k.appendChild(badge('Login', !!c.googleEmail));
+      k.appendChild(badge('Herkend', !!c.googleEmail));
       k.addEventListener('click',function(){ gekozenKlant=c.key; render(clients); toonDetail(c); });
       lijst.appendChild(k);
     });
@@ -3850,11 +3875,12 @@ const ADMIN_HTML = `<!doctype html>
     var doel=document.getElementById('detail'); doel.textContent=''; meld('');
     var h=document.createElement('h2'); h.textContent = c ? (c.naam || '(naamloos)') : 'Nieuwe klant'; doel.appendChild(h);
     if(c){
-      // DIR-86: de klant logt in met Google. Alleen het adres hieronder geeft toegang.
+      // DIR-88: iedereen kan met Google inloggen. Het adres hieronder is geen slagboom
+      // meer, maar bepaalt of we de vastgelegde bronnen voor deze klant voorkiezen.
       var uitleg=document.createElement('p'); uitleg.className='muted';
       uitleg.textContent = c.googleEmail
-        ? 'Deze klant logt in met Google op het adres ' + c.googleEmail + '.'
-        : 'Deze klant kan nog niet inloggen: vul hieronder zijn Google-adres in.';
+        ? 'Logt deze klant in met ' + c.googleEmail + ', dan kiezen we hieronder vastgelegde bronnen automatisch voor hem.'
+        : 'Geen Google-adres ingevuld: deze klant kan gewoon inloggen, maar kiest dan zelf welke site of property hij bekijkt.';
       doel.appendChild(uitleg);
     }
     var invoeren={}, groep='';
@@ -3862,11 +3888,11 @@ const ADMIN_HTML = `<!doctype html>
       if(def.groep!==groep){
         groep=def.groep;
         var kop=document.createElement('h3'); kop.textContent=groep; doel.appendChild(kop);
-        if(groep==='Klant-login'){
+        if(groep==='Klant-herkenning'){
           var st=document.createElement('p'); st.className='muted';
           st.textContent = (c && c.googleEmail)
-            ? 'Deze klant logt in met "Inloggen met Google" op dit adres.'
-            : 'Nog geen Google-adres: deze klant kan niet inloggen.';
+            ? 'Op dit adres koppelen we automatisch de bronnen hieronder.'
+            : 'Zonder adres kiest deze klant na het inloggen zelf zijn bron.';
           doel.appendChild(st);
         }
       }
@@ -4765,9 +4791,11 @@ export default {
       // Google's userinfo over TLS met dit verse token — niet uit een parameter en
       // niet uit een zelf gedecodeerd token.
       const email = await googleEmailVanToken(accessToken);
-      // Opzoeken, meer niet: er wordt in dit pad NOOIT een klantrecord aangemaakt,
-      // aangevuld of bijgewerkt. Een record zonder e-mailadres is dus niet
-      // bereikbaar via login; Dirk vult dat adres eerst in /admin in.
+      // DIR-88: geen allowlist meer. Een geverifieerd Google-account is genoeg om
+      // binnen te komen; je kunt per definitie alleen bij je eigen Search Console,
+      // GA4 en Ads. Het klantrecord wordt alleen nog opgezocht als VOORKEUR voor de
+      // databron — en alleen opgezocht: in dit pad wordt nooit een klantrecord
+      // aangemaakt, aangevuld of bijgewerkt.
       const klant = email ? await klantOpEmail(env, email) : null;
 
       const sessionId = crypto.randomUUID();
@@ -4776,14 +4804,24 @@ export default {
         body: JSON.stringify({ token: accessToken }),
       });
 
-      // Sessie-cookie zetten, state- en PKCE-cookie wissen, terug naar de startpagina.
-      // Onbekend adres → wel een Google-koppeling in deze browsersessie, maar GEEN
-      // klant-sessie: zonder klantrecord is er geen toegang (de poort blijft dicht).
-      const headers = new Headers({ Location: origin + (klant ? "/" : "/?login=onbekend") });
+      // Zonder geverifieerd adres weten we niet wie dit is: dan geen sessie. Dat is
+      // geen weigering op persoon, maar op ontbrekende identiteit — Google gaf geen
+      // bevestigd e-mailadres terug.
+      if (!email) {
+        const mis = new Headers({ Location: origin + "/?login=mislukt" });
+        mis.append("Set-Cookie", `${STATE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+        mis.append("Set-Cookie", `${PKCE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+        return new Response(null, { status: 302, headers: mis });
+      }
+
+      // Sessie-cookies zetten, state- en PKCE-cookie wissen, terug naar de scène.
+      // De sessie draagt het geverifieerde adres; de klantsleutel gaat mee als Dirk
+      // een record op dit adres heeft (dan staat de databron vast).
+      const headers = new Headers({ Location: origin + "/" });
       headers.append("Set-Cookie", sessionCookie(sessionId, Math.floor(SESSION_TTL_MS / 1000)));
       headers.append("Set-Cookie", `${STATE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
       headers.append("Set-Cookie", `${PKCE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
-      if (klant) headers.append("Set-Cookie", klantSessieCookie(await maakKlantSessie(env, klant.key)));
+      headers.append("Set-Cookie", klantSessieCookie(await maakSessie(env, email, klant ? klant.key : "")));
       return new Response(null, { status: 302, headers });
     }
 
@@ -4826,7 +4864,9 @@ export default {
       // over DEZE bezoeker; er komt nooit iets van een andere klant in mee.
       if (await isAdmin(request, env)) return json({ chatten: true, soort: "admin", naam: "" });
       const klant = await huidigeKlant(request, env);
-      if (klant) return json({ chatten: true, soort: "klant", naam: klant.rec.naam || "" });
+      // DIR-88: staat er een klantrecord op dit adres, dan tonen we die naam; anders
+      // het adres waarmee je bent ingelogd.
+      if (klant) return json({ chatten: true, soort: "klant", naam: (klant.rec && klant.rec.naam) || klant.email || "" });
       return json({ chatten: false, soort: null, naam: "" });
     }
 

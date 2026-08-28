@@ -51,8 +51,8 @@ import {
   base64Bytes,
   magChatten,
   isAdmin,
-  maakKlantSessie,
-  leesKlantSessie,
+  maakSessie,
+  leesSessie,
   klantOpEmail,
   emailUitUserinfo,
   pkceVerifier,
@@ -636,49 +636,68 @@ async function nepEnv(extra) {
   return { ADMIN_PASSWORD: "geheim", CLIENTS: nepKv(store), ...(extra || {}) };
 }
 
-test("klant-sessie: heen en terug geeft dezelfde klantsleutel", async () => {
+test("sessie: heen en terug geeft hetzelfde adres en dezelfde klantsleutel", async () => {
   const env = await nepEnv();
-  const waarde = await maakKlantSessie(env, KLANT_A);
-  assert.equal(await leesKlantSessie(env, waarde), KLANT_A);
+  const waarde = await maakSessie(env, "Baas@Klant-A.nl", KLANT_A);
+  assert.deepEqual(await leesSessie(env, waarde), { email: "baas@klant-a.nl", key: KLANT_A });
 });
 
-test("klant-sessie: geknoeide sleutel of handtekening wordt geweigerd", async () => {
+test("sessie: mag ook zonder klantrecord (DIR-88: iedereen komt binnen)", async () => {
   const env = await nepEnv();
-  const waarde = await maakKlantSessie(env, KLANT_A);
-  const [key, exp, sig] = waarde.split(".");
-  assert.equal(await leesKlantSessie(env, KLANT_B + "." + exp + "." + sig), null);   // andere klant
-  assert.equal(await leesKlantSessie(env, key + "." + exp + "." + "0".repeat(64)), null);
-  assert.equal(await leesKlantSessie(env, key + "." + (Number(exp) + 60000) + "." + sig), null); // TTL opgerekt
-  assert.equal(await leesKlantSessie(env, "rommel"), null);
+  const waarde = await maakSessie(env, "vreemde@ergens.nl", "");
+  assert.deepEqual(await leesSessie(env, waarde), { email: "vreemde@ergens.nl", key: "" });
 });
 
-test("klant-sessie: verlopen sessie geldt niet meer", async () => {
+test("sessie: geknoeide onderdelen worden geweigerd", async () => {
   const env = await nepEnv();
-  const waarde = await maakKlantSessie(env, KLANT_A, 0);            // verloopt op TTL vanaf 0
-  assert.equal(await leesKlantSessie(env, waarde, 0), KLANT_A);
-  assert.equal(await leesKlantSessie(env, waarde, 9 * 60 * 60 * 1000), null);
+  const waarde = await maakSessie(env, "baas@klant-a.nl", KLANT_A);
+  const [emailB64, key, exp, sig] = waarde.split(".");
+  // Een ander adres achter dezelfde handtekening plakken.
+  const anderAdres = Buffer.from("baas@klant-b.nl").toString("base64url");
+  assert.equal(await leesSessie(env, [anderAdres, key, exp, sig].join(".")), null);
+  // Een andere klantsleutel (= andere voorkeursbron) erin schuiven.
+  assert.equal(await leesSessie(env, [emailB64, KLANT_B, exp, sig].join(".")), null);
+  // De verlooptijd oprekken.
+  assert.equal(await leesSessie(env, [emailB64, key, String(Number(exp) + 60000), sig].join(".")), null);
+  assert.equal(await leesSessie(env, [emailB64, key, exp, "0".repeat(64)].join(".")), null);
+  assert.equal(await leesSessie(env, "rommel"), null);
+  assert.equal(await leesSessie(env, [emailB64, "geen-geldige-sleutel", exp, sig].join(".")), null);
 });
 
-test("klant-sessie: een cookie dat met een ander wachtwoord is ondertekend telt niet", async () => {
+test("sessie: verlopen sessie geldt niet meer", async () => {
   const env = await nepEnv();
-  const waarde = await maakKlantSessie({ ADMIN_PASSWORD: "ander" }, KLANT_A);
-  assert.equal(await leesKlantSessie(env, waarde), null);
+  const waarde = await maakSessie(env, "baas@klant-a.nl", KLANT_A, 0);
+  assert.deepEqual(await leesSessie(env, waarde, 0), { email: "baas@klant-a.nl", key: KLANT_A });
+  assert.equal(await leesSessie(env, waarde, 9 * 60 * 60 * 1000), null);
 });
 
-test("klant-sessie: opent de chat-poort, maar geeft NOOIT admin-rechten", async () => {
+test("sessie: ondertekend met een ander wachtwoord telt niet", async () => {
   const env = await nepEnv();
-  const waarde = await maakKlantSessie(env, KLANT_A);
-  const req = new Request("https://dd.test/api/chat", { headers: { Cookie: "dd_klant_sessie=" + waarde } });
-  assert.equal(await magChatten(req, env), true);
-  assert.equal(await isAdmin(req, env), false);
+  const waarde = await maakSessie({ ADMIN_PASSWORD: "ander" }, "baas@klant-a.nl", KLANT_A);
+  assert.equal(await leesSessie(env, waarde), null);
 });
 
-test("klant-sessie: een verwijderde klant komt er niet meer in", async () => {
+test("sessie: opent de chat-poort, ook zonder klantrecord, maar NOOIT admin", async () => {
   const env = await nepEnv();
-  const waarde = await maakKlantSessie(env, KLANT_A);
+  const metRecord = new Request("https://dd.test/api/chat", {
+    headers: { Cookie: "dd_klant_sessie=" + await maakSessie(env, "baas@klant-a.nl", KLANT_A) },
+  });
+  const zonderRecord = new Request("https://dd.test/api/chat", {
+    headers: { Cookie: "dd_klant_sessie=" + await maakSessie(env, "vreemde@ergens.nl", "") },
+  });
+  assert.equal(await magChatten(metRecord, env), true);
+  assert.equal(await magChatten(zonderRecord, env), true);      // DIR-88: geen allowlist meer
+  assert.equal(await isAdmin(metRecord, env), false);
+  assert.equal(await isAdmin(zonderRecord, env), false);
+});
+
+test("sessie: een verwijderd klantrecord kost je de toegang NIET (alleen de voorkeur)", async () => {
+  const env = await nepEnv();
+  const waarde = await maakSessie(env, "baas@klant-a.nl", KLANT_A);
   await env.CLIENTS.delete(KLANT_A);
   const req = new Request("https://dd.test/api/chat", { headers: { Cookie: "dd_klant_sessie=" + waarde } });
-  assert.equal(await magChatten(req, env), false);
+  // Je draait op je eigen Google-koppeling; het record was alleen de voorkeursbron.
+  assert.equal(await magChatten(req, env), true);
 });
 
 test("klantOpEmail: hoofdletterongevoelig, en alleen klanten met een adres", async () => {
