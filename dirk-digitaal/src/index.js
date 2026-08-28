@@ -2135,32 +2135,43 @@ const OFFICE_HTML = `<!doctype html>
     --hond:#e0b566; --honddonker:#b98a3e;
     --leesfont:'Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif; }
   *{ box-sizing:border-box; }
-  body{ margin:0; background:#0e1116; color:#e8e2d8; image-rendering:pixelated;
-    font-family:'VT323',monospace; -webkit-font-smoothing:none; display:flex; align-items:stretch; }
+  /* DIR-85 · font-smoothing:none stond op de HELE body. Op macOS/WebKit zet dat de
+     anti-aliasing uit en valt dunne tekst weg; Windows negeert het. Het is er nooit
+     voor nodig geweest: de pixel-look van de tekening komt van image-rendering en
+     shape-rendering="crispEdges", niet van font-smoothing. Dus weg van de tekst, en
+     image-rendering verhuist naar de scène zelf. Basisfont is nu leesbaar; het
+     pixelfont blijft voor de sfeer (titel, scène, merk, koppen, accenten). */
+  body{ margin:0; background:#0e1116; color:#e8e2d8;
+    font-family:var(--leesfont); font-size:16px; line-height:1.5; display:flex; align-items:stretch; }
   .scene-host{ flex:1; min-width:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-    overflow:hidden; background:radial-gradient(120% 90% at 50% 20%,#1a2129 0%,#0e1116 70%); }
+    overflow:hidden; image-rendering:pixelated;
+    background:radial-gradient(120% 90% at 50% 20%,#1a2129 0%,#0e1116 70%); }
   /* ---- DIR-77 · vast linker menu (voor iedereen zichtbaar) ---- */
   .zijmenu{ flex:0 0 232px; width:232px; box-sizing:border-box; padding:14px 14px 20px;
     background:#171b22; border-right:3px solid #000; box-shadow:3px 0 0 rgba(0,0,0,.45) inset;
     display:flex; flex-direction:column; gap:14px; overflow-y:auto; max-height:100vh; }
-  .zm-merk{ font-family:'Press Start 2P',monospace; font-size:11px; line-height:1.7; color:var(--accent);
+  /* DIR-85: het merk blijft pixelfont (sfeer), maar alles wat je moet lézen —
+     koppen, knoppen, labels, invoer — gaat naar het leesfont op een normaal
+     formaat. 9px Press Start 2P was op een Retina-scherm niet te doen. */
+  .zm-merk{ font-family:'Press Start 2P',monospace; font-size:12px; line-height:1.8; color:var(--accent);
     letter-spacing:1px; text-shadow:2px 2px 0 #0b2a45; }
-  .zm-merk span{ display:block; color:#cdd9e4; font-size:9px; letter-spacing:2px; }
+  .zm-merk span{ display:block; color:#cdd9e4; font-size:10px; letter-spacing:2px; }
   .zm-blok{ display:flex; flex-direction:column; gap:8px; padding-top:12px; border-top:2px solid #262c36; }
-  .zm-kop{ margin:0; font-family:'Press Start 2P',monospace; font-size:9px; color:#8fb7d9; letter-spacing:1px; }
-  .zm-tekst{ margin:0; font-size:1.05rem; line-height:1.35; color:#aab3bf; }
-  .zm-label{ font-size:1rem; color:#8f97a3; }
-  .zm-knop{ font-family:'Press Start 2P',monospace; font-size:9px; line-height:1.5; cursor:pointer;
-    padding:9px 10px; color:#111; background:var(--accent); border:2px solid #000;
+  .zm-kop{ margin:0; font-family:var(--leesfont); font-size:.95rem; font-weight:700;
+    color:#a8cbe8; letter-spacing:.6px; text-transform:uppercase; }
+  .zm-tekst{ margin:0; font-size:.98rem; line-height:1.5; color:#bcc5d1; }
+  .zm-label{ font-size:.9rem; color:#a2abb7; }
+  .zm-knop{ font-family:var(--leesfont); font-size:.95rem; font-weight:700; line-height:1.4; cursor:pointer;
+    letter-spacing:.3px; padding:10px 12px; color:#111; background:var(--accent); border:2px solid #000;
     box-shadow:3px 3px 0 #000; text-align:center; text-decoration:none; display:block; }
   .zm-knop:hover{ filter:brightness(1.08); }
   .zm-knop:active{ transform:translate(2px,2px); box-shadow:1px 1px 0 #000; }
   .zm-knop.zm-sub{ background:#2b3138; color:#e8e2d8; }
-  .zm-invoer{ font-family:'VT323',monospace; font-size:1.15rem; padding:6px 8px; color:#111;
+  .zm-invoer{ font-family:var(--leesfont); font-size:1rem; padding:8px 9px; color:#111;
     background:#f4f0e6; border:2px solid #000; box-shadow:3px 3px 0 #000; width:100%; box-sizing:border-box; }
-  .zm-actief{ margin:0; font-size:1.05rem; color:#aab3bf; }
-  .zm-actief b{ color:#3fd06a; }
-  .zm-fout{ margin:0; font-size:1.05rem; color:#ff8a7a; }
+  .zm-actief{ margin:0; font-size:.95rem; color:#bcc5d1; }
+  .zm-actief b{ color:#5fe08a; }
+  .zm-fout{ margin:0; font-size:.95rem; color:#ff9d8f; }
   .zijmenu .verborgen{ display:none; }
   @media (max-width:720px){
     body{ flex-direction:column; }
@@ -2271,7 +2282,7 @@ const OFFICE_HTML = `<!doctype html>
     background:#14202b; border-right:3px solid var(--ink); }
   .portret .avatar{ width:72px; height:72px; background:#0b1219; border:2px solid var(--accent);
     display:flex; align-items:center; justify-content:center; font-size:2.2rem; }
-  .portret .pnaam{ margin-top:.4rem; font-size:.85rem; letter-spacing:1px; color:#3fd06a; }
+  .portret .pnaam{ margin-top:.4rem; font-size:.95rem; letter-spacing:.6px; color:#2fbf5c; }
   /* portret dynamisch (DIR-40): af en toe knipperen + 'typen' terwijl er een reactie binnenkomt */
   .portret .avatar svg{ display:block; width:100%; height:100%; }
   .portret .avatar .ooglid{ opacity:0; animation:dd-eyelid 5s steps(1,end) infinite; }
@@ -2314,12 +2325,15 @@ const OFFICE_HTML = `<!doctype html>
   .bubble.agent{ align-self:flex-start; background:#fff; }
   /* DIR-59: opgemaakte markdown in agent-bubbles (tabellen/koppen/lijsten). */
   .bubble .md-tablewrap{ overflow-x:auto; max-width:100%; margin:.45rem 0; -webkit-overflow-scrolling:touch; }
-  .bubble table.md-table{ border-collapse:collapse; font-size:.86rem; font-variant-numeric:tabular-nums; }
+  .bubble table.md-table{ border-collapse:collapse; font-size:.92rem; font-variant-numeric:tabular-nums; }
   .bubble .md-table th, .bubble .md-table td{ border:1px solid rgba(23,23,23,.28); padding:3px 8px; white-space:nowrap; }
   .bubble .md-table th{ background:#efe8d7; font-weight:700; }
   .bubble .md-table tbody tr:nth-child(even){ background:rgba(23,23,23,.05); }
-  .bubble .md-h{ margin:.55rem 0 .28rem; font-family:'Press Start 2P',monospace; line-height:1.35; }
-  .bubble h3.md-h{ font-size:.95rem; } .bubble h4.md-h{ font-size:.82rem; } .bubble h5.md-h{ font-size:.74rem; }
+  /* DIR-85: koppen IN een analyse zijn leestekst, geen decoratie — pixelfont eruit,
+     leesfont met wat extra gewicht erin. */
+  .bubble .md-h{ margin:.6rem 0 .3rem; font-family:var(--leesfont); font-weight:700;
+    letter-spacing:.2px; line-height:1.35; color:#0d3f52; }
+  .bubble h3.md-h{ font-size:1.08rem; } .bubble h4.md-h{ font-size:1rem; } .bubble h5.md-h{ font-size:.95rem; }
   .bubble .md-list{ margin:.3rem 0 .3rem 1.15rem; padding:0; }
   .bubble .md-list li{ margin:.12rem 0; }
   .bubble .md-p{ margin:.38rem 0; }
@@ -2332,7 +2346,7 @@ const OFFICE_HTML = `<!doctype html>
   .typing i:nth-child(3){ animation-delay:.4s; }
   @keyframes dd-typing{ 0%,80%,100%{ opacity:0; } 40%{ opacity:1; } }
   @media (prefers-reduced-motion: reduce){ .typing i{ animation:none; opacity:1; } }
-  .notice{ font-size:.72rem; color:#4a4e6d; padding:.4rem .7rem; background:#efe9db;
+  .notice{ font-size:.88rem; line-height:1.45; color:#3d4160; padding:.5rem .7rem; background:#efe9db;
     border-top:2px solid var(--ink); }
   .notice.flash{ background:var(--teal2); color:#08211d; }
   .composer{ display:none; gap:.4rem; padding:.6rem; border-top:3px solid var(--ink); background:var(--cream); }
@@ -2343,7 +2357,7 @@ const OFFICE_HTML = `<!doctype html>
   .bijlagen{ display:none; gap:.4rem; flex-wrap:wrap; padding:.5rem .6rem 0; background:var(--cream); }
   .bijlagen.vol{ display:flex; }
   .bijlage{ display:flex; align-items:center; gap:.35rem; background:#fff; border:2px solid var(--ink);
-    box-shadow:2px 2px 0 var(--shadow); padding:.25rem .4rem; font-family:var(--leesfont); font-size:.85rem; max-width:230px; }
+    box-shadow:2px 2px 0 var(--shadow); padding:.25rem .4rem; font-family:var(--leesfont); font-size:.9rem; max-width:230px; }
   .bijlage img{ width:26px; height:26px; object-fit:cover; border:1px solid var(--ink); }
   .bijlage .naam{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .bijlage button{ border:0; background:none; cursor:pointer; font-size:1rem; line-height:1; color:#b3402f; padding:0 .1rem; }
@@ -2358,10 +2372,10 @@ const OFFICE_HTML = `<!doctype html>
   .poortbox{ width:min(30rem,94vw); background:var(--cream); color:var(--ink);
     border:4px solid var(--ink); box-shadow:8px 8px 0 var(--shadow);
     font-family:var(--leesfont); padding:1.1rem 1.2rem 1.2rem; animation:dd-modal-in .18s ease-out; }
-  .poortbox h2{ margin:0 0 .6rem; font-family:'Press Start 2P',monospace; font-size:.8rem;
-    line-height:1.6; color:var(--teal); }
-  .poortbox p{ margin:0 0 .7rem; font-size:1rem; line-height:1.45; }
-  .poortbox .poort-klein{ font-size:.9rem; color:#4a5560; }
+  .poortbox h2{ margin:0 0 .7rem; font-family:'Press Start 2P',monospace; font-size:.95rem;
+    line-height:1.7; color:var(--teal); }
+  .poortbox p{ margin:0 0 .7rem; font-size:1.02rem; line-height:1.5; }
+  .poortbox .poort-klein{ font-size:.92rem; color:#45505b; }
   .poort-knoppen{ display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.9rem; }
   /* site-keuze + dashboard */
   .sitekeuze{ align-self:flex-start; background:#fff; border:2px solid var(--ink); padding:.6rem; max-width:100%; }
@@ -2534,7 +2548,7 @@ const OFFICE_HTML = `<!doctype html>
       <div style="font-family:'Press Start 2P',monospace;color:#F18E02;font-size:clamp(18px,4.4vw,52px);letter-spacing:2px;text-shadow:4px 4px 0 #015092,8px 8px 0 rgba(0,0,0,.35);">DIRK DIGITAAL</div>
     </div>
     <div style="position:absolute;bottom:4%;left:0;right:0;text-align:center;pointer-events:none;">
-      <span style="display:inline-block;font-family:'VT323',monospace;font-size:clamp(15px,2.1vw,26px);letter-spacing:1px;color:#e8e2d8;background:rgba(11,18,25,.72);border:1px solid #F18E02;padding:6px 16px;text-shadow:1px 1px 0 #000;animation:dd-cta 2.4s ease-in-out infinite;">
+      <span style="display:inline-block;font-family:'VT323',monospace;font-size:clamp(19px,2.4vw,30px);letter-spacing:1px;color:#e8e2d8;background:rgba(11,18,25,.72);border:1px solid #F18E02;padding:6px 16px;text-shadow:1px 1px 0 #000;animation:dd-cta 2.4s ease-in-out infinite;">
         <span style="color:#F18E02">&#9656;</span> Klik op een collega om een gesprek te starten
       </span>
     </div>
@@ -3387,23 +3401,23 @@ const ADMIN_HTML = `<!doctype html>
   button{ background:#015092; color:#fff; border:0; cursor:pointer; border-radius:3px; }
   button.rood{ background:#b3402f; }
   .rij{ border:1px solid #ccc; background:#fff; padding:.6rem; margin:.4rem 0; border-radius:4px; }
-  .rij b{ display:block; } .muted{ color:#666; font-size:.85rem; }
+  .rij b{ display:block; } .muted{ color:#5a5a5a; font-size:.88rem; }
   .link{ width:100%; box-sizing:border-box; }
   #fout{ color:#b3402f; } .verborgen{ display:none; }
   /* DIR-78 · klantbeheer met koppelingen + klant-login */
   body{ max-width:860px; }
-  .badge{ display:inline-block; font-size:.78rem; padding:.1rem .45rem; margin:0 .25rem .25rem 0;
+  .badge{ display:inline-block; font-size:.85rem; padding:.12rem .5rem; margin:0 .25rem .25rem 0;
     border-radius:3px; background:#e3e7ea; color:#4a5259; }
   .badge.ja{ background:#d8f0dd; color:#1d6b34; }
   .veld{ margin:.45rem 0; }
-  .veld label{ display:block; font-size:.85rem; color:#4a5259; margin-bottom:.1rem; }
-  .veld .hint{ display:block; font-size:.78rem; color:#777; margin-top:.1rem; }
+  .veld label{ display:block; font-size:.9rem; color:#3f4750; margin-bottom:.15rem; }
+  .veld .hint{ display:block; font-size:.85rem; color:#5f5f5f; margin-top:.15rem; }
   .knoppen{ margin-top:.9rem; display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; }
   select{ font:inherit; padding:.5rem; }
-  .melding{ font-size:.85rem; color:#1d6b34; }
+  .melding{ font-size:.9rem; color:#1a5f2e; }
   /* dashboard: klantlijst links, detail rechts */
   .balk{ background:#fff; border:1px solid #ccc; border-radius:4px; padding:.6rem .8rem; margin:.8rem 0 1rem; }
-  .balk-label{ font-size:.85rem; color:#4a5259; display:block; margin-bottom:.2rem; }
+  .balk-label{ font-size:.9rem; color:#3f4750; display:block; margin-bottom:.2rem; }
   .balk .muted{ margin:.35rem 0 0; }
   .dash{ display:grid; grid-template-columns:300px 1fr; gap:1rem; align-items:start; }
   .kolom h2{ margin:1.2rem 0 .3rem; }
@@ -3425,11 +3439,11 @@ const ADMIN_HTML = `<!doctype html>
   .tab.actief{ background:#fff; color:#171717; font-weight:600; }
   .paneel textarea{ font:inherit; font-size:.92rem; width:100%; box-sizing:border-box;
     border:1px solid #999; padding:.5rem; min-height:150px; resize:vertical; line-height:1.45; }
-  .bron{ display:inline-block; background:#e3e7ea; color:#4a5259; font-size:.8rem;
+  .bron{ display:inline-block; background:#e3e7ea; color:#3f4750; font-size:.87rem;
     padding:.15rem .5rem; border-radius:3px; }
   .veldkop{ display:flex; justify-content:space-between; align-items:baseline; gap:.5rem; }
-  .herstel{ background:none; border:0; color:#015092; cursor:pointer; font-size:.8rem; padding:0; }
-  .aangepast{ font-size:.78rem; color:#8a6d1d; }
+  .herstel{ background:none; border:0; color:#015092; cursor:pointer; font-size:.88rem; padding:0; }
+  .aangepast{ font-size:.85rem; color:#7a5f14; }
 </style></head><body>
   <h1>Dirk Digitaal — klantbeheer</h1>
   <p class="muted">Per klant leg je hier de koppelingen vast: Meta, Search Console, GA4 en Google Ads. Alles is optioneel — een klant hoeft niet alles te hebben. De magic-link toont die klant alleen zijn eigen data.</p>
