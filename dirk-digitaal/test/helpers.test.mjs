@@ -57,6 +57,10 @@ import {
   emailUitUserinfo,
   pkceVerifier,
   pkceChallenge,
+  gebruikSleutel,
+  magLoggen,
+  snoeiGebruik,
+  telOnbekendVandaag,
   klantBron,
   bronToegestaan,
   bronOfNiets,
@@ -822,4 +826,52 @@ test("pkce: verifier is niet te raden en de challenge is de S256 ervan", async (
   assert.equal(/^[A-Za-z0-9_-]+$/.test(ch), true);   // base64url, geen opvulling
   assert.equal(ch, await pkceChallenge(a));          // stabiel voor dezelfde verifier
   assert.notEqual(ch, await pkceChallenge(b));
+});
+
+
+// ---- DIR-87: gebruiksregistratie ----
+const UUR = 60 * 60 * 1000;
+const DAG = 24 * UUR;
+
+test("gebruikSleutel: sorteert chronologisch, ook over cijferlengtes heen", () => {
+  const vroeg = gebruikSleutel(1000, "aa");
+  const laat = gebruikSleutel(1787946000000, "bb");
+  assert.equal(vroeg < laat, true);                 // vaste breedte, dus tekstsortering = tijd
+  assert.match(gebruikSleutel(5, "x"), /^g:0{13}5-x$/);
+});
+
+test("magLoggen: dezelfde agent binnen het venster levert geen tweede regel op", () => {
+  const nu = 1_000_000_000;
+  assert.equal(magLoggen(0, nu, 30 * 60 * 1000), true);          // nog niets gezien
+  assert.equal(magLoggen(nu - 5 * 60 * 1000, nu, 30 * 60 * 1000), false);
+  assert.equal(magLoggen(nu - 31 * 60 * 1000, nu, 30 * 60 * 1000), true);
+});
+
+test("snoeiGebruik: gooit te oude regels weg en houdt de bovengrens aan", () => {
+  const nu = 1_000_000_000_000;
+  const regels = [
+    { sleutel: "a", tijd: nu - 100 * DAG },      // ouder dan 90 dagen
+    { sleutel: "b", tijd: nu - 10 * DAG },
+    { sleutel: "c", tijd: nu - 1 * DAG },
+    { sleutel: "d", tijd: nu },
+  ];
+  const weg = snoeiGebruik(regels, nu, { maxAantal: 100, maxLeeftijdMs: 90 * DAG });
+  assert.deepEqual(weg, ["a"]);
+  // Bovengrens: oudste eerst weg, nieuwste blijven staan.
+  const weg2 = snoeiGebruik(regels, nu, { maxAantal: 2, maxLeeftijdMs: 90 * DAG });
+  assert.deepEqual(weg2, ["a", "b"]);
+  assert.deepEqual(snoeiGebruik([], nu, {}), []);
+});
+
+test("telOnbekendVandaag: telt alleen weigeringen van vandaag, en niets persoonlijks", () => {
+  const nu = new Date(2026, 7, 28, 14, 0, 0).getTime();
+  const regels = [
+    { wat: "onbekend", tijd: nu - UUR },
+    { wat: "onbekend", tijd: nu - 2 * UUR },
+    { wat: "onbekend", tijd: nu - 20 * UUR },              // gisteren
+    { wat: "login", tijd: nu - UUR, email: "baas@klant-a.nl" },
+  ];
+  assert.equal(telOnbekendVandaag(regels, nu), 2);
+  // Een onbekende poging bevat geen adres: dat is de hele afspraak.
+  assert.equal(regels.filter((r) => r.wat === "onbekend").every((r) => !r.email), true);
 });
