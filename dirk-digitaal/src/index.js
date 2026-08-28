@@ -1052,7 +1052,14 @@ export function docFilename(slug, dateStr) {
 function json(obj, status = 200, extraHeaders) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...(extraHeaders || {}) },
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      // DIR-84: elk JSON-antwoord hoort bij één sessie. Nooit laten bewaren door een
+      // tussenliggende cache of door de browser — dat zou het antwoord van de ene
+      // klant bij de andere kunnen brengen.
+      "Cache-Control": "no-store",
+      ...(extraHeaders || {}),
+    },
   });
 }
 
@@ -1323,6 +1330,107 @@ async function huidigeToken(request, env) {
   if (!resp.ok) return null;
   const { token } = await resp.json();
   return token || null;
+}
+
+// ============================================================================
+// DIR-84 — KLANT-AFSCHERMING
+// ============================================================================
+// Een ingelogde klant draait op Dirk's eigen Google-account (agency). Dat account
+// kan bij ALLE klanten, dus de allowlist hieronder is het enige dat klant A van
+// klant B scheidt. Vandaar: één plek waar de bron wordt bepaald, één plek waar hij
+// wordt gecontroleerd, en een weigering die niets prijsgeeft.
+//
+// Het agency-token komt uit een refresh-token in de secrets (GOOGLE_REFRESH_TOKEN).
+// De korte cache hieronder houdt ALLEEN dat access-token vast — dat is van Dirk,
+// niet van een klant, en is voor iedere klant hetzelfde. Er wordt nergens
+// klant-DATA gecachet: geen KV-cache, geen isolate-map, geen cache-headers.
+let agencyTokenCache = { token: null, tot: 0 };
+async function agencyToken(env) {
+  if (!env.GOOGLE_REFRESH_TOKEN || !env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return null;
+  const nu = Date.now();
+  if (agencyTokenCache.token && nu < agencyTokenCache.tot) return agencyTokenCache.token;
+  const body = new URLSearchParams({
+    client_id: env.GOOGLE_CLIENT_ID,
+    client_secret: env.GOOGLE_CLIENT_SECRET,
+    refresh_token: env.GOOGLE_REFRESH_TOKEN,
+    grant_type: "refresh_token",
+  });
+  let tok = null;
+  try {
+    const resp = await fetch(TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    });
+    if (!resp.ok) return null;                       // bewust geen token in een log
+    tok = await resp.json();
+  } catch (e) { return null; }
+  if (!tok || !tok.access_token) return null;
+  const levenMs = Math.max(60, Number(tok.expires_in || 3600) - 60) * 1000;
+  agencyTokenCache = { token: tok.access_token, tot: nu + levenMs };
+  return tok.access_token;
+}
+
+// De vastgelegde bron van één klant. Leeg = niet gekoppeld door Dirk.
+export function klantBron(rec, soort) {
+  const r = rec || {};
+  if (soort === "gsc") return String(r.gscSite || "").trim();
+  if (soort === "ga4") return String(r.ga4Property || "").trim();
+  if (soort === "ads") return String(r.adsCustomerId || "").trim();
+  if (soort === "adsLogin") return String(r.adsLoginCustomerId || "").trim();
+  if (soort === "meta") return String(r.adAccountId || "").trim();
+  return "";
+}
+
+// Mag deze klant deze bron opvragen? Leeg gevraagd = "geef me mijn eigen bron".
+// Vergelijkt genormaliseerd, zodat "properties/123" en "123" hetzelfde zijn en een
+// klant niet met een andere schrijfwijze langs de controle komt.
+export function bronToegestaan(rec, soort, gevraagd) {
+  const eigen = klantBron(rec, soort);
+  if (!eigen) return false;                          // niets vastgelegd → niets toegestaan
+  const wil = String(gevraagd == null ? "" : gevraagd).trim();
+  if (!wil) return true;                             // geen keuze meegegeven → eigen bron
+  if (soort === "ga4") return ga4PropertyId(wil) === ga4PropertyId(eigen);
+  // Google Ads-ID's worden met en zonder streepjes geschreven; vergelijk daarom op
+  // de cijfers. Dat kan twee verschillende accounts nooit gelijk maken.
+  if (soort === "ads" || soort === "adsLogin") {
+    const cijfers = (x) => adsCustomerId(x).replace(/\D/g, "");
+    return !!cijfers(wil) && cijfers(wil) === cijfers(eigen);
+  }
+  if (soort === "meta") return metaActId(wil) === metaActId(eigen);
+  return wil === eigen;                              // GSC-site: exacte string van Google
+}
+
+// De bron die we daadwerkelijk gebruiken, of null als het niet mag. Dit is de
+// controle die VLAK VOOR elke API-call staat — niet alleen bij een keuzelijst.
+export function bronOfNiets(rec, soort, gevraagd) {
+  return bronToegestaan(rec, soort, gevraagd) ? klantBron(rec, soort) : null;
+}
+
+// Eén weigering voor alle gevallen: bestaat niet, hoort niet bij jou, of nog niet
+// gekoppeld. De klant kan aan het antwoord niet zien wélk geval het is.
+function geenBron() {
+  return json({ error: "Deze gegevensbron is niet beschikbaar voor jouw account." }, 403);
+}
+
+// Wel een geldige klant en een toegestane bron, maar het agency-account is niet
+// (goed) geconfigureerd. Aparte melding, want dit is een zaak voor Dirk - en er
+// staat niets klantspecifieks in.
+function geenAgency() {
+  return json({ error: "Je gegevens staan nog niet klaar. Vraag Dirk om je account te koppelen." }, 503);
+}
+
+// WIE vraagt dit op, en met welk recht?
+//   soort "klant" → agency-token + uitsluitend de bronnen uit zijn klantrecord;
+//   soort "eigen" → het eigen OAuth-token van deze browsersessie (extern bedrijf).
+// De klant komt ALLEEN uit de ondertekende sessie (DIR-82), nooit uit een
+// parameter, header of body. De twee paden raken elkaar nergens: een extern
+// bedrijf komt niet door de klant-allowlist, en een klant niet bij het eigen
+// OAuth-token.
+async function dataContext(request, env) {
+  const klant = await huidigeKlant(request, env);
+  if (klant) return { soort: "klant", key: klant.key, rec: klant.rec, token: await agencyToken(env) };
+  return { soort: "eigen", key: null, rec: null, token: await huidigeToken(request, env) };
 }
 
 async function fetchGscSites(token) {
@@ -1710,9 +1818,19 @@ const AGENT_NAAM = { gsc: "Albert (GSC/SEO)", ga4: "Gertjan (GA4)", ads: "Ilona 
 // Laadt de tool + data-bron van één aanhakende collega (sessie-scoped, auto-select
 // van de eerste bron als er nog niets gekozen is). Geeft null als niet bruikbaar
 // (bv. niet gekoppeld). GSC/GA4/Ads vallen onder dezelfde Google-token.
-async function collegaPack(env, stub, token, key) {
+async function collegaPack(env, stub, token, key, ctxData) {
+  // DIR-84: bij een ingelogde klant komt de bron ALTIJD uit zijn record. Zonder deze
+  // tak zou de auto-selectie hieronder de eerste site/property/account uit het
+  // agency-account pakken — dat is dan de data van een andere klant.
+  const klant = ctxData && ctxData.soort === "klant" ? ctxData.rec : null;
   if (key === "gsc") {
     if (!token) return null;
+    if (klant) {
+      const site = klantBron(klant, "gsc");
+      if (!site) return null;
+      return { tool: gscTool(), note: "Albert (GSC/SEO) haakt aan — gebruik `gsc_query` voor live Search Console-data van " + site + ".",
+        dispatch: { gsc_query: (input) => fetchGscQuery(token, site, input) } };
+    }
     let st = {}; try { st = await (await stub.fetch("https://do/chat/state")).json(); } catch (e) {}
     let gsc = st && st.gsc;
     if (!gsc || !gsc.actief) {
@@ -1727,6 +1845,12 @@ async function collegaPack(env, stub, token, key) {
   }
   if (key === "ga4") {
     if (!token) return null;
+    if (klant) {
+      const property = klantBron(klant, "ga4");
+      if (!property) return null;
+      return { tool: ga4Tool(), note: "Gertjan (GA4) haakt aan — gebruik `ga4_report` voor live Google Analytics 4-data van " + property + ".",
+        dispatch: { ga4_report: (input) => fetchGa4Query(token, property, input) } };
+    }
     let st = {}; try { st = await (await stub.fetch("https://do/chat/state-ga4")).json(); } catch (e) {}
     let ga4 = st && st.ga4;
     if (!ga4 || !ga4.actief) {
@@ -1741,6 +1865,13 @@ async function collegaPack(env, stub, token, key) {
   }
   if (key === "ads") {
     if (!token || !env.GOOGLE_ADS_DEVELOPER_TOKEN) return null;
+    if (klant) {
+      const customer = klantBron(klant, "ads");
+      if (!customer) return null;
+      const loginCid = klantBron(klant, "adsLogin") || customer;
+      return { tool: adsTool(), note: "Ilona (Google Ads) haakt aan — gebruik `ads_report` voor live Google Ads-data.",
+        dispatch: { ads_report: (input) => fetchAdsReport(token, env, customer, input, loginCid) } };
+    }
     let st = {}; try { st = await (await stub.fetch("https://do/chat/state-ilona")).json(); } catch (e) {}
     let ads = st && st.ads;
     if (!ads || !ads.actief) {
@@ -1761,12 +1892,12 @@ async function collegaPack(env, stub, token, key) {
 
 // Bouwt de aanhakende collega's (excl. de lead) tot extra tools + systeem-notitie
 // + dispatch-map. body.collegas = ['ga4', ...]. Alleen bruikbare collega's tellen.
-async function buildCollegas(env, stub, token, leadKey, body) {
+async function buildCollegas(env, stub, token, leadKey, body, ctxData) {
   const keys = (body && Array.isArray(body.collegas) ? body.collegas : [])
     .filter((k) => k && k !== leadKey && AGENT_NAAM[k]);
   const tools = [], notes = [], namen = []; let dispatch = {};
   for (const k of keys) {
-    const pack = await collegaPack(env, stub, token, k);
+    const pack = await collegaPack(env, stub, token, k, ctxData);
     if (!pack) continue;
     if (pack.tool) tools.push(pack.tool);
     notes.push(pack.note);
@@ -1798,7 +1929,7 @@ function sseResponse(text, extraHeaders) {
     },
   });
   return new Response(stream, {
-    headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache", ...(extraHeaders || {}) },
+    headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", ...(extraHeaders || {}) },
   });
 }
 
@@ -3977,14 +4108,25 @@ async function handleChat(request, env, ctx) {
     return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
   }
 
+  // DIR-84: wie is dit, en met welk recht? Een klant draait op het agency-account
+  // en uitsluitend op de site uit zijn eigen record; een extern bedrijf op zijn
+  // eigen OAuth-token, precies als voorheen.
+  const ctxData = await dataContext(request, env);
   const cookies = parseCookies(request.headers.get("Cookie"));
-  const id = cookies[COOKIE];
-  if (!id) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console." }, 401);
+  let id = cookies[COOKIE];
+  let setCookie = null;
+  if (!id) {
+    // Een klant hoeft niets te koppelen: die krijgt hier zijn gesprekssessie.
+    if (ctxData.soort !== "klant") return json({ error: "Niet gekoppeld. Koppel eerst je Search Console." }, 401);
+    id = crypto.randomUUID();
+    setCookie = sessionCookie(id, Math.floor(SESSION_TTL_MS / 1000));
+  }
 
   const stub = sessionStub(env, id);
+  await stub.fetch("https://do/touch", { method: "POST" }).catch(() => {});
   const stateResp = await stub.fetch("https://do/chat/state");
-  if (!stateResp.ok) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console." }, 401);
-  let { token, messages: history, gsc } = await stateResp.json();
+  if (!stateResp.ok && ctxData.soort !== "klant") return json({ error: "Niet gekoppeld. Koppel eerst je Search Console." }, 401);
+  let { token, messages: history, gsc } = stateResp.ok ? await stateResp.json() : { token: null, messages: [], gsc: null };
 
   // Body: optioneel { message } (vervolgvraag) en/of { site } (kiezen/wisselen).
   let body = {};
@@ -3999,7 +4141,25 @@ async function handleChat(request, env, ctx) {
   let promptText;              // wat naar het model gaat
   let storedUser = userText;   // wat in de historie komt
 
-  if (wantSite) {
+  if (ctxData.soort === "klant") {
+    // DIR-84 · klant-pad: de site komt uit het klantrecord. Een site meesturen die
+    // niet van hem is, stopt hier — geen lijst, geen keuze, geen andermans data.
+    const eigenSite = bronOfNiets(ctxData.rec, "gsc", wantSite);
+    if (!eigenSite) return geenBron();
+    token = ctxData.token;
+    if (!token) return geenAgency();
+    if (!gsc || gsc.actief !== eigenSite) {
+      gsc = await selectSite(stub, token, eigenSite, [eigenSite]);
+      if (!gsc) return json({ error: "Kon de prestaties van je site niet laden." }, 502);
+      history = [];
+      promptText = agentTekst.analyse;
+      storedUser = "[Analyse van " + eigenSite + "]";
+    } else if (!userText) {
+      return json({ error: "Stel een vraag over je cijfers." }, 400);
+    } else {
+      promptText = userText;
+    }
+  } else if (wantSite) {
     // AC-2/AC-3: site kiezen of wisselen → nieuwe analyse.
     const sites = await fetchGscSites(token);
     if (!sites || !sites.length) return json({ error: "Geen Search Console-sites gevonden in je account." }, 502);
@@ -4031,7 +4191,7 @@ async function handleChat(request, env, ctx) {
   const convo = buildAnthropicMessages(history, promptText, bijlageBlokken(bij.lijst));
 
   // DIR-62: aanhakende collega's → extra tools + persona-notities + team-antwoord.
-  const col = await buildCollegas(env, stub, token, "gsc", body);
+  const col = await buildCollegas(env, stub, token, "gsc", body, ctxData);
   const system = buildSystemPrompt(gsc, agentTekst.persona) + col.note + (bij.lijst.length ? BIJLAGE_SYSTEEM : "");
   const tools = [gscTool(), ...col.tools];
   const dispatch = Object.assign({ gsc_query: (input) => fetchGscQuery(token, site, input) }, col.dispatch);
@@ -4049,7 +4209,7 @@ async function handleChat(request, env, ctx) {
     }).catch(() => {})
   );
 
-  return sseResponse(finalText);
+  return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined);
 }
 
 // GA4-property kiezen: overzicht laden + in de sessie zetten (ga4-historie schoon).
@@ -4066,14 +4226,22 @@ async function handleGa4Chat(request, env, ctx) {
   if (!env.ANTHROPIC_API_KEY) {
     return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
   }
+  // DIR-84: klant → agency-token + uitsluitend de property uit zijn record.
+  const ctxData = await dataContext(request, env);
   const cookies = parseCookies(request.headers.get("Cookie"));
-  const id = cookies[COOKIE];
-  if (!id) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account." }, 401);
+  let id = cookies[COOKIE];
+  let setCookie = null;
+  if (!id) {
+    if (ctxData.soort !== "klant") return json({ error: "Niet gekoppeld. Koppel eerst je Google-account." }, 401);
+    id = crypto.randomUUID();
+    setCookie = sessionCookie(id, Math.floor(SESSION_TTL_MS / 1000));
+  }
 
   const stub = sessionStub(env, id);
+  await stub.fetch("https://do/touch", { method: "POST" }).catch(() => {});
   const stateResp = await stub.fetch("https://do/chat/state-ga4");
-  if (!stateResp.ok) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account." }, 401);
-  let { token, messages: history, ga4 } = await stateResp.json();
+  if (!stateResp.ok && ctxData.soort !== "klant") return json({ error: "Niet gekoppeld. Koppel eerst je Google-account." }, 401);
+  let { token, messages: history, ga4 } = stateResp.ok ? await stateResp.json() : { token: null, messages: [], ga4: null };
 
   let body = {};
   try { body = await request.json(); } catch (e) { /* lege body toegestaan */ }
@@ -4086,7 +4254,24 @@ async function handleGa4Chat(request, env, ctx) {
   let promptText;
   let storedUser = userText;
 
-  if (wantProp) {
+  if (ctxData.soort === "klant") {
+    // DIR-84 · klant-pad: property uit het record, geen lijst, geen keuze.
+    const eigenProp = bronOfNiets(ctxData.rec, "ga4", wantProp);
+    if (!eigenProp) return geenBron();
+    token = ctxData.token;
+    if (!token) return geenAgency();
+    if (!ga4 || ga4.actief !== eigenProp) {
+      ga4 = await selectGa4Property(stub, token, eigenProp, [{ property: eigenProp, displayName: ctxData.rec.naam || "" }]);
+      if (!ga4) return json({ error: "Kon de GA4-cijfers van je property niet laden." }, 502);
+      history = [];
+      promptText = agentTekst.analyse;
+      storedUser = "[Analyse van " + eigenProp + "]";
+    } else if (!userText) {
+      return json({ error: "Stel een vraag over je GA4-cijfers." }, 400);
+    } else {
+      promptText = userText;
+    }
+  } else if (wantProp) {
     const props = await fetchGa4Properties(token);
     if (!props || !props.length) return json({ error: "Geen GA4-properties gevonden in je account." }, 502);
     if (!props.some((p) => p.property === wantProp)) return json({ error: "Die property staat niet in je account." }, 400);
@@ -4113,7 +4298,7 @@ async function handleGa4Chat(request, env, ctx) {
   const convo = buildAnthropicMessages(history, promptText, bijlageBlokken(bij.lijst));
 
   // DIR-62: aanhakende collega's (bv. Albert/GSC) erbij.
-  const col = await buildCollegas(env, stub, token, "ga4", body);
+  const col = await buildCollegas(env, stub, token, "ga4", body, ctxData);
   const system = buildGa4SystemPrompt(ga4, agentTekst.persona) + col.note + (bij.lijst.length ? BIJLAGE_SYSTEEM : "");
   const tools = [ga4Tool(), ...col.tools];
   const dispatch = Object.assign({ ga4_report: (input) => fetchGa4Query(token, property, input) }, col.dispatch);
@@ -4131,7 +4316,7 @@ async function handleGa4Chat(request, env, ctx) {
     }).catch(() => {})
   );
 
-  return sseResponse(finalText);
+  return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined);
 }
 
 // Ads-account kiezen: overzicht laden + in de sessie zetten (ads-historie schoon).
@@ -4148,31 +4333,49 @@ async function handleAdsChat(request, env, ctx) {
   if (!env.ANTHROPIC_API_KEY) {
     return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
   }
+  // DIR-84: klant → agency-token, en uitsluitend het Ads-account en Meta-account
+  // uit zijn eigen record. Extern bedrijf → eigen OAuth-token, ongewijzigd.
+  const ctxData = await dataContext(request, env);
   const cookies = parseCookies(request.headers.get("Cookie"));
-  const id = cookies[COOKIE];
-  if (!id) return json({ error: "Niet gekoppeld. Koppel eerst Google Ads via /oauth/start." }, 401);
-
-  // DIR-82: de Meta-bron kwam uit de magic-link-sleutel; die ingang is vervallen.
-  // Tot DIR-84 de klant-sessie aan de vastgelegde ID's koppelt, is er dus geen
-  // Meta-account voor deze chat en valt Ilona terug op Google Ads. Bewust géén
-  // scoping-logica hier: welke klant welke bron ziet, is precies wat DIR-84 regelt.
-  const metaOn = false;
-  const metaacct = "";
+  let id = cookies[COOKIE];
+  let setCookie = null;
+  if (!id) {
+    if (ctxData.soort !== "klant") return json({ error: "Niet gekoppeld. Koppel eerst Google Ads via /oauth/start." }, 401);
+    id = crypto.randomUUID();
+    setCookie = sessionCookie(id, Math.floor(SESSION_TTL_MS / 1000));
+  }
 
   const stub = sessionStub(env, id);
+  await stub.fetch("https://do/touch", { method: "POST" }).catch(() => {});
   const stateResp = await stub.fetch("https://do/chat/state-ilona");
-  if (!stateResp.ok) return json({ error: "Je sessie is verlopen. Herlaad de pagina." }, 401);
-  let { token, messages: history, ads } = await stateResp.json();
+  if (!stateResp.ok && ctxData.soort !== "klant") return json({ error: "Je sessie is verlopen. Herlaad de pagina." }, 401);
+  let { token, messages: history, ads } = stateResp.ok ? await stateResp.json() : { token: null, messages: [], ads: null };
 
-  const googleAds = !!(token && env.GOOGLE_ADS_DEVELOPER_TOKEN);
-  if (!googleAds && !metaOn) {
-    return json({ error: "Nog geen advertentie-bron. Klik op \"Koppel Google Ads\" om te beginnen." }, 401);
-  }
+  // Meta hangt aan het klantrecord (DIR-84). Een extern bedrijf heeft geen
+  // klantrecord en dus geen Meta — dat is hetzelfde als voorheen.
+  const metaacct = ctxData.soort === "klant" ? klantBron(ctxData.rec, "meta") : "";
+  const metaOn = !!(metaacct && metaConfigured(env));
+  if (ctxData.soort === "klant") token = ctxData.token;
 
   let body = {};
   try { body = await request.json(); } catch (e) { /* lege body toegestaan */ }
   const wantCustomer = (body && typeof body.customer === "string") ? body.customer.trim() : "";
   let userText = (body && typeof body.message === "string") ? body.message.trim() : "";
+
+  // DIR-84: vraagt een klant een ander account dan het zijne, dan is dat een
+  // weigering — ongeacht of Google Ads verder geconfigureerd is. Zo krijgt hij
+  // altijd hetzelfde antwoord en hangt de afscherming niet aan de volgorde van
+  // configuratiechecks.
+  if (ctxData.soort === "klant" && wantCustomer && !bronToegestaan(ctxData.rec, "ads", wantCustomer)) {
+    return geenBron();
+  }
+
+  const googleAds = !!(token && env.GOOGLE_ADS_DEVELOPER_TOKEN
+    && (ctxData.soort !== "klant" || klantBron(ctxData.rec, "ads")));
+  if (!googleAds && !metaOn) {
+    if (ctxData.soort === "klant") return ctxData.token ? geenBron() : geenAgency();
+    return json({ error: "Nog geen advertentie-bron. Klik op \"Koppel Google Ads\" om te beginnen." }, 401);
+  }
 
   const agentTekst = await actieveAgent(env, "ads");   // DIR-80
   const bij = leesBijlagen(body && body.bijlagen);                 // DIR-81
@@ -4180,7 +4383,26 @@ async function handleAdsChat(request, env, ctx) {
   let promptText;
   let storedUser = userText;
 
-  if (googleAds && wantCustomer) {
+  if (ctxData.soort === "klant" && googleAds) {
+    // DIR-84 · klant-pad: account en MCC-id komen uit het record. Een ander account
+    // meesturen stopt hier; er wordt nooit een accountlijst opgehaald of getoond.
+    const eigenCust = bronOfNiets(ctxData.rec, "ads", wantCustomer);
+    if (!eigenCust) return geenBron();
+    const eigenLogin = klantBron(ctxData.rec, "adsLogin") || eigenCust;
+    if (!ads || ads.actief !== eigenCust) {
+      ads = await selectAdsCustomer(stub, token, env, eigenCust,
+        [{ customer: eigenCust, loginCid: eigenLogin, naam: ctxData.rec.naam || "" }], eigenLogin);
+      if (!ads) return json({ error: "Kon de Google Ads-cijfers van je account niet laden." }, 502);
+      history = [];
+      promptText = agentTekst.analyse;
+      storedUser = "[Analyse van " + (ctxData.rec.naam || eigenCust) + "]";
+    } else if (userText) {
+      promptText = userText;
+    } else {
+      promptText = agentTekst.analyse;
+      storedUser = "[Analyse van " + (ctxData.rec.naam || eigenCust) + "]";
+    }
+  } else if (googleAds && wantCustomer) {
     const res = await fetchAdsCustomers(token, env);
     if (res.error) return json({ error: res.error }, 502);
     const acct = res.accounts.find((a) => a.customer === wantCustomer);
@@ -4224,7 +4446,7 @@ async function handleAdsChat(request, env, ctx) {
   const convo = buildAnthropicMessages(history, promptText, bijlageBlokken(bij.lijst));
 
   // DIR-62: aanhakende collega's (bv. Albert/GSC, Gertjan/GA4) erbij.
-  const col = await buildCollegas(env, stub, token, "ads", body);
+  const col = await buildCollegas(env, stub, token, "ads", body, ctxData);
   system += col.note;
   for (const t of col.tools) tools.push(t);
   const dispatch = Object.assign({
@@ -4245,7 +4467,7 @@ async function handleAdsChat(request, env, ctx) {
     }).catch(() => {})
   );
 
-  return sseResponse(finalText);
+  return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined);
 }
 
 // Anton (content/tekst): pure Claude-agent, geen databron/koppeling (DIR-39).
@@ -4273,8 +4495,14 @@ async function handleContentChat(request, env, ctx) {
 
   // DIR-62: collega's kunnen bij Anton aanhaken als de bezoeker in deze sessie is
   // ingelogd via Google (token in dezelfde sessie). Zonder token → geen data-tools.
-  let token = null; try { const s = await (await stub.fetch("https://do/chat/state")).json(); token = s && s.token; } catch (e) {}
-  const col = await buildCollegas(env, stub, token, "anton", body);
+  // DIR-84: haakt er een collega aan bij een ingelogde klant, dan draait die op het
+  // agency-token en op de bron uit zijn klantrecord — niet op een eigen OAuth-token
+  // en nooit op de eerste bron uit het agency-account.
+  const ctxData = await dataContext(request, env);
+  let token = null;
+  if (ctxData.soort === "klant") token = ctxData.token;
+  else { try { const s = await (await stub.fetch("https://do/chat/state")).json(); token = s && s.token; } catch (e) {} }
+  const col = await buildCollegas(env, stub, token, "anton", body, ctxData);
   const antonTekst = await actieveAgent(env, "anton");   // DIR-80
   const system = buildContentSystemPrompt(antonTekst.persona) + col.note + (bij.lijst.length ? BIJLAGE_SYSTEEM : "");
 
@@ -4603,22 +4831,35 @@ export default {
       return json({ chatten: false, soort: null, naam: "" });
     }
 
-    // AC-6 — GSC-sites.
+    // AC-6 — GSC-sites. DIR-84: een ingelogde klant krijgt NOOIT de lijst uit het
+    // agency-account (die lekt de namen van andere klanten), alleen zijn eigen,
+    // vastgelegde site.
     if (path === "/api/gsc/sites") {
-      const token = await huidigeToken(request, env);
-      if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console via /oauth/start." }, 401);
-      const sites = await fetchGscSites(token);
+      const ctxData = await dataContext(request, env);
+      if (ctxData.soort === "klant") {
+        const site = klantBron(ctxData.rec, "gsc");
+        return json({ sites: site ? [{ siteUrl: site, permissionLevel: "siteOwner" }] : [] });
+      }
+      if (!ctxData.token) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console via /oauth/start." }, 401);
+      const sites = await fetchGscSites(ctxData.token);
       if (!sites) return json({ error: "Kon je sites niet ophalen bij Google." }, 502);
       return json({ sites });
     }
 
     // AC-7 — GSC-prestaties (top zoekwoorden + top pagina's).
     if (path === "/api/gsc/performance") {
-      const token = await huidigeToken(request, env);
-      if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console via /oauth/start." }, 401);
-      const site = url.searchParams.get("site");
-      if (!site) return json({ error: "Geef een site op via ?site=<url>." }, 400);
-      const perf = await fetchGscPerformance(token, site, url.searchParams.get("days"));
+      const ctxData = await dataContext(request, env);
+      let site = url.searchParams.get("site");
+      if (ctxData.soort === "klant") {
+        // Allowlist vlak vóór de call: vraagt hij een andere site, dan stopt het hier.
+        site = bronOfNiets(ctxData.rec, "gsc", site);
+        if (!site) return geenBron();
+        if (!ctxData.token) return geenAgency();
+      } else {
+        if (!ctxData.token) return json({ error: "Niet gekoppeld. Koppel eerst je Search Console via /oauth/start." }, 401);
+        if (!site) return json({ error: "Geef een site op via ?site=<url>." }, 400);
+      }
+      const perf = await fetchGscPerformance(ctxData.token, site, url.searchParams.get("days"));
       if (!perf) return json({ error: "Kon de prestaties niet ophalen bij Google." }, 502);
       return json(perf);
     }
@@ -4629,21 +4870,33 @@ export default {
     }
 
     // DIR-28 — GA4/Gertjan: properties oplijsten (AC-2).
+    // DIR-84: klant krijgt alleen zijn eigen property terug, nooit de lijst van het
+    // agency-account.
     if (path === "/api/ga4/properties") {
-      const token = await huidigeToken(request, env);
-      if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
-      const props = await fetchGa4Properties(token);
+      const ctxData = await dataContext(request, env);
+      if (ctxData.soort === "klant") {
+        const prop = klantBron(ctxData.rec, "ga4");
+        return json({ properties: prop ? [{ property: prop, displayName: ctxData.rec.naam || "" }] : [] });
+      }
+      if (!ctxData.token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
+      const props = await fetchGa4Properties(ctxData.token);
       if (!props) return json({ error: "Kon je GA4-properties niet ophalen bij Google." }, 502);
       return json({ properties: props });
     }
 
     // DIR-28 — GA4-rapport draaien voor een property (AC-3).
     if (path === "/api/ga4/report") {
-      const token = await huidigeToken(request, env);
-      if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
-      const property = url.searchParams.get("property");
-      if (!property) return json({ error: "Geef een property op via ?property=properties/<id>." }, 400);
-      const out = await fetchGa4Query(token, property, {
+      const ctxData = await dataContext(request, env);
+      let property = url.searchParams.get("property");
+      if (ctxData.soort === "klant") {
+        property = bronOfNiets(ctxData.rec, "ga4", property);
+        if (!property) return geenBron();
+        if (!ctxData.token) return geenAgency();
+      } else {
+        if (!ctxData.token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
+        if (!property) return json({ error: "Geef een property op via ?property=properties/<id>." }, 400);
+      }
+      const out = await fetchGa4Query(ctxData.token, property, {
         metric: url.searchParams.get("metric"),
         dimension: url.searchParams.get("dimension"),
         days: url.searchParams.get("days"),
@@ -4660,24 +4913,43 @@ export default {
     }
 
     // DIR-30 — Google Ads/Ilona: toegankelijke accounts (AC-2).
+    // DIR-84: klant krijgt alleen zijn eigen account, nooit de MCC-lijst.
     if (path === "/api/ads/customers") {
-      const token = await huidigeToken(request, env);
-      if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
+      const ctxData = await dataContext(request, env);
+      if (ctxData.soort === "klant") {
+        const cust = klantBron(ctxData.rec, "ads");
+        const login = klantBron(ctxData.rec, "adsLogin") || cust;
+        return json({ accounts: cust ? [{ customer: cust, loginCid: login, naam: ctxData.rec.naam || "" }] : [] });
+      }
+      if (!ctxData.token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
       if (!env.GOOGLE_ADS_DEVELOPER_TOKEN) return json({ error: "Google Ads is nog niet geconfigureerd (developer-token ontbreekt)." }, 500);
-      const res = await fetchAdsCustomers(token, env);
+      const res = await fetchAdsCustomers(ctxData.token, env);
       if (res.error) return json({ error: res.error }, 502);
       return json({ accounts: res.accounts });
     }
 
     // DIR-30 — Google Ads-rapport voor een account (AC-3).
     if (path === "/api/ads/report") {
-      const token = await huidigeToken(request, env);
-      if (!token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
-      if (!env.GOOGLE_ADS_DEVELOPER_TOKEN) return json({ error: "Google Ads is nog niet geconfigureerd (developer-token ontbreekt)." }, 500);
-      const customer = url.searchParams.get("customer");
-      if (!customer) return json({ error: "Geef een account op via ?customer=customers/<id>." }, 400);
-      const loginCustomer = url.searchParams.get("login_customer") || customer;   // MCC-id voor subaccounts (AC-2)
-      const out = await fetchAdsReport(token, env, customer, {
+      const ctxData = await dataContext(request, env);
+      let customer = url.searchParams.get("customer");
+      let loginCustomer = url.searchParams.get("login_customer") || customer;   // MCC-id voor subaccounts (AC-2)
+      if (ctxData.soort === "klant") {
+        // Zowel het account als het MCC-id moeten van deze klant zijn: met een
+        // vreemd login_customer kun je anders alsnog een ander account aanspreken.
+        customer = bronOfNiets(ctxData.rec, "ads", customer);
+        if (!customer) return geenBron();
+        const gevraagdLogin = url.searchParams.get("login_customer");
+        if (gevraagdLogin && !bronToegestaan(ctxData.rec, "adsLogin", gevraagdLogin)
+            && !bronToegestaan(ctxData.rec, "ads", gevraagdLogin)) return geenBron();
+        loginCustomer = klantBron(ctxData.rec, "adsLogin") || customer;
+        if (!ctxData.token) return geenAgency();
+        if (!env.GOOGLE_ADS_DEVELOPER_TOKEN) return json({ error: "Google Ads is nog niet geconfigureerd (developer-token ontbreekt)." }, 500);
+      } else {
+        if (!ctxData.token) return json({ error: "Niet gekoppeld. Koppel eerst je Google-account via /oauth/start." }, 401);
+        if (!env.GOOGLE_ADS_DEVELOPER_TOKEN) return json({ error: "Google Ads is nog niet geconfigureerd (developer-token ontbreekt)." }, 500);
+        if (!customer) return json({ error: "Geef een account op via ?customer=customers/<id>." }, 400);
+      }
+      const out = await fetchAdsReport(ctxData.token, env, customer, {
         report: url.searchParams.get("report"),
         days: url.searchParams.get("days"),
         row_limit: url.searchParams.get("row_limit"),
