@@ -133,13 +133,14 @@ test("buildAnthropicMessages: historie + nieuwe vraag", () => {
   assert.equal(buildAnthropicMessages(null, "x").length, 1);
 });
 
-test("firstAnalysisPrompt: dashboard-secties + inzoom-vraag", () => {
+test("firstAnalysisPrompt: kort eerste beeld, geen dashboard (DIR-90)", () => {
   const p = firstAnalysisPrompt();
-  assert.match(p, /## Samenvatting/);
-  assert.match(p, /## Sterke pagina's/);
-  assert.match(p, /## Kansen/);
-  assert.match(p, /## Trend/);
-  assert.match(p, /inzoomen/i);
+  assert.match(p, /KORT/);
+  assert.match(p, /maximaal vijf/i);
+  assert.match(p, /Wat wil je weten\?/);
+  assert.match(p, /jij-vorm/);
+  // De uitgebreide analyse komt pas op verzoek: geen vaste secties meer.
+  assert.equal(/## /.test(p), false);
 });
 
 test("previousDateRange: 28 dagen direct vóór de huidige periode", () => {
@@ -292,14 +293,12 @@ test("computeGa4Trend: procentuele verandering users/sessies", () => {
     { activeUsersPct: 100, sessionsPct: 0 });
 });
 
-test("ga4FirstAnalysisPrompt: dashboard-secties + jij-vorm", () => {
+test("ga4FirstAnalysisPrompt: kort eerste beeld, geen dashboard (DIR-90)", () => {
   const p = ga4FirstAnalysisPrompt();
-  assert.match(p, /## Samenvatting/);
-  assert.match(p, /## Verkeer & trend/);
-  assert.match(p, /## Top pagina's/);
-  assert.match(p, /## Kanalen/);
-  assert.match(p, /## Opvallend/);
+  assert.match(p, /KORT/);
+  assert.match(p, /Wat wil je weten\?/);
   assert.match(p, /jij-vorm/);
+  assert.equal(/## /.test(p), false);
 });
 
 test("buildGa4SystemPrompt: Gertjan, GA4, jij-vorm, data ingebed", () => {
@@ -367,13 +366,12 @@ test("sumAdsRows: totalen optellen", () => {
   assert.deepEqual(sumAdsRows([]), { kosten: 0, clicks: 0, impressies: 0, conversies: 0 });
 });
 
-test("adsFirstAnalysisPrompt: dashboard-secties + jij-vorm", () => {
+test("adsFirstAnalysisPrompt: kort eerste beeld, geen dashboard (DIR-90)", () => {
   const p = adsFirstAnalysisPrompt();
-  assert.match(p, /## Samenvatting/);
-  assert.match(p, /## Kosten & rendement/);
-  assert.match(p, /## Top campagnes/);
-  assert.match(p, /## Kansen/);
+  assert.match(p, /KORT/);
+  assert.match(p, /Wat wil je weten\?/);
   assert.match(p, /jij-vorm/);
+  assert.equal(/## /.test(p), false);
 });
 
 test("buildAdsSystemPrompt: Ilona, Google Ads, jij-vorm, data ingebed", () => {
@@ -909,4 +907,20 @@ test("geldigSessieId: alleen een UUID telt als sessie-id", () => {
   assert.equal(geldigSessieId(""), false);
   assert.equal(geldigSessieId(null), false);
   assert.equal(geldigSessieId("3f2504e0-4f89-41d3-9a0c-0305e82c3301x"), false);
+});
+
+
+test("agentStandaard: elke data-agent heeft een korte opening, bewerkbaar (DIR-90)", () => {
+  for (const key of ["gsc", "ga4", "ads"]) {
+    const a = agentStandaard(key);
+    assert.equal(typeof a.opening, "string");
+    assert.equal(a.opening.length > 0, true, key + " mist een opening");
+    assert.match(a.opening, /momentje/i);
+  }
+  // Anton haalt geen data op; die heeft niets om even naar te kijken.
+  assert.equal(agentStandaard("anton").opening, "");
+  // En de opening is via /admin te overschrijven, net als de andere velden.
+  const eigen = samenAgent(agentStandaard("gsc"), { opening: "Eventjes kijken hoor." });
+  assert.equal(eigen.opening, "Eventjes kijken hoor.");
+  assert.equal(eigen.aangepast.opening, true);
 });

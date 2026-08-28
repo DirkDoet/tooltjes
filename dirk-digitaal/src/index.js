@@ -82,14 +82,17 @@ const AGENT_INSTRUCTIES = {
       "",
       "Search Console-data van deze sessie (top zoekwoorden en pagina's, laatste periode):",
     ],
+    // DIR-90: wat de bezoeker als eerste ziet, nog vóór de data er is.
+    opening: "Hoi! Ik kijk even naar je zoekprestaties, momentje\u2026",
+    // DIR-90: kort houden. De uitgebreide analyse (secties, tabellen) komt pas als
+    // erom gevraagd wordt — dat scheelt wachttijd en kosten bij elk eerste bezoek.
     analyse:
-      "Maak een SEO-analyse van de gekozen site op basis van de data. Gebruik EXACT deze " +
-      "vier secties, elk met een '## '-kop, en '- ' voor opsommingen:\n" +
-      "## Samenvatting\nKort (2-3 zinnen) hoe de site het doet.\n" +
-      "## Sterke pagina's\nDe best presterende pagina's/zoekwoorden (clicks + positie), met cijfers.\n" +
-      "## Kansen\nConcrete kansen: hoge impressies + lage CTR, of posities ~5-15 (bijna pagina 1). Noem de pagina/zoekwoord + wat te doen.\n" +
-      "## Trend\nVergelijk deze 28 dagen met de vorige 28 dagen (clicks en impressies omhoog/omlaag, met percentages uit de data).\n" +
-      "Sluit af met een korte vraag waar ik op wil inzoomen. Schrijf in het Nederlands, jij-vorm.",
+      "Geef een KORT eerste beeld van de gekozen site, in gewone zinnen: maximaal vijf " +
+      "regels, geen koppen, geen tabellen. Noem hooguit drie dingen die opvallen, met " +
+      "echte cijfers uit de data (bijvoorbeeld de sterkste pagina, een kans, of de trend " +
+      "van deze periode ten opzichte van de vorige). Geen adviezenlijst en geen " +
+      "uitgebreide analyse — die volgt pas als erom gevraagd wordt. " +
+      "Sluit af met de vraag: Wat wil je weten? Schrijf in het Nederlands, jij-vorm.",
   },
   // ---- Gertjan — GA4 ----
   gertjan: {
@@ -106,15 +109,15 @@ const AGENT_INSTRUCTIES = {
       "",
       "GA4-data van deze sessie (overzicht van de gekozen property):",
     ],
+    // DIR-90: eerst een menselijke opening, dan pas cijfers.
+    opening: "Hoi! Ik kijk even naar je bezoekcijfers, momentje\u2026",
     analyse:
-      "Maak een GA4-verkeersanalyse van de gekozen property op basis van de data. Gebruik EXACT deze " +
-      "vijf secties, elk met een '## '-kop en '- ' voor opsommingen:\n" +
-      "## Samenvatting\nKort (2-3 zinnen) hoe het verkeer eruitziet.\n" +
-      "## Verkeer & trend\nGebruikers, sessies en paginaweergaven van deze periode vs. de vorige periode (met percentages uit de data).\n" +
-      "## Top pagina's\nDe best bezochte pagina's, met cijfers.\n" +
-      "## Kanalen\nWaar het verkeer vandaan komt (kanaalgroepen), met cijfers.\n" +
-      "## Opvallend\nWat springt eruit of verdient aandacht (sterke stijging/daling, opvallend kanaal).\n" +
-      "Sluit af met een korte vraag waar ik op wil inzoomen. Schrijf in het Nederlands, jij-vorm.",
+      "Geef een KORT eerste beeld van de gekozen property, in gewone zinnen: maximaal vijf " +
+      "regels, geen koppen, geen tabellen. Noem hooguit drie dingen die opvallen, met echte " +
+      "cijfers uit de data (bijvoorbeeld het aantal gebruikers, de trend ten opzichte van de " +
+      "vorige periode, of een kanaal dat eruit springt). Geen uitgebreide analyse — die volgt " +
+      "pas als erom gevraagd wordt. Sluit af met de vraag: Wat wil je weten? " +
+      "Schrijf in het Nederlands, jij-vorm.",
   },
   // ---- Ilona — Google Ads (+ Meta voor gekoppelde klanten) ----
   ilona: {
@@ -131,15 +134,15 @@ const AGENT_INSTRUCTIES = {
       "",
       "Google Ads-data van deze sessie (overzicht van het gekozen account):",
     ],
+    // DIR-90: eerst een menselijke opening, dan pas cijfers.
+    opening: "Hoi! Ik kijk even naar je campagnes, momentje\u2026",
     analyse:
-      "Maak een Google Ads-analyse van het gekozen account op basis van de data. Gebruik EXACT deze " +
-      "vijf secties, elk met een '## '-kop en '- ' voor opsommingen:\n" +
-      "## Samenvatting\nKort (2-3 zinnen) hoe de advertenties presteren.\n" +
-      "## Kosten & rendement\nTotale kosten, klikken, impressies en conversies; kosten per conversie waar mogelijk.\n" +
-      "## Top campagnes\nDe campagnes met de meeste kosten/conversies, met cijfers.\n" +
-      "## Kansen\nWaar geld beter besteed kan worden (dure campagnes zonder conversies, kansrijke zoekwoorden).\n" +
-      "## Opvallend\nWat springt eruit of verdient aandacht.\n" +
-      "Sluit af met een korte vraag waar ik op wil inzoomen. Schrijf in het Nederlands, jij-vorm.",
+      "Geef een KORT eerste beeld van het gekozen account, in gewone zinnen: maximaal vijf " +
+      "regels, geen koppen, geen tabellen. Noem hooguit drie dingen die opvallen, met echte " +
+      "cijfers uit de data (bijvoorbeeld de kosten van deze periode, de campagne die eruit " +
+      "springt, of een campagne die geld kost zonder conversies). Geen uitgebreide analyse — " +
+      "die volgt pas als erom gevraagd wordt. Sluit af met de vraag: Wat wil je weten? " +
+      "Schrijf in het Nederlands, jij-vorm.",
   },
   // ---- Anton — content/tekst (geen databron/koppeling) ----
   anton: {
@@ -597,12 +600,16 @@ async function huidigeKlant(request, env) {
 // ============================================================================
 // DIR-87 — GEBRUIKSREGISTRATIE
 // ============================================================================
-// Dirk wil zien wie de tool gebruikt. Wat we vastleggen: WIE (klantnaam +
-// Google-adres), WANNEER, en WAT (inloggen / welke collega geopend). Wat we NOOIT
-// vastleggen: de inhoud van gesprekken — geen vragen, geen antwoorden, geen
-// opgehaalde cijfers, geen bijlagen. Mislukte inlogpogingen tellen we alleen als
-// aantal, zonder adres: iemand die geen klant is heeft daar nooit toestemming voor
-// gegeven.
+// Dirk wil zien wie de tool gebruikt. Wat we vastleggen: WIE (het geverifieerde
+// Google-adres, plus de klantnaam als Dirk die kent), WANNEER, en WAT (inloggen /
+// welke collega geopend). Wat we NOOIT vastleggen: de inhoud van gesprekken — geen
+// vragen, geen antwoorden, geen opgehaalde cijfers, geen bijlagen.
+//
+// `wat: "onbekend"` betekent sinds DIR-88 nog maar één ding: Google gaf geen
+// geverifieerd e-mailadres terug, dus we weten niet wie dit was. Zo'n regel heeft
+// daarom geen adres — niet uit terughoudendheid, maar omdat er geen adres ís.
+// Iedereen die wél binnenkomt staat gewoon met zijn adres in de lijst; daar wordt
+// hij vóór het inloggen op gewezen (poort-modal en inlogblok).
 const GEBRUIK_VENSTER_MS = 30 * 60 * 1000;        // ontdubbelen: 1 regel per agent per half uur
 const GEBRUIK_MAX_REGELS = 1000;                  // harde bovengrens
 const GEBRUIK_MAX_LEEFTIJD_MS = 90 * 24 * 60 * 60 * 1000;   // en niets ouder dan 90 dagen
@@ -943,12 +950,12 @@ const AGENT_BRON = {
 // Introteksten (het welkomstbericht in de chat) stonden in de pagina zelf; ze staan
 // hier zodat ze net als de rest via /admin aanpasbaar zijn.
 const AGENT_INTRO = {
-  gsc: "Hoi! Ik ben Albert, je GSC-agent. Koppel je Google-account, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.",
-  ga4: "Hoi! Ik ben Gertjan, je GA4-data-specialist. Koppel je Google-account, dan geef ik je meteen een overzicht van je verkeer en kun je me alles vragen.",
-  ads: "Hoi! Ik ben Ilona, je advertentie-specialist. Kies een platform: \"Koppel Google Ads\" voor je Google-campagnes, of \"Meta Ads\" voor je Facebook/Instagram-cijfers (die komen via je persoonlijke klant-link).",
+  gsc: "Hoi! Ik ben Albert, je GSC-agent. Koppel je Google-account, dan kijk ik met je mee naar je zoekprestaties en kun je me alles vragen.",
+  ga4: "Hoi! Ik ben Gertjan, je GA4-data-specialist. Koppel je Google-account, dan kijk ik met je mee naar je bezoekcijfers en kun je me alles vragen.",
+  ads: "Hoi! Ik ben Ilona, je advertentie-specialist. Koppel je Google-account, dan kijk ik met je mee naar je campagnes en kun je me alles vragen.",
   anton: "Hoi! Ik ben Anton, je content-specialist. Plak een tekst en vraag me te schrijven, vertalen, spellingchecken, in te korten, te verlengen, SEO-optimaliseren of te herschrijven.",
 };
-const AGENT_VELDEN = ["naam", "rol", "intro", "persona", "analyse"];
+const AGENT_VELDEN = ["naam", "rol", "intro", "opening", "persona", "analyse"];
 const AGENT_MAX = 8000;   // per veld, zodat een plaktekst de API-aanroep niet opblaast
 
 export function agentStandaard(key) {
@@ -959,6 +966,7 @@ export function agentStandaard(key) {
   return {
     key, bron: m.bron, kort: m.kort,
     naam: d.naam, rol: d.spec, intro: AGENT_INTRO[key],
+    opening: instr.opening || "",
     persona: instr.persona.join("\n"),
     analyse: instr.analyse || "",
   };
@@ -2594,6 +2602,7 @@ const OFFICE_HTML = `<!doctype html>
   .zm-kop{ margin:0; font-family:var(--leesfont); font-size:.95rem; font-weight:700;
     color:#a8cbe8; letter-spacing:.6px; text-transform:uppercase; }
   .zm-tekst{ margin:0; font-size:.98rem; line-height:1.5; color:#bcc5d1; }
+  .zm-tekst.zm-klein{ font-size:.88rem; color:#9aa4b1; }
   .zm-label{ font-size:.9rem; color:#a2abb7; }
   .zm-knop{ font-family:var(--leesfont); font-size:.95rem; font-weight:700; line-height:1.4; cursor:pointer;
     letter-spacing:.3px; padding:10px 12px; color:#111; background:var(--accent); border:2px solid #000;
@@ -2836,18 +2845,14 @@ const OFFICE_HTML = `<!doctype html>
   <div class="zm-blok" style="border-top:0;padding-top:0">
     <p class="zm-tekst">Je AI-collega&#39;s zitten klaar. Klik een bureau aan om met een agent te praten.</p>
   </div>
+  <!-- DIR-86/DIR-90: inloggen met Google, in één klik. De uitleg en de privacyregel
+       staan hier, dus vóór de klik — niet in een tussenscherm en niet pas in de chat. -->
   <div class="zm-blok" id="zm-gast">
-    <button class="zm-knop" id="zm-open-klant" type="button">Inloggen met Google</button>
-    <button class="zm-knop zm-sub" id="zm-open-inlog" type="button">Beheer</button>
-  </div>
-  <!-- DIR-86: klanten loggen in met Google. Diezelfde toestemming geeft ons wie je
-       bent en waar je bij mag; een apart wachtwoord bestaat niet meer. -->
-  <div class="zm-blok verborgen" id="zm-klant-inlog">
-    <h2 class="zm-kop">Inloggen</h2>
     <p class="zm-tekst">Log in met het Google-account waarin je Search Console, Analytics of Ads staan. Je ziet daarna je eigen cijfers &mdash; niemand anders komt erbij.</p>
+    <p class="zm-tekst zm-klein">Wat we bewaren: je e-mailadres en welke collega je opent, 90 dagen. Je gesprekken bewaren we niet.</p>
     <a class="zm-knop" id="zm-google" href="/oauth/start">Inloggen met Google</a>
-    <button class="zm-knop zm-sub" id="zm-klant-annuleer" type="button">Annuleren</button>
     <p class="zm-fout verborgen" id="zm-klant-fout" role="alert"></p>
+    <button class="zm-knop zm-sub" id="zm-open-inlog" type="button">Beheer</button>
   </div>
   <div class="zm-blok verborgen" id="zm-klant">
     <h2 class="zm-kop">Ingelogd</h2>
@@ -3010,9 +3015,9 @@ const OFFICE_HTML = `<!doctype html>
   <div class="poortbox">
     <h2 id="poort-kop">Log eerst even in</h2>
     <p>Rondkijken mag altijd. Wil je met <b id="poort-naam">een collega</b> praten? Log dan eerst in, dan schuift die meteen bij je aan.</p>
-    <p class="poort-klein">Inloggen doe je in het menu links.</p>
+    <p class="poort-klein">Je logt in met Google. Wat we bewaren: je e-mailadres en welke collega je opent, 90 dagen. Je gesprekken bewaren we niet.</p>
     <div class="poort-knoppen">
-      <button class="knop" id="poort-inlog">Inloggen</button>
+      <button class="knop" id="poort-inlog">Inloggen met Google</button>
       <button class="knop rood" id="poort-sluit">Nog even rondkijken</button>
     </div>
   </div>
@@ -3132,6 +3137,7 @@ const OFFICE_HTML = `<!doctype html>
     if(o.naam) a.naam=o.naam;
     if(o.rol) a.rol=o.rol;
     if(o.intro) a.intro=o.intro;
+    if(o.opening) a.opening=o.opening;      // DIR-90: de "momentje"-regel, bewerkbaar in /admin
     if(o.naam && o.rol) a.titel=o.rol+' ('+o.naam+')';
   });
   // Label boven het hoofd: naam + de vaste korte databron-tag (die blijft compact,
@@ -3353,8 +3359,14 @@ const OFFICE_HTML = `<!doctype html>
     busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen');
   }
 
-  // Startpunt na koppelen: backend beslist tussen site-keuze (meerdere) of directe analyse (één).
-  async function startFlow(){ if(started) return; started=true; await streamChat({}, true); }
+  // Startpunt na koppelen: backend beslist tussen bron-keuze (meerdere) of een kort
+  // eerste beeld (één bron). DIR-90: eerst een menselijke opening in beeld, zodat je
+  // niet naar een leeg venster zit te kijken terwijl de data wordt opgehaald.
+  async function startFlow(){
+    if(started) return; started=true;
+    if(cur.opening) addBubble('agent', cur.opening);
+    await streamChat({}, true);
+  }
 
   // ── DIR-81 · bijlagen bij één bericht ────────────────────────────────────
   // De bestanden staan alleen in dit tabblad, gaan mee met het bericht waar ze bij
@@ -3483,10 +3495,10 @@ const OFFICE_HTML = `<!doctype html>
   }
   document.getElementById('poort-sluit').addEventListener('click',poortDicht);
   if(poortInlog) poortInlog.addEventListener('click',function(){
+    // DIR-90: één klik. De uitleg en de privacyregel staan al in de modal, dus hier
+    // hoeft niets meer tussen — meteen naar Google.
     poortDicht();
-    // DIR-82: de poort stuurt naar het KLANT-inlogformulier; beheer zit apart.
-    if(window.ddOpenKlantInlog){ window.ddOpenKlantInlog(); return; }
-    var open=document.getElementById('zm-open-klant'); if(open) open.click();
+    window.location.href='/oauth/start';
   });
   document.addEventListener('keydown',function(e){
     if(e.key==='Escape'&&poort.style.display==='flex') poortDicht();
@@ -3739,16 +3751,12 @@ const OFFICE_HTML = `<!doctype html>
     })();
   })();
 
-  // Bij (her)laden: al gekoppeld? Eén koppeling dekt beide agents. Open de agent die
-  // de koppeling startte (in sessionStorage bewaard bij connect), default Albert/GSC.
-  // DIR-83: eerst de poort (mag ik chatten?), pas daarna de koppel-check. Zonder
-  // sessie geeft /api/gsc/sites nu 401 en blijft de scène gewoon staan.
+  // Bij (her)laden alleen kijken of er al een Google-koppeling is, zodat de knoppen
+  // kloppen. DIR-90: er opent NIETS automatisch en er draait geen analyse — dat kost
+  // geld dat niemand gevraagd heeft. Je klikt zelf een collega aan.
   haalToegang().then(function(mag){
     if(!mag){ setConnected(false); return; }
-    return fetch('/api/gsc/sites').then(function(r){ if(r.ok){ setConnected(true);
-        var k='gsc'; try{ k=sessionStorage.getItem('dd_agent')||'gsc'; }catch(e){}
-        openAgent(AGENTS[k]?k:'gsc'); }
-      else{ setConnected(false); } });
+    return fetch('/api/gsc/sites').then(function(r){ setConnected(r.ok); });
   }).catch(function(){ setConnected(false); });
 })();
 
@@ -3763,8 +3771,9 @@ const OFFICE_HTML = `<!doctype html>
   var modelFout=document.getElementById('zm-model-fout');
   var sel=document.getElementById('zm-model'), actief=document.getElementById('zm-actief');
   var pw=document.getElementById('zm-pw');
-  // DIR-82 · klant-login: eigen formulier, eigen blok, eigen endpoints.
-  var klantForm=document.getElementById('zm-klant-inlog'), klantBlok=document.getElementById('zm-klant');
+  // DIR-90: geen apart inlogformulier meer — de knop in het gast-blok gaat rechtstreeks
+  // naar Google. Het gast-blok is dus tegelijk het inlogscherm.
+  var klantBlok=document.getElementById('zm-klant');
   var klantFout=document.getElementById('zm-klant-fout'), klantNaam=document.getElementById('zm-klant-naam');
   function toon(el,ja){ if(ja) el.classList.remove('verborgen'); else el.classList.add('verborgen'); }
   function melding(el,tekst){ el.textContent=tekst||''; toon(el,!!tekst); }
@@ -3778,11 +3787,11 @@ const OFFICE_HTML = `<!doctype html>
     for(var i=0;i<sel.options.length;i++) if(sel.options[i].value===id) return sel.options[i].textContent;
     return id;
   }
-  function toonGast(){ toon(gast,true); toon(form,false); toon(klantForm,false);
+  function toonGast(){ toon(gast,true); toon(form,false);
     toon(klantBlok,false); toon(admin,false); melding(fout,''); melding(klantFout,''); }
   function toonKlant(naam){
     klantNaam.textContent = naam || 'klant';
-    toon(gast,false); toon(form,false); toon(klantForm,false); toon(admin,false); toon(klantBlok,true);
+    toon(gast,false); toon(form,false); toon(admin,false); toon(klantBlok,true);
     melding(klantFout,'');
   }
   function toonAdmin(res){
@@ -3791,7 +3800,7 @@ const OFFICE_HTML = `<!doctype html>
       var o=document.createElement('option'); o.value=k.id; o.textContent=k.label; sel.appendChild(o);
     });
     sel.value=res.model; actief.textContent=labelVan(res.model);
-    melding(modelFout,''); toon(gast,false); toon(form,false); toon(klantForm,false);
+    melding(modelFout,''); toon(gast,false); toon(form,false);
     toon(klantBlok,false); toon(admin,true);
   }
   function haalStatus(){
@@ -3810,15 +3819,13 @@ const OFFICE_HTML = `<!doctype html>
       toonGast(); return false;
     }).catch(function(){ toonGast(); return false; });
   }
-  // Het menu is het enige inlogscherm; de poort-modal (DIR-83) stuurt hierheen.
-  // DIR-86: inloggen is één klik naar Google; de sessie wordt in de callback gezet.
+  // De poort-modal (DIR-83) stuurt hierheen als iemand toch eerst wil kijken; de knop
+  // dáár gaat rechtstreeks naar Google, dus dit is alleen nog het accent leggen.
   function openKlantForm(){
-    toon(gast,false); toon(klantForm,true); melding(klantFout,'');
+    toon(gast,true); melding(klantFout,'');
     var g=document.getElementById('zm-google'); if(g) g.focus();
   }
   window.ddOpenKlantInlog=openKlantForm;
-  document.getElementById('zm-open-klant').addEventListener('click',openKlantForm);
-  document.getElementById('zm-klant-annuleer').addEventListener('click',toonGast);
 
   document.getElementById('zm-klant-uitlog').addEventListener('click',function(){
     function na(){ toonGast(); if(window.ddToegangVernieuwen) window.ddToegangVernieuwen(); }
@@ -3872,7 +3879,7 @@ async function officeHtml(env) {
   const publiek = {};
   for (const key of Object.keys(AGENT_BRON)) {
     const a = await actieveAgent(env, key);
-    publiek[key] = { naam: a.naam, rol: a.rol, kort: a.kort, intro: a.intro };
+    publiek[key] = { naam: a.naam, rol: a.rol, kort: a.kort, intro: a.intro, opening: a.opening };
   }
   return OFFICE_HTML.replace("__DD_AGENTS__", JSON.stringify(publiek).replace(/</g, "\u003c"));
 }
@@ -4183,9 +4190,10 @@ const ADMIN_HTML = `<!doctype html>
   var AGENTVELDEN=[
     { id:'naam', label:'Weergavenaam', hint:'Zoals hij heet in de scène en de chat' },
     { id:'rol', label:'Functie / rol', hint:'Bijv. GSC / SEO-specialist' },
-    { id:'intro', label:'Introtekst', hint:'Het welkomstbericht in de chat', groot:true },
+    { id:'intro', label:'Introtekst', hint:'Het welkomstbericht in de chat, zolang er nog geen koppeling is', groot:true },
+    { id:'opening', label:'Openingszin', hint:'Wat hij zegt op het moment dat hij je gegevens gaat bekijken, nog voordat er cijfers zijn', groot:true },
     { id:'persona', label:'Persona-prompt', hint:'De systeeminstructie: wie hij is, hoe hij antwoordt, hoe hij zijn tools gebruikt', groot:true },
-    { id:'analyse', label:'Analyse-prompt', hint:'De opdracht voor de eerste analyse (de kopjes met ##)', groot:true }
+    { id:'analyse', label:'Eerste-beeld-prompt', hint:'De opdracht voor het korte eerste verslag na het aanklikken; de uitgebreide analyse volgt pas op verzoek', groot:true }
   ];
   var agents=[], gekozenAgent=null;
   function renderAgents(){
