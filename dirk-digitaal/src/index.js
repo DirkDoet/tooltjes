@@ -3035,9 +3035,9 @@ const OFFICE_HTML = `<!doctype html>
       </div>
       <div class="chatmain">
         <div class="msgs" id="chat-msgs">
-          <div class="bubble agent">Hoi! Ik ben Albert, je GSC-agent. Koppel je Google-account, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.</div>
+          <div class="bubble agent">Hoi! Ik ben Albert, je GSC-agent. Koppel je Google-account, dan kijk ik met je mee naar je zoekprestaties en kun je me alles vragen.</div>
         </div>
-        <div class="notice" id="privacy-notice">Privacy: je koppeling, dit gesprek en bestanden die je meestuurt leven alleen in deze sessie. Ze wissen zichzelf als je weggaat of na 30 minuten — de inhoud van je gesprek wordt nergens bewaard. Dirk ziet w&eacute;l dat je hebt ingelogd en welke collega je opende, zodat hij weet hoe de tool gebruikt wordt. Klik hieronder op "Koppel Google" om te beginnen.</div>
+        <div class="notice" id="privacy-notice">Privacy: je koppeling, dit gesprek en bestanden die je meestuurt leven alleen in deze sessie. Ze wissen zichzelf als je weggaat of na 30 minuten — de inhoud van je gesprek wordt nergens bewaard. Dirk ziet w&eacute;l dat je hebt ingelogd en welke collega je opende, zodat hij weet hoe de tool gebruikt wordt.</div>
         <div class="bar">
           <button class="knop" id="chat-connect">Koppel Google</button>
           <button class="knop" id="chat-meta" style="display:none">Meta Ads</button>
@@ -3116,17 +3116,17 @@ const OFFICE_HTML = `<!doctype html>
     gsc:{ key:'gsc', naam:'Albert', titel:'GSC-agent', sym:'albert', huid:'#e8b98a', chat:'/api/chat', bron:'/api/gsc/sites',
       needKey:'needSite', listKey:'sites', selKey:'site', switchLabel:'Andere site',
       vraag:'Welke website wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je zoekcijfers...',
-      intro:'Hoi! Ik ben Albert, je GSC-agent. Koppel je Google-account, dan geef ik je meteen een analyse van je zoekprestaties en kun je me alles vragen.',
+      intro:'Hoi! Ik ben Albert, je GSC-agent. Koppel je Google-account, dan kijk ik met je mee naar je zoekprestaties en kun je me alles vragen.',
       itemValue:function(x){return x;}, itemLabel:function(x){return x;} },
     ga4:{ key:'ga4', naam:'Gertjan', titel:'GA4-agent (Gertjan)', sym:'gertjan', huid:'#e8b98a', chat:'/api/ga4/chat', bron:'/api/ga4/properties',
       needKey:'needProperty', listKey:'properties', selKey:'property', switchLabel:'Andere property',
       vraag:'Welke GA4-property wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je GA4-cijfers...',
-      intro:'Hoi! Ik ben Gertjan, je GA4-data-specialist. Koppel je Google-account, dan geef ik je meteen een overzicht van je verkeer en kun je me alles vragen.',
+      intro:'Hoi! Ik ben Gertjan, je GA4-data-specialist. Koppel je Google-account, dan kijk ik met je mee naar je bezoekcijfers en kun je me alles vragen.',
       itemValue:function(x){return x&&x.property;}, itemLabel:function(x){return (x&&(x.displayName||x.property))||'';} },
     ads:{ key:'ads', naam:'Ilona', titel:'Ads-agent (Ilona)', sym:'ilona', huid:'#f0c79a', chat:'/api/ads/chat', bron:'/api/ads/customers',
       needKey:'needAccount', listKey:'accounts', selKey:'customer', switchLabel:'Ander account', connectLabel:'Koppel Google Ads',
       vraag:'Welk Google Ads-account wil je analyseren?', prefix:'Analyseer ', ph:'Stel een vraag over je advertentiecijfers...',
-      intro:'Hoi! Ik ben Ilona, je advertentie-specialist. Kies een platform: "Koppel Google Ads" voor je Google-campagnes, of "Meta Ads" voor je Facebook/Instagram-cijfers (die komen via je persoonlijke klant-link).',
+      intro:'Hoi! Ik ben Ilona, je advertentie-specialist. Koppel je Google-account, dan kijk ik met je mee naar je campagnes en kun je me alles vragen.',
       itemValue:function(x){return x&&x.customer;}, itemLabel:function(x){return (x&&(x.naam?x.naam+' ('+x.id+')':(x.id||x.customer)))||'';} },
     anton:{ key:'anton', naam:'Anton', titel:'Content-specialist (Anton)', sym:'anton', huid:'#d9a878', chat:'/api/content/chat',
       geenKoppeling:true, ph:'Plak je tekst of vraag een bewerking...',
@@ -3181,8 +3181,13 @@ const OFFICE_HTML = `<!doctype html>
 
   function openChat(key){ if(key) useAgent(key); overlay.style.display='flex'; }
   function closeChat(){ overlay.style.display='none'; }
+  var ingericht=false;   // is het chatvenster al één keer door useAgent gevuld?
   function useAgent(key){
-    if(cur.key===key) return;              // zelfde agent → gesprek behouden
+    // cur staat bij het laden al op Albert, dus zonder deze vlag zou de eerste klik
+    // op hem meteen terugkeren en bleef de statische HTML-bubbel staan — inclusief de
+    // tekst die we juist hebben gecorrigeerd, en zonder de override uit /admin.
+    if(cur.key===key && ingericht) return;  // zelfde agent, al ingericht → gesprek behouden
+    ingericht=true;
     cur=AGENTS[key];
     titleEl.textContent=cur.titel;
     avatarEl.innerHTML=avatarSVG(cur);
@@ -3333,7 +3338,9 @@ const OFFICE_HTML = `<!doctype html>
       var ct=r.headers.get('Content-Type')||'';
       if(!r.ok||ct.indexOf('application/json')!==-1){
         var j={}; try{ j=await r.json(); }catch(e){}
-        if(j&&j[cur.needKey]){ bubble.remove(); renderPicker(j[cur.listKey]); busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen'); return; }
+        // Bron-keuze: er komt (nog) geen analyse, dus de "momentje"-regel weg.
+        if(j&&j[cur.needKey]){ bubble.remove(); wisOpening(); renderPicker(j[cur.listKey]); busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen'); return; }
+        wisOpening();                 // ook bij een fout: niet zeggen dat je kijkt terwijl het misging
         bubble.textContent=(j&&j.error)||'Er ging iets mis. Probeer het opnieuw.';
         if(r.status===401){ setConnected(false); setActive(false); started=false; }
         busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen'); return;
@@ -3355,17 +3362,22 @@ const OFFICE_HTML = `<!doctype html>
         else { bubble.innerHTML=mdToHtml(got); }   // DIR-59: normale antwoorden als opgemaakte markdown
         setActive(true);
       }
-    }catch(e){ bubble.textContent='Kon de agent niet bereiken. Probeer het opnieuw.'; }
+    }catch(e){ wisOpening(); bubble.textContent='Kon de agent niet bereiken. Probeer het opnieuw.'; }
     busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen');
   }
 
   // Startpunt na koppelen: backend beslist tussen bron-keuze (meerdere) of een kort
   // eerste beeld (één bron). DIR-90: eerst een menselijke opening in beeld, zodat je
   // niet naar een leeg venster zit te kijken terwijl de data wordt opgehaald.
+  // De openingsbubbel houden we vast: komt de backend terug met een bron-keuze of een
+  // fout, dan is "ik kijk even" een loze belofte en halen we hem weer weg.
+  var openingBubbel=null;
+  function wisOpening(){ if(openingBubbel){ openingBubbel.remove(); openingBubbel=null; } }
   async function startFlow(){
     if(started) return; started=true;
-    if(cur.opening) addBubble('agent', cur.opening);
+    openingBubbel = cur.opening ? addBubble('agent', cur.opening) : null;
     await streamChat({}, true);
+    openingBubbel=null;               // hoorde bij dít antwoord; daarna niet meer opruimen
   }
 
   // ── DIR-81 · bijlagen bij één bericht ────────────────────────────────────
