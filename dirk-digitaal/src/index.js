@@ -622,9 +622,29 @@ export async function hashKlantWachtwoord(wachtwoord, saltHex) {
   };
 }
 
+// KV list() loopt tot ~60s achter op een put(). Het beheerscherm ververste de lijst
+// direct na opslaan, zag de nieuwe klant nog niet, en dan lijkt het alsof er niets
+// is opgeslagen. Daarom houden we zelf een index bij: die lezen we met get(), en
+// dat volgt een schrijfactie wel meteen.
+const KLANT_INDEX = "index:klanten";
+
+async function kvIndexLees(env) {
+  try {
+    const raw = await env.CLIENTS.get(KLANT_INDEX);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter((k) => KLANT_SLEUTEL.test(k)) : [];
+  } catch (e) { return []; }
+}
+
+async function kvIndexSchrijf(env, sleutels) {
+  try { await env.CLIENTS.put(KLANT_INDEX, JSON.stringify([...new Set(sleutels)])); } catch (e) { /* index is hulpmiddel, geen bron */ }
+}
+
 async function kvPutClient(env, key, rec) {
   if (!env.CLIENTS || !key) return null;
   await env.CLIENTS.put(key, JSON.stringify(rec));
+  const idx = await kvIndexLees(env);
+  if (!idx.includes(key)) await kvIndexSchrijf(env, idx.concat(key));
   return rec;
 }
 async function kvGetClient(env, key) {
@@ -635,13 +655,21 @@ async function kvGetClient(env, key) {
 }
 async function kvListClients(env) {
   if (!env.CLIENTS) return [];
+  // Twee bronnen samen: de index volgt een verse put() meteen, list() vangt
+  // klanten die van voor de index dateren. Samenvoegen is dus zelfherstellend.
+  const sleutels = new Set(await kvIndexLees(env));
+  try {
+    const list = await env.CLIENTS.list({ limit: 1000 });
+    for (const k of list.keys || []) if (KLANT_SLEUTEL.test(k.name)) sleutels.add(k.name);
+  } catch (e) { /* index alleen is ook bruikbaar */ }
   const uit = [];
-  const list = await env.CLIENTS.list({ limit: 1000 });
-  for (const k of list.keys || []) {
-    if (!KLANT_SLEUTEL.test(k.name)) continue;      // config-sleutels overslaan
-    const rec = await kvGetClient(env, k.name);
-    if (rec) uit.push(schoonKlantRecord(k.name, rec));
+  const gezien = [];
+  for (const key of sleutels) {
+    const rec = await kvGetClient(env, key);
+    if (rec) { uit.push(schoonKlantRecord(key, rec)); gezien.push(key); }
   }
+  const idxNu = await kvIndexLees(env);
+  if (gezien.length !== idxNu.length || gezien.some((k) => !idxNu.includes(k))) await kvIndexSchrijf(env, gezien);
   return uit;
 }
 // Gebruikersnaam moet uniek zijn over alle klanten (case-insensitief), anders kan
@@ -675,6 +703,8 @@ export async function klantOpGebruikersnaam(env, gebruikersnaam) {
 async function kvDeleteClient(env, key) {
   if (!env.CLIENTS || !key) return false;
   await env.CLIENTS.delete(key);
+  const idx = await kvIndexLees(env);
+  if (idx.includes(key)) await kvIndexSchrijf(env, idx.filter((k) => k !== key));
   return true;
 }
 
@@ -3831,6 +3861,7 @@ const ADMIN_HTML = `<!doctype html>
     { id:'wachtwoord', label:'Wachtwoord', hint:'Minstens 8 tekens. Leeg laten = ongewijzigd. Wordt versleuteld opgeslagen en nooit teruggetoond.', type:'password', groep:'Klant-login' }
   ];
   var gekozenKlant=null;   // sleutel van de klant die in het paneel staat ('' = nieuw)
+  var klantenNu=[];        // laatst getoonde lijst, zodat een net bewaarde klant meteen zichtbaar is
   function veld(def, waarde){
     var w=document.createElement('div'); w.className='veld';
     var l=document.createElement('label'); l.textContent=def.label; w.appendChild(l);
@@ -3901,7 +3932,16 @@ const ADMIN_HTML = `<!doctype html>
         if(!res.ok){ meld((res.j&&res.j.error)||'Opslaan mislukt.'); return; }
         invoeren.wachtwoord.value='';
         melding.textContent = c ? 'Opgeslagen.' : 'Klant toegevoegd.';
-        gekozenKlant = (res.j && res.j.client && res.j.client.key) || gekozenKlant;
+        var opgeslagen = res.j && res.j.client;
+        gekozenKlant = (opgeslagen && opgeslagen.key) || gekozenKlant;
+        // De lijst van KV loopt tot een minuut achter op het opslaan. Zet de zojuist
+        // bewaarde klant daarom meteen zelf in de lijst, anders lijkt opslaan mislukt.
+        if(opgeslagen){
+          var pos = -1;
+          for(var i=0;i<klantenNu.length;i++){ if(klantenNu[i].key===opgeslagen.key){ pos=i; break; } }
+          if(pos>=0) klantenNu[pos]=opgeslagen; else klantenNu.push(opgeslagen);
+          render(klantenNu);
+        }
         laad(true);
       });
     });
@@ -3971,7 +4011,10 @@ const ADMIN_HTML = `<!doctype html>
     api('GET','/api/admin/clients').then(function(res){
       if(!res.ok){ toon(document.getElementById('beheer'),false); toon(document.getElementById('login'),true); return; }
       toon(document.getElementById('login'),false); toon(document.getElementById('beheer'),true);
-      var clients=res.j.clients||[]; render(clients); laadAccounts(clients);
+      var clients=res.j.clients||[];
+      // Verse klant kan nog ontbreken in de KV-lijst; niet laten verdwijnen uit beeld.
+      klantenNu.forEach(function(k){ if(!clients.some(function(c){ return c.key===k.key; })) clients.push(k); });
+      klantenNu=clients; render(clients); laadAccounts(clients);
       if(!behoudDetail && !gekozenKlant) leegDetail();
     });
   }
