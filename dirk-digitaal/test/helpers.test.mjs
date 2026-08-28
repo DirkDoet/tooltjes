@@ -61,6 +61,9 @@ import {
   magLoggen,
   snoeiGebruik,
   telOnbekendVandaag,
+  dagSleutel,
+  gebruikerSleutel,
+  geldigSessieId,
   klantBron,
   bronToegestaan,
   bronOfNiets,
@@ -874,4 +877,36 @@ test("telOnbekendVandaag: telt alleen weigeringen van vandaag, en niets persoonl
   assert.equal(telOnbekendVandaag(regels, nu), 2);
   // Een onbekende poging bevat geen adres: dat is de hele afspraak.
   assert.equal(regels.filter((r) => r.wat === "onbekend").every((r) => !r.email), true);
+});
+
+test("dagSleutel: 'vandaag' is Dirks dag, niet die van de server (UTC)", () => {
+  // 28 augustus 00:30 Nederlandse tijd = 27 augustus 22:30 UTC. In UTC zou dit
+  // gisteren zijn; voor Dirk is het vandaag.
+  const nachtNL = Date.parse("2026-08-27T22:30:00Z");
+  assert.equal(dagSleutel(nachtNL, "Europe/Amsterdam"), "2026-08-28");
+  assert.equal(dagSleutel(nachtNL, "UTC"), "2026-08-27");
+  // En de teller volgt die dag: een poging van 00:30 NL telt bij 10:00 NL mee.
+  const ochtendNL = Date.parse("2026-08-28T08:00:00Z");
+  const regels = [{ wat: "onbekend", tijd: nachtNL }];
+  assert.equal(telOnbekendVandaag(regels, ochtendNL, "Europe/Amsterdam"), 1);
+  assert.equal(telOnbekendVandaag(regels, ochtendNL, "UTC"), 0);
+});
+
+test("gebruikerSleutel: twee klanten zonder e-mailadres vallen niet samen", () => {
+  const a = { email: "", naam: "Klant A" };
+  const b = { email: "", naam: "Klant B" };
+  assert.notEqual(gebruikerSleutel(a), gebruikerSleutel(b));
+  // Zelfde persoon blijft dezelfde sleutel, ook als de naam ontbreekt.
+  assert.equal(gebruikerSleutel({ email: "x@y.nl" }), gebruikerSleutel({ email: "x@y.nl", naam: "" }));
+  assert.notEqual(gebruikerSleutel({ email: "x@y.nl" }), gebruikerSleutel({ email: "z@y.nl" }));
+});
+
+test("geldigSessieId: alleen een UUID telt als sessie-id", () => {
+  assert.equal(geldigSessieId("3f2504e0-4f89-41d3-9a0c-0305e82c3301"), true);
+  // Dit is de aanval die het gebruikslog wiste: een verzonnen naam in het cookie.
+  assert.equal(geldigSessieId("gebruik-log"), false);
+  assert.equal(geldigSessieId("log:gebruik"), false);
+  assert.equal(geldigSessieId(""), false);
+  assert.equal(geldigSessieId(null), false);
+  assert.equal(geldigSessieId("3f2504e0-4f89-41d3-9a0c-0305e82c3301x"), false);
 });
