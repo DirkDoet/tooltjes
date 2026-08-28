@@ -3354,7 +3354,7 @@ const OFFICE_HTML = `<!doctype html>
           try{ var evt=JSON.parse(p);
             if(evt.type==='content_block_delta'&&evt.delta&&typeof evt.delta.text==='string'){
               got+=evt.delta.text; bubble.textContent=got; msgs.scrollTop=msgs.scrollHeight; } }catch(e){} } }
-      if(!got){ bubble.textContent='De agent gaf geen antwoord. Probeer het opnieuw.'; }
+      if(!got){ wisOpening(); bubble.textContent='De agent gaf geen antwoord. Probeer het opnieuw.'; }
       else if(dashboard){ msgs.replaceChild(renderDashboard(got), bubble); msgs.scrollTop=msgs.scrollHeight; setActive(true); }
       else {
         var doc=parseDoc(got);
