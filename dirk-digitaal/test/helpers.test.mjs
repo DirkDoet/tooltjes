@@ -50,6 +50,7 @@ import {
   bijlageNotitie,
   schoneBestandsnaam,
   base64Bytes,
+  magChatten,
 } from "../src/index.js";
 import { createHmac } from "node:crypto";
 
@@ -593,4 +594,35 @@ test("buildAnthropicMessages: bijlagen komen voor de vraag in een gebruikersberi
   assert.equal(Array.isArray(m[0].content), true);
   assert.equal(m[0].content[m[0].content.length - 1].text, "Wat staat hierin?");
   assert.equal(buildAnthropicMessages([], "hoi")[0].content, "hoi");
+});
+
+// ---- DIR-83: de chat-poort ----
+// Eén centrale check "mag deze bezoeker chatten?". Alle chat- en data-endpoints
+// hangen hieraan, dus dit is het stuk dat moet kloppen.
+function verzoekMetCookie(cookie) {
+  return new Request("https://dd.test/api/chat", cookie ? { headers: { Cookie: cookie } } : {});
+}
+function adminCookie(wachtwoord) {
+  return "dd_admin=" + createHmac("sha256", wachtwoord).update("dd-admin-v1").digest("hex");
+}
+
+test("magChatten: zonder cookie mag je niet chatten", async () => {
+  assert.equal(await magChatten(verzoekMetCookie(null), { ADMIN_PASSWORD: "geheim" }), false);
+});
+
+test("magChatten: een verzonnen cookie geeft geen toegang", async () => {
+  const req = verzoekMetCookie("dd_admin=" + "a".repeat(64));
+  assert.equal(await magChatten(req, { ADMIN_PASSWORD: "geheim" }), false);
+  const anderWachtwoord = verzoekMetCookie(adminCookie("ander"));
+  assert.equal(await magChatten(anderWachtwoord, { ADMIN_PASSWORD: "geheim" }), false);
+});
+
+test("magChatten: een geldige admin-sessie mag chatten", async () => {
+  const req = verzoekMetCookie(adminCookie("geheim"));
+  assert.equal(await magChatten(req, { ADMIN_PASSWORD: "geheim" }), true);
+});
+
+test("magChatten: zonder ingesteld admin-wachtwoord gaat de poort niet open", async () => {
+  const req = verzoekMetCookie(adminCookie(""));
+  assert.equal(await magChatten(req, {}), false);
 });

@@ -477,6 +477,18 @@ async function isAdmin(request, env) {
   return veiligGelijk(got, await adminCookieValue(env));
 }
 
+// DIR-83 — DE poort: mag deze bezoeker chatten? Eén centrale controle voor alle
+// chat- en data-endpoints, zodat er nooit één deurtje open blijft staan. Kijken
+// mag voor iedereen (de scène is de etalage); chatten kost API-geld en vraagt dus
+// een geldige sessie.
+// Nu telt alleen de admin-sessie. DIR-82 voegt hier straks de klant-sessie toe —
+// dat is één regel erbij in DEZE functie, niet op tien plekken in de router.
+export async function magChatten(request, env) {
+  if (await isAdmin(request, env)) return true;
+  // TODO DIR-82: || (await isKlantIngelogd(request, env))
+  return false;
+}
+
 // Meta klaar? (system-token + app-secret aanwezig)
 function metaConfigured(env) {
   return !!(env.META_SYSTEM_TOKEN && env.META_APP_SECRET);
@@ -956,6 +968,11 @@ function json(obj, status = 200, extraHeaders) {
     status,
     headers: { "Content-Type": "application/json; charset=utf-8", ...(extraHeaders || {}) },
   });
+}
+
+// DIR-83 — één antwoord voor elke aanroep zonder geldige sessie.
+function geenSessie() {
+  return json({ error: "Log eerst in om met de agents te chatten." }, 401);
 }
 
 function sessionCookie(id, maxAgeSec) {
@@ -2337,6 +2354,15 @@ const OFFICE_HTML = `<!doctype html>
   button.knop:disabled{ opacity:.5; cursor:default; }
   .bar{ display:flex; gap:.5rem; padding:.6rem; border-top:2px solid var(--ink); background:var(--cream); flex-wrap:wrap; }
   button.rood{ background:var(--accent); color:var(--ink); }
+  /* DIR-83 · inlog-poort: verschijnt als je een agent aanklikt zonder sessie. */
+  .poortbox{ width:min(30rem,94vw); background:var(--cream); color:var(--ink);
+    border:4px solid var(--ink); box-shadow:8px 8px 0 var(--shadow);
+    font-family:var(--leesfont); padding:1.1rem 1.2rem 1.2rem; animation:dd-modal-in .18s ease-out; }
+  .poortbox h2{ margin:0 0 .6rem; font-family:'Press Start 2P',monospace; font-size:.8rem;
+    line-height:1.6; color:var(--teal); }
+  .poortbox p{ margin:0 0 .7rem; font-size:1rem; line-height:1.45; }
+  .poortbox .poort-klein{ font-size:.9rem; color:#4a5560; }
+  .poort-knoppen{ display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.9rem; }
   /* site-keuze + dashboard */
   .sitekeuze{ align-self:flex-start; background:#fff; border:2px solid var(--ink); padding:.6rem; max-width:100%; }
   .sitekeuze p{ margin:0 0 .5rem; font-size:.9rem; }
@@ -2511,6 +2537,20 @@ const OFFICE_HTML = `<!doctype html>
       <span style="display:inline-block;font-family:'VT323',monospace;font-size:clamp(15px,2.1vw,26px);letter-spacing:1px;color:#e8e2d8;background:rgba(11,18,25,.72);border:1px solid #F18E02;padding:6px 16px;text-shadow:1px 1px 0 #000;animation:dd-cta 2.4s ease-in-out infinite;">
         <span style="color:#F18E02">&#9656;</span> Klik op een collega om een gesprek te starten
       </span>
+    </div>
+  </div>
+</div>
+
+<!-- DIR-83: kijken mag, chatten pas na inloggen. Klik je een agent aan zonder
+     geldige sessie, dan opent deze poort in plaats van de chat. -->
+<div class="overlay" id="poort-overlay" role="dialog" aria-modal="true" aria-labelledby="poort-kop">
+  <div class="poortbox">
+    <h2 id="poort-kop">Log eerst even in</h2>
+    <p>Rondkijken mag altijd. Wil je met <b id="poort-naam">een collega</b> praten? Log dan eerst in, dan schuift die meteen bij je aan.</p>
+    <p class="poort-klein">Inloggen doe je in het menu links.</p>
+    <div class="poort-knoppen">
+      <button class="knop" id="poort-inlog">Inloggen</button>
+      <button class="knop rood" id="poort-sluit">Nog even rondkijken</button>
     </div>
   </div>
 </div>
@@ -2951,7 +2991,41 @@ const OFFICE_HTML = `<!doctype html>
     bijlagen=[]; toonBijlagen(); bijFout('');            // DIR-81: klaarstaande bestanden weg
     notice.textContent='Je sessie en de bestanden die je meestuurde zijn gewist. Er is niets bewaard.'; notice.classList.add('flash'); }
 
-  function openAgent(key){ openChat(key); if(connected&&!started) startFlow(); }
+  // DIR-83 · de poort. Kijken mag voor iedereen (de scène is de etalage), chatten
+  // pas met een geldige sessie. De echte afdwinging staat server-side: elk chat- en
+  // data-endpoint geeft 401 zonder sessie. Dit hier is de nette voorkant daarvan.
+  var poort=document.getElementById('poort-overlay');
+  var poortNaam=document.getElementById('poort-naam');
+  var poortInlog=document.getElementById('poort-inlog');
+  var magChatten=false;
+  function poortDicht(){ poort.style.display='none'; }
+  function poortOpen(key){
+    var a=AGENTS[key];
+    poortNaam.textContent=(a&&a.naam)?a.naam:'een collega';
+    poort.style.display='flex';
+    if(poortInlog) poortInlog.focus();
+  }
+  function haalToegang(){
+    return fetch('/api/toegang').then(function(r){ return r.json(); })
+      .then(function(j){ magChatten=!!(j&&j.chatten); return magChatten; })
+      .catch(function(){ magChatten=false; return false; });
+  }
+  // Het linker menu roept dit aan na in- en uitloggen, zodat je niet hoeft te herladen.
+  window.ddToegangVernieuwen=haalToegang;
+
+  function openAgent(key){
+    if(!magChatten){ poortOpen(key); return; }
+    openChat(key); if(connected&&!started) startFlow();
+  }
+  document.getElementById('poort-sluit').addEventListener('click',poortDicht);
+  if(poortInlog) poortInlog.addEventListener('click',function(){
+    poortDicht();
+    var open=document.getElementById('zm-open-inlog'); if(open) open.click();
+    var pw=document.getElementById('zm-pw'); if(pw) pw.focus();
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape'&&poort.style.display==='flex') poortDicht();
+  });
   agent.addEventListener('click',function(){ openAgent('gsc'); });
   agent.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgent('gsc'); } });
   if(gertjanDesk){
@@ -3202,10 +3276,15 @@ const OFFICE_HTML = `<!doctype html>
 
   // Bij (her)laden: al gekoppeld? Eén koppeling dekt beide agents. Open de agent die
   // de koppeling startte (in sessionStorage bewaard bij connect), default Albert/GSC.
-  fetch('/api/gsc/sites').then(function(r){ if(r.ok){ setConnected(true);
-      var k='gsc'; try{ k=sessionStorage.getItem('dd_agent')||'gsc'; }catch(e){}
-      openAgent(AGENTS[k]?k:'gsc'); }
-    else{ setConnected(false); } }).catch(function(){ setConnected(false); });
+  // DIR-83: eerst de poort (mag ik chatten?), pas daarna de koppel-check. Zonder
+  // sessie geeft /api/gsc/sites nu 401 en blijft de scène gewoon staan.
+  haalToegang().then(function(mag){
+    if(!mag){ setConnected(false); return; }
+    return fetch('/api/gsc/sites').then(function(r){ if(r.ok){ setConnected(true);
+        var k='gsc'; try{ k=sessionStorage.getItem('dd_agent')||'gsc'; }catch(e){}
+        openAgent(AGENTS[k]?k:'gsc'); }
+      else{ setConnected(false); } });
+  }).catch(function(){ setConnected(false); });
 })();
 
 // DIR-77 · linker menu: inloggen via de BESTAANDE admin-auth (HMAC-sessiecookie) en
@@ -3260,10 +3339,13 @@ const OFFICE_HTML = `<!doctype html>
     api('POST','/api/admin/login',{ password: pw.value }).then(function(res){
       if(!res.ok){ melding(fout, res.j.error || 'Inloggen mislukt.'); return; }
       pw.value=''; haalStatus();
+      // DIR-83: de chat-poort mag meteen open — geen herlaadbeurt nodig.
+      if(window.ddToegangVernieuwen) window.ddToegangVernieuwen();
     }).catch(function(){ melding(fout,'Inloggen mislukt — probeer het opnieuw.'); });
   });
   document.getElementById('zm-uitlog').addEventListener('click',function(){
-    api('POST','/api/admin/logout').then(toonGast).catch(toonGast);
+    function na(){ toonGast(); if(window.ddToegangVernieuwen) window.ddToegangVernieuwen(); }
+    api('POST','/api/admin/logout').then(na).catch(na);
   });
   sel.addEventListener('change',function(){
     var gekozen=sel.value; melding(modelFout,'');
@@ -4257,6 +4339,28 @@ export default {
         }
       }
       return json({ ok: true }, 200, { "Set-Cookie": `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0` });
+    }
+
+    // DIR-83 — de chat-poort, server-side. Alles wat een agent laat praten of data
+    // ophaalt zit hierachter; de scène zelf (`/`) blijft voor iedereen open.
+    // Eén lijst, één check: zo kan niemand een endpoint rechtstreeks aanroepen en
+    // op Dirks API-rekening chatten.
+    const POORT_PADEN = [
+      "/api/chat", "/api/ga4/chat", "/api/ads/chat", "/api/content/chat",
+      "/api/gsc/sites", "/api/gsc/performance",
+      "/api/ga4/properties", "/api/ga4/report",
+      "/api/ads/customers", "/api/ads/report",
+    ];
+    if (POORT_PADEN.indexOf(path) >= 0 && !(await magChatten(request, env))) {
+      return geenSessie();
+    }
+
+    // Mag DEZE bezoeker chatten? Altijd 200, zodat de pagina bij een gewone
+    // bezoeker geen 401 in de console schiet. Verklapt niets: de browser kent zijn
+    // eigen cookie al. Dit is het enige haakje dat de UI nodig heeft — komt er in
+    // DIR-82 een klant-sessie bij, dan klopt dit antwoord vanzelf.
+    if (path === "/api/toegang" && request.method === "GET") {
+      return json({ chatten: await magChatten(request, env) });
     }
 
     // AC-6 — GSC-sites.
