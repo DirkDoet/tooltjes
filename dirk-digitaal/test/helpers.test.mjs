@@ -55,6 +55,9 @@ import {
   maakKlantSessie,
   leesKlantSessie,
   klantOpGebruikersnaam,
+  klantBron,
+  bronToegestaan,
+  bronOfNiets,
 } from "../src/index.js";
 import { createHmac } from "node:crypto";
 
@@ -714,4 +717,76 @@ test("klantOpGebruikersnaam: geeft een hash terug die met veiligGelijk klopt", a
   const fout = await hashKlantWachtwoord("verkeerd", gevonden.rec.login.salt);
   assert.equal(goed.hash, gevonden.rec.login.hash);
   assert.notEqual(fout.hash, gevonden.rec.login.hash);
+});
+
+
+// ---- DIR-84: klant-afscherming (allowlist) ----
+// Het agency-account kan bij alle klanten; deze functies zijn het enige dat klant A
+// van klant B scheidt. Klant A heeft alles vastgelegd, klant B is de buurman.
+const REC_A = {
+  naam: "Klant A",
+  gscSite: "sc-domain:klant-a.nl",
+  ga4Property: "properties/111",
+  adsCustomerId: "customers/1112223334",
+  adsLoginCustomerId: "customers/9998887776",
+  adAccountId: "act_111",
+};
+const REC_B = {
+  naam: "Klant B",
+  gscSite: "sc-domain:klant-b.nl",
+  ga4Property: "properties/222",
+  adsCustomerId: "customers/4445556667",
+  adAccountId: "act_222",
+};
+
+test("klantBron: leest precies de vastgelegde bronnen, en niets anders", () => {
+  assert.equal(klantBron(REC_A, "gsc"), "sc-domain:klant-a.nl");
+  assert.equal(klantBron(REC_A, "ga4"), "properties/111");
+  assert.equal(klantBron(REC_A, "ads"), "customers/1112223334");
+  assert.equal(klantBron(REC_A, "adsLogin"), "customers/9998887776");
+  assert.equal(klantBron(REC_A, "meta"), "act_111");
+  assert.equal(klantBron(REC_B, "adsLogin"), "");        // niet ingesteld
+  assert.equal(klantBron({}, "gsc"), "");
+  assert.equal(klantBron(null, "ga4"), "");
+});
+
+test("bronToegestaan: eigen bron mag, die van de buurman niet", () => {
+  for (const soort of ["gsc", "ga4", "ads", "meta"]) {
+    assert.equal(bronToegestaan(REC_A, soort, klantBron(REC_A, soort)), true, soort + " eigen");
+    assert.equal(bronToegestaan(REC_A, soort, klantBron(REC_B, soort)), false, soort + " van B");
+  }
+});
+
+test("bronToegestaan: niets meegegeven betekent 'mijn eigen bron'", () => {
+  assert.equal(bronToegestaan(REC_A, "gsc", ""), true);
+  assert.equal(bronToegestaan(REC_A, "gsc", null), true);
+  assert.equal(bronOfNiets(REC_A, "gsc", undefined), "sc-domain:klant-a.nl");
+});
+
+test("bronToegestaan: zonder vastgelegde bron is niets toegestaan", () => {
+  assert.equal(bronToegestaan(REC_B, "adsLogin", "customers/9998887776"), false);
+  assert.equal(bronToegestaan({}, "gsc", "sc-domain:klant-a.nl"), false);
+  assert.equal(bronToegestaan({}, "gsc", ""), false);
+  assert.equal(bronOfNiets({}, "ga4", ""), null);
+});
+
+test("bronToegestaan: een andere schrijfwijze komt er niet langs", () => {
+  // Genormaliseerd vergelijken, zodat 111 en properties/111 hetzelfde zijn...
+  assert.equal(bronToegestaan(REC_A, "ga4", "111"), true);
+  assert.equal(bronToegestaan(REC_A, "ads", "1112223334"), true);
+  assert.equal(bronToegestaan(REC_A, "ads", "111-222-3334"), true);
+  assert.equal(bronToegestaan(REC_A, "meta", "111"), true);
+  // ...maar de property van de buurman blijft in elke schrijfwijze verboden.
+  assert.equal(bronToegestaan(REC_A, "ga4", "222"), false);
+  assert.equal(bronToegestaan(REC_A, "ads", "444-555-6667"), false);
+  assert.equal(bronToegestaan(REC_A, "meta", "act_222"), false);
+  // En een site die alleen maar lijkt op de eigen site telt niet.
+  assert.equal(bronToegestaan(REC_A, "gsc", "sc-domain:klant-a.nl.kwaad.nl"), false);
+  assert.equal(bronToegestaan(REC_A, "gsc", "https://klant-a.nl/"), false);
+});
+
+test("bronOfNiets: geeft de eigen bron of niets — nooit die van een ander", () => {
+  assert.equal(bronOfNiets(REC_A, "ga4", "properties/111"), "properties/111");
+  assert.equal(bronOfNiets(REC_A, "ga4", "properties/222"), null);
+  assert.equal(bronOfNiets(REC_A, "gsc", "sc-domain:klant-b.nl"), null);
 });
