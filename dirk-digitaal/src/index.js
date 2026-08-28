@@ -31,11 +31,20 @@ const GA4_ADMIN_BASE = "https://analyticsadmin.googleapis.com/v1beta";
 const GA4_DATA_BASE = "https://analyticsdata.googleapis.com/v1beta";
 const GADS_VERSION = "v25";
 const GADS_BASE = "https://googleads.googleapis.com/" + GADS_VERSION;
-// Meta Ads per klant (magic-link + System User-token, achter admin-beheer) — DIR-30.
+// Meta Ads per klant (System User-token, achter admin-beheer) — DIR-30.
 const META_VERSION = "v21.0";
 const META_GRAPH_BASE = "https://graph.facebook.com/" + META_VERSION;
 const ADMIN_COOKIE = "dd_admin";   // admin-sessie (klantbeheer)
-const KLANT_COOKIE = "dd_klant";   // klant-sleutel (scoping via magic-link)
+// DIR-82 — klant-sessie: eigen cookie, eigen TTL, volledig los van de admin-sessie.
+// De magic-link-cookie (dd_klant) is vervallen: een klant logt in met gebruikersnaam
+// en wachtwoord, niet met een link die je kunt doorsturen.
+const KLANT_SESSIE_COOKIE = "dd_klant_sessie";
+const KLANT_SESSIE_TTL_MS = 8 * 60 * 60 * 1000;   // 8 uur — een werkdag, daarna opnieuw inloggen
+// Brute-force-rem op de klant-login. Zonder rem is een PBKDF2-hash weinig waard: dan
+// mag een aanvaller onbeperkt gokken. Tellers per gebruikersnaam én per IP.
+const LOGIN_VENSTER_MS = 15 * 60 * 1000;
+const LOGIN_MAX_PER_NAAM = 5;
+const LOGIN_MAX_PER_IP = 20;
 
 // ============================================================================
 // ===== AGENT-INSTRUCTIES — HIER AANPASSEN, daarna `wrangler deploy` ==========
@@ -455,7 +464,7 @@ function veiligGelijk(a, b) {
   return r === 0;
 }
 
-// Unieke, niet-raadbare sleutel voor een klant-magic-link (AC-1/AC-6).
+// Unieke, niet-raadbare sleutel per klant (KV-sleutel van het klantrecord).
 export function randomKey() {
   const bytes = new Uint8Array(18);
   crypto.getRandomValues(bytes);
@@ -469,8 +478,9 @@ async function adminCookieValue(env) {
   return hmacHex(env.ADMIN_PASSWORD || "", "dd-admin-v1");
 }
 
-// Geldige admin-sessie? (AC-1/AC-6)
-async function isAdmin(request, env) {
+// Geldige admin-sessie? (AC-1/AC-6) — geexporteerd zodat de test kan aantonen dat
+// een klant-sessie hier NOOIT doorheen komt.
+export async function isAdmin(request, env) {
   if (!env.ADMIN_PASSWORD) return false;
   const got = parseCookies(request.headers.get("Cookie"))[ADMIN_COOKIE];
   if (!got) return false;
@@ -485,8 +495,67 @@ async function isAdmin(request, env) {
 // dat is één regel erbij in DEZE functie, niet op tien plekken in de router.
 export async function magChatten(request, env) {
   if (await isAdmin(request, env)) return true;
-  // TODO DIR-82: || (await isKlantIngelogd(request, env))
+  if (await huidigeKlantSleutel(request, env)) return true;
   return false;
+}
+
+// ---- DIR-82 · klant-sessie -------------------------------------------------
+// De sessie is een ondertekende cookie: <klantsleutel>.<verlooptijd>.<hmac>. De
+// handtekening gaat over sleutel + verlooptijd, met een eigen label zodat een
+// admin-cookie nooit als klant-cookie kan doorgaan (en omgekeerd). Ondertekend
+// i.p.v. in KV, zodat een verse sessie niet op KV-consistentie hoeft te wachten.
+// Een klant-sessie geeft NOOIT admin-rechten: `isAdmin` kijkt uitsluitend naar het
+// admin-cookie en wordt hier niet aangeraakt.
+async function klantSessieHandtekening(env, key, verloopt) {
+  return hmacHex(env.ADMIN_PASSWORD || "", "dd-klant-sessie-v1|" + key + "|" + verloopt);
+}
+
+// Waarde voor het cookie. `nu` is injecteerbaar zodat de test niet hoeft te wachten.
+export async function maakKlantSessie(env, key, nu) {
+  const verloopt = (nu == null ? Date.now() : nu) + KLANT_SESSIE_TTL_MS;
+  return key + "." + verloopt + "." + (await klantSessieHandtekening(env, key, verloopt));
+}
+
+// Leest de sessie uit een cookiewaarde. Geeft de klantsleutel of null. Weigert een
+// verlopen of geknoeide waarde; vergelijkt de handtekening in constante tijd.
+export async function leesKlantSessie(env, waarde, nu) {
+  if (!env || !env.ADMIN_PASSWORD || !waarde) return null;
+  const delen = String(waarde).split(".");
+  if (delen.length !== 3) return null;
+  const [key, verlooptTekst, gotSig] = delen;
+  if (!KLANT_SLEUTEL.test(key)) return null;
+  const verloopt = Number(verlooptTekst);
+  if (!Number.isFinite(verloopt)) return null;
+  if ((nu == null ? Date.now() : nu) >= verloopt) return null;
+  const wil = await klantSessieHandtekening(env, key, verlooptTekst);
+  if (!veiligGelijk(gotSig, wil)) return null;
+  return key;
+}
+
+// De actieve klantsleutel voor dit verzoek — uitsluitend uit de ondertekende
+// sessie, nooit uit een parameter, header of body. Een klant die intussen uit het
+// beheer is verwijderd, heeft daarmee ook meteen geen toegang meer.
+async function huidigeKlantSleutel(request, env) {
+  const waarde = parseCookies(request.headers.get("Cookie"))[KLANT_SESSIE_COOKIE];
+  const key = await leesKlantSessie(env, waarde);
+  if (!key) return null;
+  const rec = await kvGetClient(env, key);
+  return rec ? key : null;
+}
+
+// Het klantrecord achter de sessie (of null). Alleen voor server-side gebruik.
+async function huidigeKlant(request, env) {
+  const key = await huidigeKlantSleutel(request, env);
+  if (!key) return null;
+  const rec = await kvGetClient(env, key);
+  return rec ? { key, rec } : null;
+}
+
+function klantSessieCookie(waarde) {
+  return `${KLANT_SESSIE_COOKIE}=${waarde}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(KLANT_SESSIE_TTL_MS / 1000)}`;
+}
+function klantSessieWissen() {
+  return `${KLANT_SESSIE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 
 // Meta klaar? (system-token + app-secret aanwezig)
@@ -586,6 +655,23 @@ async function gebruikersnaamBezet(env, gebruikersnaam, eigenKey) {
   }
   return false;
 }
+// DIR-82 — het RUWE klantrecord bij een gebruikersnaam (inclusief salt/hash), voor
+// de klant-login. Bewust niet via kvListClients: die schoont salt en hash er juist
+// uit. Geeft null als de naam niet bestaat of er geen wachtwoord is ingesteld.
+export async function klantOpGebruikersnaam(env, gebruikersnaam) {
+  const wil = normaliseerGebruikersnaam(gebruikersnaam);
+  if (!wil || !env.CLIENTS) return null;
+  const list = await env.CLIENTS.list({ limit: 1000 });
+  for (const k of list.keys || []) {
+    if (!KLANT_SLEUTEL.test(k.name)) continue;         // config-sleutels overslaan
+    const rec = await kvGetClient(env, k.name);
+    const login = rec && rec.login;
+    if (!login || !login.gebruikersnaam || !login.hash || !login.salt) continue;
+    if (normaliseerGebruikersnaam(login.gebruikersnaam) === wil) return { key: k.name, rec };
+  }
+  return null;
+}
+
 async function kvDeleteClient(env, key) {
   if (!env.CLIENTS || !key) return false;
   await env.CLIENTS.delete(key);
@@ -1140,7 +1226,31 @@ export class SessionDO {
       return json({ ok: true });
     }
 
-    // Sessie aanmaken/aanraken zonder Google-token (voor klant-magic-link, DIR-30).
+    // DIR-82 — brute-force-rem op de klant-login. Deze DO-instantie hoort niet bij
+    // een browser-sessie maar bij één teller (per gebruikersnaam of per IP): de
+    // aanroeper kiest de instantie via idFromName("login:<sleutel>"). Een DO geeft
+    // een strikt consistente teller; KV zou hier te laat kunnen zijn.
+    // Er komt nooit een wachtwoord of gebruikersnaam in de opslag — alleen een getal.
+    if (url.pathname === "/login/poging") {
+      const { max, vensterMs } = await request.json();
+      const venster = Number(vensterMs) || 0;
+      let stand = (await this.state.storage.get("pogingen")) || { tot: 0, start: now };
+      if (now - stand.start > venster) stand = { tot: 0, start: now };   // venster verlopen → opnieuw
+      stand.tot += 1;
+      await this.state.storage.put("pogingen", stand);
+      await this.state.storage.setAlarm(now + venster);                  // ruimt zichzelf op
+      return json({
+        geblokkeerd: stand.tot > Number(max),
+        wachtMs: Math.max(0, venster - (now - stand.start)),
+      });
+    }
+    // Gelukte inlog wist de teller, zodat een vergeetachtige klant niet blijft hangen.
+    if (url.pathname === "/login/reset") {
+      await this.state.storage.delete("pogingen");
+      return json({ ok: true });
+    }
+
+    // Sessie aanmaken/aanraken zonder Google-token (DIR-30).
     if (url.pathname === "/touch") {
       await this.state.storage.put("lastActive", now);
       await this.state.storage.setAlarm(now + SESSION_TTL_MS);
@@ -1177,6 +1287,29 @@ export class SessionDO {
 }
 
 // ------------------------------------------------------------- Worker-router
+
+// DIR-82 — tellerinstantie voor de brute-force-rem. Eigen DO-instantie per teller,
+// dus los van de browser-sessies.
+function loginTellerStub(env, sleutel) {
+  return env.SESSIONS.get(env.SESSIONS.idFromName("login-teller:" + sleutel));
+}
+async function telInlogpoging(env, sleutel, max) {
+  try {
+    const r = await loginTellerStub(env, sleutel).fetch("https://do/login/poging", {
+      method: "POST",
+      body: JSON.stringify({ max, vensterMs: LOGIN_VENSTER_MS }),
+    });
+    return await r.json();
+  } catch (e) {
+    // Valt de teller uit, dan blokkeren we niet — anders sluit een storing iedereen
+    // buiten. De PBKDF2-kosten per poging blijven dan de rem.
+    return { geblokkeerd: false, wachtMs: 0 };
+  }
+}
+async function wisInlogpogingen(env, sleutel) {
+  try { await loginTellerStub(env, sleutel).fetch("https://do/login/reset", { method: "POST" }); }
+  catch (e) { /* niet erg: de teller loopt vanzelf af */ }
+}
 
 function sessionStub(env, id) {
   return env.SESSIONS.get(env.SESSIONS.idFromName(id));
@@ -2403,11 +2536,29 @@ const OFFICE_HTML = `<!doctype html>
     <p class="zm-tekst">Je AI-collega&#39;s zitten klaar. Klik een bureau aan om met een agent te praten.</p>
   </div>
   <div class="zm-blok" id="zm-gast">
-    <button class="zm-knop" id="zm-open-inlog" type="button">Inloggen</button>
+    <button class="zm-knop" id="zm-open-klant" type="button">Inloggen</button>
+    <button class="zm-knop zm-sub" id="zm-open-inlog" type="button">Beheer</button>
+  </div>
+  <!-- DIR-82: klant-login met de gebruikersnaam en het wachtwoord uit het
+       klantbeheer. Staat los van de beheer-login hieronder. -->
+  <form class="zm-blok verborgen" id="zm-klant-inlog" autocomplete="on">
+    <h2 class="zm-kop">Inloggen</h2>
+    <label class="zm-label" for="zm-gebruiker">Gebruikersnaam</label>
+    <input class="zm-invoer" id="zm-gebruiker" type="text" autocomplete="username">
+    <label class="zm-label" for="zm-klantpw">Wachtwoord</label>
+    <input class="zm-invoer" id="zm-klantpw" type="password" autocomplete="current-password">
+    <button class="zm-knop" type="submit">Log in</button>
+    <button class="zm-knop zm-sub" id="zm-klant-annuleer" type="button">Annuleren</button>
+    <p class="zm-fout verborgen" id="zm-klant-fout" role="alert"></p>
+  </form>
+  <div class="zm-blok verborgen" id="zm-klant">
+    <h2 class="zm-kop">Ingelogd</h2>
+    <p class="zm-tekst">Je bent ingelogd als <b id="zm-klant-naam">klant</b>. Klik een collega aan om te beginnen.</p>
+    <button class="zm-knop zm-sub" id="zm-klant-uitlog" type="button">Uitloggen</button>
   </div>
   <form class="zm-blok verborgen" id="zm-inlog" autocomplete="on">
-    <h2 class="zm-kop">Inloggen</h2>
-    <label class="zm-label" for="zm-pw">Admin-wachtwoord</label>
+    <h2 class="zm-kop">Beheer</h2>
+    <label class="zm-label" for="zm-pw">Beheer-wachtwoord</label>
     <input class="zm-invoer" id="zm-pw" type="password" autocomplete="current-password">
     <button class="zm-knop" id="zm-doe-inlog" type="submit">Log in</button>
     <button class="zm-knop zm-sub" id="zm-annuleer" type="button">Annuleren</button>
@@ -2757,7 +2908,8 @@ const OFFICE_HTML = `<!doctype html>
 
   function connect(){ try{ sessionStorage.setItem('dd_agent', cur.key); }catch(e){} window.location.href='/oauth/start'; }
 
-  // Meta-knop (DIR-42): in een klant-magic-link-sessie direct Meta-modus; anders uitleg.
+  // Meta-knop (DIR-42/DIR-82): de Meta-bron kwam uit de magic-link. Die ingang is weg,
+  // dus tot de klant-koppeling er is (DIR-84) meldt de server dat Meta niet beschikbaar is.
   function metaKlik(){
     if(busy) return;
     fetch('/api/meta/status').then(function(r){ return r.json(); }).then(function(j){
@@ -2768,7 +2920,7 @@ const OFFICE_HTML = `<!doctype html>
         addBubble('user','Laat mijn Meta-cijfers zien');
         streamChat({}, false);
       } else {
-        addBubble('agent','Meta-cijfers (Facebook/Instagram) zie je via je persoonlijke klant-link. Vraag Dirk om jouw link — die maakt hij in het beheer. Voor je Google-campagnes klik je op "Koppel Google Ads".');
+        addBubble('agent','Je Meta-cijfers (Facebook/Instagram) staan nog niet aan je account gekoppeld. Vraag Dirk om dat in te stellen. Voor je Google-campagnes klik je op "Koppel Google Ads".');
       }
     }).catch(function(){ addBubble('agent','Kon de Meta-status niet ophalen. Probeer het later opnieuw.'); });
   }
@@ -3034,8 +3186,9 @@ const OFFICE_HTML = `<!doctype html>
   document.getElementById('poort-sluit').addEventListener('click',poortDicht);
   if(poortInlog) poortInlog.addEventListener('click',function(){
     poortDicht();
-    var open=document.getElementById('zm-open-inlog'); if(open) open.click();
-    var pw=document.getElementById('zm-pw'); if(pw) pw.focus();
+    // DIR-82: de poort stuurt naar het KLANT-inlogformulier; beheer zit apart.
+    if(window.ddOpenKlantInlog){ window.ddOpenKlantInlog(); return; }
+    var open=document.getElementById('zm-open-klant'); if(open) open.click();
   });
   document.addEventListener('keydown',function(e){
     if(e.key==='Escape'&&poort.style.display==='flex') poortDicht();
@@ -3312,6 +3465,10 @@ const OFFICE_HTML = `<!doctype html>
   var modelFout=document.getElementById('zm-model-fout');
   var sel=document.getElementById('zm-model'), actief=document.getElementById('zm-actief');
   var pw=document.getElementById('zm-pw');
+  // DIR-82 · klant-login: eigen formulier, eigen blok, eigen endpoints.
+  var klantForm=document.getElementById('zm-klant-inlog'), klantBlok=document.getElementById('zm-klant');
+  var klantFout=document.getElementById('zm-klant-fout'), klantNaam=document.getElementById('zm-klant-naam');
+  var gebruiker=document.getElementById('zm-gebruiker'), klantPw=document.getElementById('zm-klantpw');
   function toon(el,ja){ if(ja) el.classList.remove('verborgen'); else el.classList.add('verborgen'); }
   function melding(el,tekst){ el.textContent=tekst||''; toon(el,!!tekst); }
   function api(methode,url,body){
@@ -3324,26 +3481,59 @@ const OFFICE_HTML = `<!doctype html>
     for(var i=0;i<sel.options.length;i++) if(sel.options[i].value===id) return sel.options[i].textContent;
     return id;
   }
-  function toonGast(){ toon(gast,true); toon(form,false); toon(admin,false); melding(fout,''); }
+  function toonGast(){ toon(gast,true); toon(form,false); toon(klantForm,false);
+    toon(klantBlok,false); toon(admin,false); melding(fout,''); melding(klantFout,''); }
+  function toonKlant(naam){
+    klantNaam.textContent = naam || 'klant';
+    toon(gast,false); toon(form,false); toon(klantForm,false); toon(admin,false); toon(klantBlok,true);
+    melding(klantFout,'');
+  }
   function toonAdmin(res){
     sel.innerHTML='';
     (res.keuzes||[]).forEach(function(k){
       var o=document.createElement('option'); o.value=k.id; o.textContent=k.label; sel.appendChild(o);
     });
     sel.value=res.model; actief.textContent=labelVan(res.model);
-    melding(modelFout,''); toon(gast,false); toon(form,false); toon(admin,true);
+    melding(modelFout,''); toon(gast,false); toon(form,false); toon(klantForm,false);
+    toon(klantBlok,false); toon(admin,true);
   }
   function haalStatus(){
-    // Eerst de goedkope status (altijd 200 → geen 401-ruis in de console van een
-    // gewone bezoeker); pas bij een geldige sessie de modellenlijst ophalen.
-    return api('GET','/api/admin/status').then(function(st){
-      if(!(st.ok && st.j && st.j.admin)){ toonGast(); return false; }
-      return api('GET','/api/admin/model').then(function(res){
-        if(res.ok) toonAdmin(res.j); else toonGast();
-        return res.ok;
-      });
+    // DIR-82: één goedkope status (altijd 200 → geen 401-ruis in de console van een
+    // gewone bezoeker) vertelt of dit een gast, een klant of de beheerder is. Pas bij
+    // een beheer-sessie halen we de modellenlijst op.
+    return api('GET','/api/toegang').then(function(st){
+      var soort = st.ok && st.j ? st.j.soort : null;
+      if(soort==='admin'){
+        return api('GET','/api/admin/model').then(function(res){
+          if(res.ok) toonAdmin(res.j); else toonGast();
+          return res.ok;
+        });
+      }
+      if(soort==='klant'){ toonKlant(st.j.naam); return true; }
+      toonGast(); return false;
     }).catch(function(){ toonGast(); return false; });
   }
+  // Het menu is het enige inlogscherm; de poort-modal (DIR-83) stuurt hierheen.
+  function openKlantForm(){
+    toon(gast,false); toon(klantForm,true); melding(klantFout,''); gebruiker.focus();
+  }
+  window.ddOpenKlantInlog=openKlantForm;
+  document.getElementById('zm-open-klant').addEventListener('click',openKlantForm);
+  document.getElementById('zm-klant-annuleer').addEventListener('click',function(){
+    gebruiker.value=''; klantPw.value=''; toonGast();
+  });
+  klantForm.addEventListener('submit',function(e){
+    e.preventDefault(); melding(klantFout,'');
+    api('POST','/api/klant/login',{ gebruikersnaam:gebruiker.value, wachtwoord:klantPw.value }).then(function(res){
+      if(!res.ok){ melding(klantFout, res.j.error || 'Inloggen mislukt.'); klantPw.value=''; return; }
+      gebruiker.value=''; klantPw.value=''; toonKlant(res.j.naam);
+      if(window.ddToegangVernieuwen) window.ddToegangVernieuwen();
+    }).catch(function(){ melding(klantFout,'Inloggen mislukt — probeer het opnieuw.'); });
+  });
+  document.getElementById('zm-klant-uitlog').addEventListener('click',function(){
+    function na(){ toonGast(); if(window.ddToegangVernieuwen) window.ddToegangVernieuwen(); }
+    api('POST','/api/klant/logout').then(na).catch(na);
+  });
   document.getElementById('zm-open-inlog').addEventListener('click',function(){
     toon(gast,false); toon(form,true); melding(fout,''); pw.focus();
   });
@@ -3402,7 +3592,6 @@ const ADMIN_HTML = `<!doctype html>
   button.rood{ background:#b3402f; }
   .rij{ border:1px solid #ccc; background:#fff; padding:.6rem; margin:.4rem 0; border-radius:4px; }
   .rij b{ display:block; } .muted{ color:#5a5a5a; font-size:.88rem; }
-  .link{ width:100%; box-sizing:border-box; }
   #fout{ color:#b3402f; } .verborgen{ display:none; }
   /* DIR-78 · klantbeheer met koppelingen + klant-login */
   body{ max-width:860px; }
@@ -3446,7 +3635,7 @@ const ADMIN_HTML = `<!doctype html>
   .aangepast{ font-size:.85rem; color:#7a5f14; }
 </style></head><body>
   <h1>Dirk Digitaal — klantbeheer</h1>
-  <p class="muted">Per klant leg je hier de koppelingen vast: Meta, Search Console, GA4 en Google Ads. Alles is optioneel — een klant hoeft niet alles te hebben. De magic-link toont die klant alleen zijn eigen data.</p>
+  <p class="muted">Per klant leg je hier de koppelingen vast: Meta, Search Console, GA4 en Google Ads. Alles is optioneel — een klant hoeft niet alles te hebben. Inloggen doet de klant met de gebruikersnaam en het wachtwoord die je hieronder instelt.</p>
   <div id="login">
     <h2>Inloggen</h2>
     <input id="pw" type="password" placeholder="Admin-wachtwoord" autocomplete="current-password">
@@ -3548,11 +3737,13 @@ const ADMIN_HTML = `<!doctype html>
     var doel=document.getElementById('detail'); doel.textContent=''; meld('');
     var h=document.createElement('h2'); h.textContent = c ? (c.naam || '(naamloos)') : 'Nieuwe klant'; doel.appendChild(h);
     if(c){
+      // DIR-82: magic-links zijn vervallen. De klant logt voortaan in met de
+      // gebruikersnaam en het wachtwoord die hieronder staan.
       var uitleg=document.createElement('p'); uitleg.className='muted';
-      uitleg.textContent='Magic-link voor deze klant:'; doel.appendChild(uitleg);
-      var inp=document.createElement('input'); inp.className='link'; inp.type='text'; inp.readOnly=true;
-      inp.value=location.origin+'/?k='+c.key; inp.addEventListener('focus',function(){ inp.select(); });
-      doel.appendChild(inp);
+      uitleg.textContent = c.gebruikersnaam
+        ? 'Deze klant logt in op de startpagina met gebruikersnaam "'+c.gebruikersnaam+'".'
+        : 'Deze klant kan nog niet inloggen: stel hieronder een gebruikersnaam en wachtwoord in.';
+      doel.appendChild(uitleg);
     }
     var invoeren={}, groep='';
     VELDEN.forEach(function(def){
@@ -3587,7 +3778,7 @@ const ADMIN_HTML = `<!doctype html>
     if(c){
       var del=document.createElement('button'); del.className='rood'; del.textContent='Verwijderen';
       del.addEventListener('click',function(){
-        if(!confirm('Klant "'+(c.naam||'')+'" verwijderen? De magic-link werkt daarna niet meer.')) return;
+        if(!confirm('Klant "'+(c.naam||'')+'" verwijderen? Die kan daarna niet meer inloggen.')) return;
         api('DELETE','/api/admin/clients?key='+encodeURIComponent(c.key)).then(function(){
           gekozenKlant=null; leegDetail(); laad();
         });
@@ -3959,12 +4150,14 @@ async function handleAdsChat(request, env, ctx) {
   }
   const cookies = parseCookies(request.headers.get("Cookie"));
   const id = cookies[COOKIE];
-  if (!id) return json({ error: "Niet gekoppeld. Koppel Google Ads, of open je persoonlijke Meta-link." }, 401);
+  if (!id) return json({ error: "Niet gekoppeld. Koppel eerst Google Ads via /oauth/start." }, 401);
 
-  // Klant-scoping (DIR-30): de magic-link-sleutel bepaalt (via KV) welk Meta-account.
-  const klant = await kvGetClient(env, cookies[KLANT_COOKIE]);
-  const metaOn = !!(klant && metaConfigured(env));
-  const metaacct = klant ? klant.adAccountId : "";
+  // DIR-82: de Meta-bron kwam uit de magic-link-sleutel; die ingang is vervallen.
+  // Tot DIR-84 de klant-sessie aan de vastgelegde ID's koppelt, is er dus geen
+  // Meta-account voor deze chat en valt Ilona terug op Google Ads. Bewust géén
+  // scoping-logica hier: welke klant welke bron ziet, is precies wat DIR-84 regelt.
+  const metaOn = false;
+  const metaacct = "";
 
   const stub = sessionStub(env, id);
   const stateResp = await stub.fetch("https://do/chat/state-ilona");
@@ -3973,7 +4166,7 @@ async function handleAdsChat(request, env, ctx) {
 
   const googleAds = !!(token && env.GOOGLE_ADS_DEVELOPER_TOKEN);
   if (!googleAds && !metaOn) {
-    return json({ error: "Nog geen advertentie-bron. Koppel Google Ads, of open je persoonlijke Meta-link." }, 401);
+    return json({ error: "Nog geen advertentie-bron. Klik op \"Koppel Google Ads\" om te beginnen." }, 401);
   }
 
   let body = {};
@@ -4108,24 +4301,11 @@ export default {
     const origin = url.origin;
     const redirectUri = origin + "/oauth/callback";
 
-    // Startpagina: het 2D retro-kantoor (DIR-14). Met ?k=<sleutel> = klant-magic-link
-    // (DIR-30): valideer de sleutel in KV, scope de sessie tot dat account, veeg de URL schoon.
+    // Startpagina: het 2D retro-kantoor (DIR-14).
+    // DIR-82: de magic-link-ingang (`/?k=<sleutel>`) is vervallen. Een oude link opent
+    // gewoon het kantoor en geeft geen toegang meer — inloggen gaat via
+    // gebruikersnaam + wachtwoord. Klantrecords zelf blijven bestaan.
     if (path === "/" && request.method === "GET") {
-      const k = url.searchParams.get("k");
-      if (k) {
-        const klant = await kvGetClient(env, k);
-        if (klant) {
-          let sid = parseCookies(request.headers.get("Cookie"))[COOKIE];
-          const setC = [];
-          if (!sid) { sid = crypto.randomUUID(); setC.push(sessionCookie(sid, Math.floor(SESSION_TTL_MS / 1000))); }
-          await sessionStub(env, sid).fetch("https://do/touch", { method: "POST" });
-          setC.push(`${KLANT_COOKIE}=${encodeURIComponent(k)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
-          const headers = new Headers({ Location: origin + "/" });
-          for (const c of setC) headers.append("Set-Cookie", c);
-          return new Response(null, { status: 302, headers });
-        }
-        // Onbekende/ongeldige sleutel → gewoon het kantoor, zonder Meta-scoping (AC-6).
-      }
       return new Response(await officeHtml(env), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
@@ -4148,6 +4328,46 @@ export default {
     }
     if (path === "/api/admin/logout" && request.method === "POST") {
       return json({ ok: true }, 200, { "Set-Cookie": `${ADMIN_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0` });
+    }
+
+    // DIR-82 — klant-login: gebruikersnaam + wachtwoord uit het klantbeheer (DIR-78).
+    // Los van de admin-login: dit zet uitsluitend het klant-cookie en geeft dus nooit
+    // toegang tot /admin of de admin-endpoints.
+    if (path === "/api/klant/login" && request.method === "POST") {
+      // Zonder ADMIN_PASSWORD kunnen we geen sessie ondertekenen. Geen detail naar buiten.
+      if (!env.ADMIN_PASSWORD) return json({ error: "Inloggen is nog niet geconfigureerd." }, 500);
+      if (!env.CLIENTS) return json({ error: "Inloggen is nog niet geconfigureerd." }, 500);
+      let b = {}; try { b = await request.json(); } catch (e) { /* leeg */ }
+      const gebruikersnaam = normaliseerGebruikersnaam((b && b.gebruikersnaam) || "").slice(0, 80);
+      const wachtwoord = String((b && b.wachtwoord) || "");
+      const ip = request.headers.get("CF-Connecting-IP") || "onbekend";
+
+      // Eerst tellen, dan pas rekenen: een geblokkeerde poging kost geen PBKDF2.
+      // Twee tellers: één per gebruikersnaam (gericht raden) en één per IP (breed
+      // raden over veel namen). Beide moeten door.
+      const perNaam = await telInlogpoging(env, "naam:" + (gebruikersnaam || "(leeg)"), LOGIN_MAX_PER_NAAM);
+      const perIp = await telInlogpoging(env, "ip:" + ip, LOGIN_MAX_PER_IP);
+      if (perNaam.geblokkeerd || perIp.geblokkeerd) {
+        const minuten = Math.ceil(Math.max(perNaam.wachtMs, perIp.wachtMs) / 60000);
+        return json({ error: "Te veel inlogpogingen. Probeer het over " + minuten + " minuten opnieuw." }, 429);
+      }
+
+      const gevonden = gebruikersnaam ? await klantOpGebruikersnaam(env, gebruikersnaam) : null;
+      // Ook bij een onbekende naam één keer doorrekenen met een verzonnen salt: zo
+      // duurt een mislukte poging even lang en verraadt de tijd niet of de naam
+      // bestaat. De foutmelding is hoe dan ook voor beide gevallen dezelfde.
+      const salt = gevonden ? gevonden.rec.login.salt : "00000000000000000000000000000000";
+      const berekend = await hashKlantWachtwoord(wachtwoord, salt);
+      const klopt = !!gevonden && veiligGelijk(berekend.hash, gevonden.rec.login.hash);
+      if (!klopt) return json({ error: "Onjuiste gebruikersnaam of wachtwoord." }, 401);
+
+      await wisInlogpogingen(env, "naam:" + gebruikersnaam);
+      await wisInlogpogingen(env, "ip:" + ip);
+      const waarde = await maakKlantSessie(env, gevonden.key);
+      return json({ ok: true, naam: gevonden.rec.naam || "" }, 200, { "Set-Cookie": klantSessieCookie(waarde) });
+    }
+    if (path === "/api/klant/logout" && request.method === "POST") {
+      return json({ ok: true }, 200, { "Set-Cookie": klantSessieWissen() });
     }
     // DIR-77 — admin: motor (model) voor alle agents lezen/zetten. Zowel lezen als
     // zetten vereist een geldige admin-sessie: een bezoeker ziet de kiezer dus niet
@@ -4270,7 +4490,8 @@ export default {
 
         const bewaardeKey = bewerken ? key : randomKey();
         await kvPutClient(env, bewaardeKey, uit);
-        return json({ client: schoonKlantRecord(bewaardeKey, uit), link: origin + "/?k=" + bewaardeKey });
+        // DIR-82: geen magic-link meer in het antwoord — die ingang bestaat niet meer.
+        return json({ client: schoonKlantRecord(bewaardeKey, uit) });
       }
       if (request.method === "DELETE") {
         const key = url.searchParams.get("key");
@@ -4374,7 +4595,12 @@ export default {
     // eigen cookie al. Dit is het enige haakje dat de UI nodig heeft — komt er in
     // DIR-82 een klant-sessie bij, dan klopt dit antwoord vanzelf.
     if (path === "/api/toegang" && request.method === "GET") {
-      return json({ chatten: await magChatten(request, env) });
+      // DIR-82: het menu laat zien wie er is ingelogd. `soort` en `naam` gaan alleen
+      // over DEZE bezoeker; er komt nooit iets van een andere klant in mee.
+      if (await isAdmin(request, env)) return json({ chatten: true, soort: "admin", naam: "" });
+      const klant = await huidigeKlant(request, env);
+      if (klant) return json({ chatten: true, soort: "klant", naam: klant.rec.naam || "" });
+      return json({ chatten: false, soort: null, naam: "" });
     }
 
     // AC-6 — GSC-sites.
@@ -4465,11 +4691,13 @@ export default {
       return handleAdsChat(request, env, ctx);
     }
 
-    // DIR-42 — of deze sessie een klant-magic-link-context met Meta heeft (voor de Meta-knop).
+    // DIR-42/DIR-82 — de Meta-knop vroeg hier of deze sessie een Meta-context had.
+    // Die kwam uit de magic-link, en die ingang is vervallen. Het endpoint zit nu
+    // achter de chat-poort (geen anonieme aanroep meer) en meldt eerlijk dat Meta
+    // nog niet aan een ingelogde klant hangt; DIR-84 koppelt het aan de klant-sessie.
     if (path === "/api/meta/status" && request.method === "GET") {
-      const cookies = parseCookies(request.headers.get("Cookie"));
-      const klant = await kvGetClient(env, cookies[KLANT_COOKIE]);
-      return json({ available: !!(klant && metaConfigured(env)), naam: klant ? klant.naam : null });
+      if (!(await magChatten(request, env))) return geenSessie();
+      return json({ available: false, naam: null });
     }
 
     // DIR-39 — Anton (content/tekst): pure Claude-agent, geen koppeling.

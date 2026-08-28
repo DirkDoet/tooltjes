@@ -51,6 +51,10 @@ import {
   schoneBestandsnaam,
   base64Bytes,
   magChatten,
+  isAdmin,
+  maakKlantSessie,
+  leesKlantSessie,
+  klantOpGebruikersnaam,
 } from "../src/index.js";
 import { createHmac } from "node:crypto";
 
@@ -625,4 +629,89 @@ test("magChatten: een geldige admin-sessie mag chatten", async () => {
 test("magChatten: zonder ingesteld admin-wachtwoord gaat de poort niet open", async () => {
   const req = verzoekMetCookie(adminCookie(""));
   assert.equal(await magChatten(req, {}), false);
+});
+
+// ---- DIR-82: klant-login en klant-sessie ----
+const KLANT_A = "a".repeat(36);            // klantsleutels zijn 36 hex-tekens
+const KLANT_B = "b".repeat(36);
+function nepKv(store) {
+  return {
+    get: async (k) => (k in store ? store[k] : null),
+    put: async (k, v) => { store[k] = v; },
+    delete: async (k) => { delete store[k]; },
+    list: async () => ({ keys: Object.keys(store).map((name) => ({ name })) }),
+  };
+}
+async function nepEnv(extra) {
+  const wachtwoord = await hashKlantWachtwoord("klantgeheim123");
+  const store = {
+    [KLANT_A]: JSON.stringify({ naam: "Klant A", login: { gebruikersnaam: "Klant.A", ...wachtwoord } }),
+    [KLANT_B]: JSON.stringify({ naam: "Klant B" }),                 // geen login ingesteld
+    "config:model": "claude-opus-5",                                 // geen klantrecord
+  };
+  return { ADMIN_PASSWORD: "geheim", CLIENTS: nepKv(store), ...(extra || {}) };
+}
+
+test("klant-sessie: heen en terug geeft dezelfde klantsleutel", async () => {
+  const env = await nepEnv();
+  const waarde = await maakKlantSessie(env, KLANT_A);
+  assert.equal(await leesKlantSessie(env, waarde), KLANT_A);
+});
+
+test("klant-sessie: geknoeide sleutel of handtekening wordt geweigerd", async () => {
+  const env = await nepEnv();
+  const waarde = await maakKlantSessie(env, KLANT_A);
+  const [key, exp, sig] = waarde.split(".");
+  assert.equal(await leesKlantSessie(env, KLANT_B + "." + exp + "." + sig), null);   // andere klant
+  assert.equal(await leesKlantSessie(env, key + "." + exp + "." + "0".repeat(64)), null);
+  assert.equal(await leesKlantSessie(env, key + "." + (Number(exp) + 60000) + "." + sig), null); // TTL opgerekt
+  assert.equal(await leesKlantSessie(env, "rommel"), null);
+});
+
+test("klant-sessie: verlopen sessie geldt niet meer", async () => {
+  const env = await nepEnv();
+  const waarde = await maakKlantSessie(env, KLANT_A, 0);            // verloopt op TTL vanaf 0
+  assert.equal(await leesKlantSessie(env, waarde, 0), KLANT_A);
+  assert.equal(await leesKlantSessie(env, waarde, 9 * 60 * 60 * 1000), null);
+});
+
+test("klant-sessie: een cookie dat met een ander wachtwoord is ondertekend telt niet", async () => {
+  const env = await nepEnv();
+  const waarde = await maakKlantSessie({ ADMIN_PASSWORD: "ander" }, KLANT_A);
+  assert.equal(await leesKlantSessie(env, waarde), null);
+});
+
+test("klant-sessie: opent de chat-poort, maar geeft NOOIT admin-rechten", async () => {
+  const env = await nepEnv();
+  const waarde = await maakKlantSessie(env, KLANT_A);
+  const req = new Request("https://dd.test/api/chat", { headers: { Cookie: "dd_klant_sessie=" + waarde } });
+  assert.equal(await magChatten(req, env), true);
+  assert.equal(await isAdmin(req, env), false);
+});
+
+test("klant-sessie: een verwijderde klant komt er niet meer in", async () => {
+  const env = await nepEnv();
+  const waarde = await maakKlantSessie(env, KLANT_A);
+  await env.CLIENTS.delete(KLANT_A);
+  const req = new Request("https://dd.test/api/chat", { headers: { Cookie: "dd_klant_sessie=" + waarde } });
+  assert.equal(await magChatten(req, env), false);
+});
+
+test("klantOpGebruikersnaam: hoofdletterongevoelig, en alleen klanten met wachtwoord", async () => {
+  const env = await nepEnv();
+  const gevonden = await klantOpGebruikersnaam(env, "  KLANT.a ");
+  assert.equal(gevonden.key, KLANT_A);
+  assert.equal(gevonden.rec.login.gebruikersnaam, "Klant.A");
+  assert.equal(await klantOpGebruikersnaam(env, "Klant B"), null);   // geen login ingesteld
+  assert.equal(await klantOpGebruikersnaam(env, "bestaatniet"), null);
+  assert.equal(await klantOpGebruikersnaam(env, ""), null);
+});
+
+test("klantOpGebruikersnaam: geeft een hash terug die met veiligGelijk klopt", async () => {
+  const env = await nepEnv();
+  const gevonden = await klantOpGebruikersnaam(env, "klant.a");
+  const goed = await hashKlantWachtwoord("klantgeheim123", gevonden.rec.login.salt);
+  const fout = await hashKlantWachtwoord("verkeerd", gevonden.rec.login.salt);
+  assert.equal(goed.hash, gevonden.rec.login.hash);
+  assert.notEqual(fout.hash, gevonden.rec.login.hash);
 });
