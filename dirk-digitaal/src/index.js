@@ -4813,6 +4813,140 @@ async function handleContentChat(request, env, ctx) {
   return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined);
 }
 
+// -- Privacy en voorwaarden (DIR-91) -----------------------------------------
+// Google's OAuth-branding eist een publieke homepage, privacyverklaring en
+// voorwaarden op een domein dat van ons is. Ze staan in de Worker zelf, zodat
+// ze meeverhuizen zodra de tool een eigen adres krijgt.
+const CONTACT_EMAIL = "info@dirkdoet.nl";
+
+function juridischHtml(titel, inhoud) {
+  return `<!doctype html><html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${titel} - Dirk Digitaal</title>
+<style>
+  :root{--ink:#22262b;--dim:#5b646e;--lijn:#e2e5e9;--vlak:#fff;--grond:#f6f7f9;--oranje:#F18E02;--blauw:#015092}
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--ink:#e9edf1;--dim:#9aa4af;--lijn:#2a3038;--vlak:#161a1f;--grond:#0f1215;--blauw:#F18E02}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--grond);color:var(--ink);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+  .wrap{max-width:44rem;margin:0 auto;padding:2.5rem 1.25rem 4rem}
+  .kop{border-bottom:3px solid var(--oranje);padding-bottom:1rem;margin-bottom:1.5rem}
+  .merk{font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;color:var(--blauw);font-weight:700}
+  h1{font-size:1.75rem;margin:.35rem 0 0;text-wrap:balance}
+  h2{font-size:1.05rem;margin:2rem 0 .4rem}
+  ul{padding-left:1.15rem}
+  li{margin:.3rem 0}
+  .datum{color:var(--dim);font-size:.9rem}
+  a{color:var(--blauw)}
+  footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--lijn);color:var(--dim);font-size:.9rem}
+</style></head><body>
+<div class="wrap">
+  <div class="kop"><div class="merk">Dirk Digitaal</div><h1>${titel}</h1></div>
+  ${inhoud}
+  <footer>Dirk Digitaal is een tool van Dirk Doet. Vragen? Mail
+  <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>. &middot; <a href="/">Terug naar de tool</a></footer>
+</div></body></html>`;
+}
+
+const PRIVACY_HTML = juridischHtml("Privacyverklaring", `
+<p class="datum">Laatst bijgewerkt: 31 augustus 2026</p>
+<p>Met Dirk Digitaal praat je met AI-collega's over je eigen marketingcijfers. Hieronder lees je welke
+gegevens daarbij langskomen, wat we wel en niet bewaren, en hoe je het weer weghaalt.</p>
+
+<h2>Wie is verantwoordelijk</h2>
+<p>Dirk Doet, gevestigd in Nederland. Je bereikt ons op
+<a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.</p>
+
+<h2>Inloggen met Google</h2>
+<p>Je logt in met je Google-account. Wij ontvangen daarbij je e-mailadres en of Google dat adres heeft
+bevestigd. Dat gebruiken we om je te herkennen en je aan je eigen gegevens te koppelen. We maken geen
+wachtwoord aan en zien het jouwe nooit: het inloggen gebeurt volledig bij Google.</p>
+
+<h2>Toegang tot je marketinggegevens</h2>
+<p>Bij het inloggen geef je toestemming voor <b>alleen-lezen</b> toegang tot:</p>
+<ul>
+  <li>Google Search Console - vertoningen, klikken, posities en pagina's</li>
+  <li>Google Analytics 4 - je bezoekcijfers</li>
+  <li>Google Ads - je campagnecijfers</li>
+</ul>
+<p>We kunnen in die accounts niets aanpassen, aanmaken of verwijderen. De toegangssleutel die Google
+afgeeft leeft alleen in je sessie: hij staat in het werkgeheugen, gaat niet naar een database, en
+verdwijnt als je weggaat of na dertig minuten stilte. We vragen geen langlopende toegang aan, dus
+zodra je sessie voorbij is heeft de tool geen toegang meer tot je gegevens.</p>
+
+<h2>Wat we wel bewaren</h2>
+<ul>
+  <li><b>Dat je hebt ingelogd</b> - je e-mailadres, het moment, en welke collega je opende. Negentig
+      dagen, daarna gaat het automatisch weg. Zo zien we hoe de tool gebruikt wordt.</li>
+  <li><b>Klantgegevens die wij zelf invoeren</b> - ben je klant bij ons, dan staan je naam en de
+      gekoppelde account-id's in ons beheer.</li>
+</ul>
+
+<h2>Wat we niet bewaren</h2>
+<ul>
+  <li>De inhoud van je gesprekken: geen vragen, geen antwoorden, geen opgehaalde cijfers.</li>
+  <li>Bestanden en schermafbeeldingen die je meestuurt - die leven alleen in de sessie.</li>
+</ul>
+
+<h2>Wie je gegevens nog meer verwerkt</h2>
+<p>Om een antwoord te maken sturen we je vraag en de opgehaalde cijfers naar het AI-model van
+<b>Anthropic</b> (Claude). Anthropic verwerkt dat om het antwoord te genereren en gebruikt het niet om
+modellen mee te trainen. De tool draait op <b>Cloudflare</b>. Verder verkopen of delen we niets, en we
+gebruiken je gegevens niet voor advertenties.</p>
+
+<h2>Beperkt gebruik van Google-gegevens</h2>
+<p>Het gebruik en de doorgifte van gegevens die Dirk Digitaal via Google API's ontvangt, volgt het
+<a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener">Google API
+Services User Data Policy</a>, inclusief de eisen voor beperkt gebruik.</p>
+
+<h2>Wat jij kunt doen</h2>
+<ul>
+  <li><b>Nu stoppen:</b> klik in de chat op "Verbreek &amp; wis". Je sessie en alle meegestuurde
+      bestanden zijn dan meteen weg.</li>
+  <li><b>Toegang intrekken:</b> via
+      <a href="https://myaccount.google.com/permissions" rel="noopener">je Google-accountinstellingen</a>
+      haal je de koppeling er zelf uit.</li>
+  <li><b>Inzien of laten wissen:</b> mail <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>, dan halen
+      we je gegevens uit onze registratie.</li>
+</ul>
+`);
+
+const VOORWAARDEN_HTML = juridischHtml("Gebruiksvoorwaarden", `
+<p class="datum">Laatst bijgewerkt: 31 augustus 2026</p>
+
+<h2>Waar je mee akkoord gaat</h2>
+<p>Dirk Digitaal is een tool van Dirk Doet waarmee je je eigen marketinggegevens laat analyseren door
+AI-collega's. Door in te loggen ga je met deze voorwaarden akkoord.</p>
+
+<h2>Je eigen account</h2>
+<p>Je logt in met je eigen Google-account en koppelt alleen gegevens waarvoor je zelf gerechtigd bent.
+Je blijft eigenaar van die gegevens; wij lezen ze alleen om je vraag te beantwoorden.</p>
+
+<h2>Wat de tool wel en niet is</h2>
+<p>De antwoorden komen van een AI-model en kunnen fouten bevatten. Ze zijn een hulpmiddel, geen
+vervanging van je eigen oordeel. Controleer belangrijke conclusies in de bron voordat je er geld of
+beleid op baseert. We geven geen garantie dat de tool onafgebroken beschikbaar is.</p>
+
+<h2>Wat niet mag</h2>
+<ul>
+  <li>Toegang zoeken tot gegevens van iemand anders.</li>
+  <li>De tool gebruiken op een manier die de dienst of Google's voorwaarden schaadt.</li>
+  <li>Geautomatiseerd grote hoeveelheden verzoeken sturen.</li>
+</ul>
+
+<h2>Stoppen</h2>
+<p>Je stopt wanneer je wilt: trek de koppeling in bij Google, of mail ons. Wij kunnen toegang
+be&euml;indigen als deze voorwaarden worden overtreden.</p>
+
+<h2>Aansprakelijkheid</h2>
+<p>De tool wordt geleverd zoals hij is. Voor zover de wet dat toestaat zijn wij niet aansprakelijk voor
+schade door het gebruik van de tool of door beslissingen op basis van de antwoorden.</p>
+
+<h2>Vragen</h2>
+<p>Mail <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.</p>
+`);
+
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -4831,6 +4965,22 @@ export default {
     // critics de geïntegreerde iso-scène (agents + hond + chat) zien.
     if (path === "/iso" && request.method === "GET") {
       return new Response(await officeHtml(env), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
+    // Privacy en voorwaarden (DIR-91) - publiek, geen inlog nodig.
+    if (path === "/privacy" && request.method === "GET") {
+      return new Response(PRIVACY_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+    if (path === "/voorwaarden" && request.method === "GET") {
+      return new Response(VOORWAARDEN_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
+    // Search Console: eigendom van dit adres aantonen met het HTML-bestand dat
+    // Google aanreikt. De bestandsnaam staat als var GOOGLE_VERIFICATIE in
+    // wrangler.toml; zonder die var bestaat de route niet.
+    if (env.GOOGLE_VERIFICATIE && path === "/" + env.GOOGLE_VERIFICATIE && request.method === "GET") {
+      return new Response("google-site-verification: " + env.GOOGLE_VERIFICATIE,
+        { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
     // Admin-beheer klanten (DIR-30) — achter ADMIN_PASSWORD.
