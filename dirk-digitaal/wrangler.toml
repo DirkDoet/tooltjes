@@ -2,6 +2,10 @@ name = "dirkdigitaal"
 main = "src/index.js"
 compatibility_date = "2026-08-25"
 
+# Het oude workers.dev-adres blijft naast het eigen adres bestaan tot de
+# redirect-URI in Google is omgezet, zodat inloggen niet omvalt.
+workers_dev = true
+
 # Durable Object voor de ephemere sessie (token + laatste-activiteit).
 [[durable_objects.bindings]]
 name = "SESSIONS"
@@ -23,3 +27,10 @@ id = "d9d3026f28f24ab38d20080d757fd981"
 #   wrangler secret put META_SYSTEM_TOKEN     # Meta System User-token (Ilona)
 #   wrangler secret put META_APP_SECRET       # voor appsecret_proof
 #   wrangler secret put ADMIN_PASSWORD        # admin-beheer klanten
+
+# Eigen adres (DIR-91). Nodig voor Google's OAuth-branding: die eist een
+# geautoriseerd domein dat aantoonbaar van ons is, en workers.dev is van
+# Cloudflare. Cloudflare maakt en beheert het DNS-record hiervoor zelf.
+[[routes]]
+pattern = "digitaal.dirkdoetmarketing.nl"
+custom_domain = true
