@@ -2599,6 +2599,11 @@ const OFFICE_HTML = `<!doctype html>
     letter-spacing:1px; text-shadow:2px 2px 0 #0b2a45; }
   .zm-merk span{ display:block; color:#cdd9e4; font-size:10px; letter-spacing:2px; }
   .zm-blok{ display:flex; flex-direction:column; gap:8px; padding-top:12px; border-top:2px solid #262c36; }
+  /* DIR-91: Google wil de privacylink vanaf de startpagina kunnen vinden. */
+  .zm-voet{ margin-top:auto; padding-top:12px; border-top:2px solid #262c36;
+    font-size:.78rem; line-height:1.6; color:#7c8695; }
+  .zm-voet a{ color:#9aa4b1; text-decoration:underline; }
+  .zm-voet a:hover, .zm-voet a:focus{ color:var(--accent); }
   .zm-kop{ margin:0; font-family:var(--leesfont); font-size:.95rem; font-weight:700;
     color:#a8cbe8; letter-spacing:.6px; text-transform:uppercase; }
   .zm-tekst{ margin:0; font-size:.98rem; line-height:1.5; color:#bcc5d1; }
@@ -2876,6 +2881,8 @@ const OFFICE_HTML = `<!doctype html>
     <a class="zm-knop zm-sub" href="/admin">Klantbeheer</a>
     <button class="zm-knop zm-sub" id="zm-uitlog" type="button">Uitloggen</button>
   </div>
+  <p class="zm-voet"><a href="/privacy">Privacy</a> &middot; <a href="/voorwaarden">Voorwaarden</a><br>
+  Een tool van Dirk Doet</p>
 </nav>
 <div class="scene-host">
   <div class="scene-wrap">
@@ -4953,6 +4960,15 @@ export default {
     const path = url.pathname;
     const origin = url.origin;
     const redirectUri = origin + "/oauth/callback";
+
+    // DIR-91: zodra de var CANONIEKE_HOST staat ingevuld, stuurt elk ander adres
+    // (het oude workers.dev) door naar dat ene adres. Zolang de var leeg is
+    // gebeurt er niets, zodat we hem pas aanzetten als de redirect-URI in Google
+    // is omgezet -- anders breekt inloggen tijdens de overgang.
+    if (env.CANONIEKE_HOST && url.hostname !== env.CANONIEKE_HOST) {
+      const doel = "https://" + env.CANONIEKE_HOST + url.pathname + url.search;
+      return Response.redirect(doel, 301);
+    }
 
     // Startpagina: het 2D retro-kantoor (DIR-14).
     // DIR-82/DIR-86: de magic-link-ingang (`/?k=<sleutel>`) is vervallen en inloggen
