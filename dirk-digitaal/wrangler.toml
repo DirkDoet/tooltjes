@@ -30,13 +30,7 @@ id = "d9d3026f28f24ab38d20080d757fd981"
 
 # Eigen adres (DIR-91). Nodig voor Google's OAuth-branding: die eist een
 # geautoriseerd domein dat aantoonbaar van ons is, en workers.dev is van
-# Cloudflare. Zodra dirkdigitaal.nl in dit Cloudflare-account op Active staat,
-# gaat het blok hieronder erin en maakt Cloudflare het DNS-record zelf:
-#
-#   [[routes]]
-#   pattern = "dirkdigitaal.nl"
-#   custom_domain = true
-#
-# Een eerdere poging met digitaal.dirkdoetmarketing.nl bleef hangen: dat domein
-# zit in een ander Cloudflare-account dan de Worker, en dan kan Cloudflare het
-# record niet aanmaken.
+# Cloudflare. Cloudflare maakt en beheert het DNS-record hiervoor zelf.
+[[routes]]
+pattern = "dirkdigitaal.nl"
+custom_domain = true
