@@ -2462,9 +2462,17 @@ async function creditsReserveer(request, env) {
       },
     };
   } catch (e) {
-    // Een storing in het grootboek sluit niemand buiten; dan draait dit bericht
-    // gewoon op de instelling uit /admin en valt er niets te verrekenen.
-    return { weigering: null, krediet: geenKrediet };
+    // Een storing in het grootboek sluit niemand buiten. Maar deze klant hoort ook op
+    // de storingsroute niet op Dirks instelling te draaien: AC-1 zegt "ongeacht wat er
+    // in /admin staat", en dan moet dat op alle paden waar zijn. Anders klopt de zin
+    // "klanten volgen dit niet" bij de kiezer net niet.
+    //
+    // Het adres blijft leeg, dus er valt nog steeds niets te verrekenen: de rekening
+    // van dit ene bericht landt bij Dirk en niet bij de klant.
+    return {
+      weigering: null,
+      krediet: { email: "", model: modelVoorKlant(""), reservering: "", verrekend: true },
+    };
   }
 }
 
