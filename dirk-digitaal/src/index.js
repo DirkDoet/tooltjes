@@ -1145,6 +1145,48 @@ async function creditsConfig(env) {
   return Object.assign({}, CREDITS_STANDAARD);
 }
 
+// DIR-93 - wat de klant zelf mag kiezen, in gewone taal. Twee smaken is genoeg:
+// Opus 4.8 en Opus 5 kosten precies hetzelfde, dus een derde keuze zou de klant
+// alleen jargon voorschotelen zonder dat er iets te kiezen valt.
+const KLANT_MODELLEN = [
+  { id: "claude-sonnet-5", label: "Snel en voordelig (standaard)",
+    uitleg: "Prima voor de meeste vragen. Dit staat standaard aan." },
+  { id: "claude-opus-5", label: "Grondiger",
+    uitleg: "Denkt langer door en kost ongeveer 2,5x zoveel credits per vraag." },
+];
+export function klantModelKeuzes() {
+  return KLANT_MODELLEN.map((m) => Object.assign({}, m));
+}
+// Alleen een keuze uit dat lijstje telt; al het andere is 'niets gekozen'.
+export function geldigKlantModel(id) {
+  return KLANT_MODELLEN.some((m) => m.id === String(id || "")) ? String(id) : "";
+}
+
+// AC-6/AC-7 - de klant wint van de instelling in /admin, maar alleen met een model
+// dat we kennen. Zo kan een oude of geknoeide waarde nooit naar de API lekken, en
+// rekent DIR-92 af op precies het model dat is gebruikt.
+export function modelVoorKlant(klantModel, adminModel) {
+  const k = String(klantModel || "");
+  if (MODEL_KEUZES.some((m) => m.id === k)) return k;
+  return kiesModel(adminModel);
+}
+
+// AC-9 - hoort deze grootboekregel bij deze gebruiker? Het adres komt altijd uit de
+// ondertekende sessie. Apart gezet zodat vastligt dat er echt gefilterd wordt, en dat
+// een leeg adres NIETS oplevert in plaats van alles.
+export function hoortBijGebruiker(regel, email) {
+  const wie = normaliseerEmail(email);
+  if (!wie) return false;
+  return normaliseerEmail(regel && regel.email) === wie;
+}
+
+// Hoeveel regels de klant per keer ziet (AC-4); de rest komt met 'meer laden'.
+const DASHBOARD_PAGINA = 50;
+// Hoeveel sleutels we per keer uit het grootboek lezen terwijl we naar de regels van
+// deze klant zoeken. Zo hoeft het hele boek nooit in het geheugen, ook niet als het
+// straks veel groter is dan nu.
+const GROOTBOEK_BROK = 200;
+
 // Grootboeksleutel die chronologisch sorteert — zelfde truc als het gebruikslog
 // (DIR-87): de DO geeft list() op sleutelvolgorde terug.
 export function boekSleutel(tijd, rand) {
@@ -1645,12 +1687,60 @@ export class CreditsDO {
         rec = { saldo: Math.max(0, Math.round(Number(inv.startsaldo) || 0)), gemaakt: now };
         await this.state.storage.put("s:" + email, rec);
       }
-      return json({ saldo: rec.saldo });
+      return json({ saldo: rec.saldo, model: rec.model || "" });
     }
 
     if (url.pathname === "/credits/saldo") {
       const rec = await this.saldoVan(email);
-      return json({ saldo: rec ? rec.saldo : null });
+      return json({ saldo: rec ? rec.saldo : null, model: (rec && rec.model) || "" });
+    }
+
+    // DIR-93 - de modelkeuze van de klant hangt aan zijn saldo-record, zodat het
+    // ophalen van saldo en keuze samen een DO-aanroep is.
+    if (url.pathname === "/credits/model") {
+      if (!email) return json({ error: "geen adres" }, 400);
+      const rec = (await this.saldoVan(email)) || { saldo: 0, gemaakt: now };
+      rec.model = geldigKlantModel(inv.model);
+      await this.state.storage.put("s:" + email, rec);
+      return json({ saldo: rec.saldo, model: rec.model });
+    }
+
+    // AC-3/AC-4/AC-9 - saldo, keuze en het EIGEN verbruik van dit adres, nieuwste
+    // eerst en per pagina. Het adres komt van de Worker, die het uit de ondertekende
+    // sessie haalt; hier wordt er hoe dan ook op gefilterd.
+    //
+    // We lezen het boek in brokken en stoppen zodra de pagina vol is, in plaats van
+    // alles in te lezen en daarna te filteren: het grootboek van alle klanten samen
+    // hoort nooit in het geheugen van een enkel verzoek te passen. De sleutels
+    // sorteren chronologisch, dus `reverse` geeft vanzelf nieuwste eerst en de laatst
+    // geziene sleutel is de cursor naar de volgende pagina.
+    if (url.pathname === "/credits/klant") {
+      if (!email) return json({ error: "geen adres" }, 400);
+      const rec = await this.saldoVan(email);
+      const regels = [];
+      let cursor = String(inv.cursor || "");
+      let uitgelezen = false;
+      while (regels.length < DASHBOARD_PAGINA) {
+        const opties = { prefix: "b:", reverse: true, limit: GROOTBOEK_BROK };
+        if (cursor) opties.end = cursor;          // exclusief: verder terug in de tijd
+        const brok = await this.state.storage.list(opties);
+        if (!brok.size) { uitgelezen = true; break; }
+        let vol = false;
+        for (const [sleutel, waarde] of brok) {
+          cursor = sleutel;
+          if (hoortBijGebruiker(waarde, email)) regels.push(waarde);
+          if (regels.length >= DASHBOARD_PAGINA) { vol = true; break; }
+        }
+        if (vol) break;
+        if (brok.size < GROOTBOEK_BROK) { uitgelezen = true; break; }
+      }
+      return json({
+        saldo: rec ? rec.saldo : null,
+        model: (rec && rec.model) || "",
+        regels,
+        cursor,
+        meer: !uitgelezen,
+      });
     }
 
     // AC-2/AC-3/AC-4 - verbruik afboeken en vastleggen. Het saldo mag hierdoor onder
@@ -1784,6 +1874,23 @@ function boekVerbruik(env, ctx, ctxData, agent, meter) {
     } catch (e) { /* afboeken is best-effort */ }
   })();
   if (ctx && ctx.waitUntil) ctx.waitUntil(werk);
+}
+
+// DIR-93 - welk model draait er voor DEZE gebruiker? De keuze van de klant wint van
+// de instelling in /admin (AC-6). Een bezoeker zonder klant-sessie krijgt gewoon de
+// admin-instelling.
+async function modelVoor(env, ctxData) {
+  const adminModel = await actiefModel(env);
+  const email = ctxData && ctxData.soort === "klant" ? ctxData.email : "";
+  if (!email) return adminModel;
+  try {
+    const resp = await creditsStub(env).fetch("https://do/credits/saldo", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+    const j = await resp.json();
+    return modelVoorKlant(j.model, adminModel);
+  } catch (e) { return adminModel; }
 }
 
 // AC-6/AC-7 - de poort voor de chat: staat het saldo op nul of lager, dan gaat er
@@ -2250,8 +2357,10 @@ export function parseAssistant(content) {
   return { text: text.trim(), toolUses };
 }
 
-async function callAnthropic(env, system, messages, tools, meter) {
-  const model = await actiefModel(env);     // DIR-77: door de admin gekozen motor
+async function callAnthropic(env, system, messages, tools, meter, gekozenModel) {
+  // DIR-77 koos het model in /admin; DIR-93 laat de klant daar zelf overheen gaan.
+  // De aanroeper geeft het door, zodat de afboeking op hetzelfde model rekent.
+  const model = gekozenModel || await actiefModel(env);
   const resp = await fetch(ANTHROPIC_ENDPOINT, {
     method: "POST",
     headers: {
@@ -2276,9 +2385,9 @@ async function callAnthropic(env, system, messages, tools, meter) {
 
 // ── DIR-62 · "Collega erbij" (multi-agent aanpak A) ─────────────────────────
 // Gedeelde agentische tool-loop: dispatch tool_use naar een naam→fn-map.
-async function chatLoop(env, system, convo, tools, dispatch, meter) {
+async function chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel) {
   for (let i = 0; i < 5; i++) {
-    const resp = await callAnthropic(env, system, convo, tools, meter);
+    const resp = await callAnthropic(env, system, convo, tools, meter, gekozenModel);
     if (!resp || !resp.content) return null;
     const parsed = parseAssistant(resp.content);
     if (resp.stop_reason === "tool_use" && parsed.toolUses.length) {
@@ -3129,6 +3238,42 @@ const OFFICE_HTML = `<!doctype html>
   .poortbox p{ margin:0 0 .7rem; font-size:1.02rem; line-height:1.5; }
   .poortbox .poort-klein{ font-size:.92rem; color:#45505b; }
   .poort-knoppen{ display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.9rem; }
+  /* DIR-93 . het eigen scherm van de klant. Zelfde doos, kleuren en letters als de
+     chat, zodat het bij het kantoor hoort en niet als los scherm aanvoelt (AC-10). */
+  .dashbox{ width:min(46rem,96vw); max-height:88vh; display:flex; flex-direction:column;
+    background:var(--cream); color:var(--ink); border:4px solid var(--ink);
+    box-shadow:8px 8px 0 var(--shadow); font-family:var(--leesfont);
+    animation:dd-modal-in .18s ease-out; }
+  .dashbox header{ background:var(--teal); color:var(--cream); padding:.5rem .7rem;
+    display:flex; align-items:center; justify-content:space-between; border-bottom:3px solid var(--ink); }
+  .dashbox header b{ letter-spacing:1px; font-size:.95rem; }
+  .dashbody{ overflow-y:auto; padding:.9rem 1rem 1.1rem; }
+  .dashbody h3{ margin:1.3rem 0 .35rem; font-size:1.02rem; }
+  .dashbody h3:first-of-type{ margin-top:1rem; }
+  .dash-saldo{ display:flex; align-items:baseline; gap:.6rem; flex-wrap:wrap; }
+  .dash-groot{ font-family:'Press Start 2P',monospace; font-size:1.25rem; color:var(--teal); }
+  .dash-klein{ font-size:.95rem; color:#45505b; }
+  .dash-op{ margin:0 0 .8rem; border:2px solid var(--ink); background:#ffe4dd;
+    padding:.55rem .75rem; font-size:.98rem; line-height:1.45; }
+  .dash-knoppen{ display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-top:.8rem; }
+  .dash-melding{ margin:.45rem 0 0; font-size:.9rem; color:#45505b; }
+  .dash-keuze{ display:block; width:100%; text-align:left; border:2px solid var(--ink);
+    background:#fff; color:var(--ink); font-family:var(--leesfont); font-size:1rem;
+    padding:.5rem .7rem; margin:.35rem 0; cursor:pointer; }
+  .dash-keuze:hover{ border-color:var(--teal); }
+  .dash-keuze.aan{ background:#e3f1e8; box-shadow:3px 3px 0 var(--shadow); }
+  .dash-keuze b{ display:block; }
+  .dash-keuze span{ font-size:.9rem; color:#45505b; }
+  .dashtabelwrap{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  table.dashtabel{ border-collapse:collapse; width:100%; font-size:.92rem; font-variant-numeric:tabular-nums; }
+  .dashtabel th, .dashtabel td{ border:1px solid rgba(23,23,23,.28); padding:4px 8px;
+    text-align:left; white-space:nowrap; }
+  .dashtabel th{ background:#efe8d7; font-weight:700; }
+  .dashtabel tbody tr:nth-child(even){ background:rgba(23,23,23,.05); }
+  .dashtabel td.getal{ text-align:right; }
+  /* Eigen verberg-klasse: .verborgen hangt in dit bestand onder .zijmenu. */
+  .dash-uit{ display:none; }
+  .dash-leeg{ margin:.5rem 0 0; font-size:.98rem; line-height:1.5; color:#45505b; }
   /* site-keuze + dashboard */
   .sitekeuze{ align-self:flex-start; background:#fff; border:2px solid var(--ink); padding:.6rem; max-width:100%; }
   .sitekeuze p{ margin:0 0 .5rem; font-size:.9rem; }
@@ -3167,6 +3312,7 @@ const OFFICE_HTML = `<!doctype html>
     <h2 class="zm-kop">Ingelogd</h2>
     <p class="zm-tekst">Je bent ingelogd als <b id="zm-klant-naam">klant</b>. Klik een collega aan om te beginnen.</p>
     <p class="zm-tekst zm-klein" id="zm-klant-credits"></p>
+    <button class="zm-knop" id="zm-dashboard" type="button">Mijn dashboard</button>
     <button class="zm-knop zm-sub" id="zm-klant-uitlog" type="button">Uitloggen</button>
   </div>
   <form class="zm-blok verborgen" id="zm-inlog" autocomplete="on">
@@ -3331,6 +3477,35 @@ const OFFICE_HTML = `<!doctype html>
     <div class="poort-knoppen">
       <button class="knop" id="poort-inlog">Inloggen met Google</button>
       <button class="knop rood" id="poort-sluit">Nog even rondkijken</button>
+    </div>
+  </div>
+</div>
+
+<!-- DIR-93: het eigen scherm van de klant. Zit in het kantoor zelf, dus dezelfde
+     kleuren en letters als de rest. Alles erin komt van /api/klant/dashboard, en dat
+     kijkt uitsluitend naar het adres uit de ondertekende sessie. -->
+<div class="overlay" id="dash-overlay" role="dialog" aria-modal="true" aria-labelledby="dash-kop">
+  <div class="dashbox">
+    <header><b id="dash-kop">Mijn dashboard</b><button class="x" id="dash-sluit" aria-label="Sluiten">X</button></header>
+    <div class="dashbody">
+      <p class="dash-op dash-uit" id="dash-op"></p>
+      <div class="dash-saldo">
+        <span class="dash-groot" id="dash-bedrag">&euro; 0,00</span>
+        <span class="dash-klein" id="dash-credits">0 credits</span>
+      </div>
+      <p class="dash-melding" id="dash-wie"></p>
+      <div class="dash-knoppen">
+        <button class="knop" id="dash-koop" type="button">Credits bijkopen</button>
+        <span class="dash-melding" id="dash-koopmelding"></span>
+      </div>
+      <h3>Hoe grondig mag het zijn?</h3>
+      <div id="dash-modellen"></div>
+      <p class="dash-melding" id="dash-modelmelding"></p>
+      <h3>Wat je verbruikt hebt</h3>
+      <div id="dash-verbruik"></div>
+      <div class="dash-knoppen">
+        <button class="knop" id="dash-meer" type="button">Meer laden</button>
+      </div>
     </div>
   </div>
 </div>
@@ -3823,6 +3998,161 @@ const OFFICE_HTML = `<!doctype html>
     if(!magChatten){ poortOpen(key); return; }
     openChat(key); if(connected&&!started) startFlow();
   }
+  // -- DIR-93 . het eigen dashboard --------------------------------------------
+  // Alles wat hier binnenkomt gaat over DEZE gebruiker: de server kijkt naar het
+  // adres in de ondertekende sessie en negeert alles wat het verzoek zelf meestuurt.
+  var dashOverlay=document.getElementById('dash-overlay');
+  var dashCursor='', dashKeuzes=[], dashModel='', dashBezig=false;
+  function dashEuro(credits){ return '\u20ac ' + (Number(credits||0)/100).toFixed(2).replace('.',','); }
+  function dashTijd(ms){
+    var d=new Date(ms||0);
+    function tw(n){ return (n<10?'0':'')+n; }
+    return tw(d.getDate())+'-'+tw(d.getMonth()+1)+'-'+d.getFullYear()+' '+tw(d.getHours())+':'+tw(d.getMinutes());
+  }
+  function dashCollega(sleutel){
+    var a=AGENTS[sleutel];
+    return (a&&a.naam)?a.naam:(sleutel||'');
+  }
+  function dashModelLabel(id){
+    for(var i=0;i<dashKeuzes.length;i++) if(dashKeuzes[i].id===id) return dashKeuzes[i].label;
+    return id||'';
+  }
+  function dashDicht(){ dashOverlay.style.display='none'; }
+  function dashOpen(){
+    dashOverlay.style.display='flex';
+    dashCursor='';
+    document.getElementById('dash-verbruik').textContent='';
+    document.getElementById('dash-koopmelding').textContent='';
+    document.getElementById('dash-modelmelding').textContent='';
+    dashLaad(false);
+  }
+  function dashSaldoTonen(j){
+    document.getElementById('dash-bedrag').textContent=dashEuro(j.saldo);
+    var n=Number(j.saldo||0);
+    document.getElementById('dash-credits').textContent=n+' credit'+(n===1?'':'s');
+    document.getElementById('dash-wie').textContent='Ingelogd als '+(j.naam?(j.naam+' ('+j.email+')'):j.email);
+    var op=document.getElementById('dash-op');
+    if(n<=0){
+      op.textContent='Je credits zijn op. Koop bij om weer met je collega\u2019s te kunnen praten \u2014 kijken en rondlopen blijft gewoon werken.';
+      op.classList.remove('dash-uit');
+    } else {
+      op.textContent=''; op.classList.add('dash-uit');
+    }
+  }
+  function dashModellenTonen(j){
+    dashKeuzes=j.keuzes||[]; dashModel=j.model||'';
+    var doel=document.getElementById('dash-modellen'); doel.textContent='';
+    dashKeuzes.forEach(function(k){
+      var b=document.createElement('button');
+      b.type='button'; b.className='dash-keuze'+(k.id===dashModel?' aan':'');
+      var t=document.createElement('b'); t.textContent=k.label; b.appendChild(t);
+      var u=document.createElement('span'); u.textContent=k.uitleg; b.appendChild(u);
+      b.addEventListener('click',function(){ dashKiesModel(k.id); });
+      doel.appendChild(b);
+    });
+  }
+  function dashKiesModel(id){
+    if(id===dashModel) return;
+    var melding=document.getElementById('dash-modelmelding');
+    melding.textContent='Bezig met opslaan...';
+    fetch('/api/klant/model',{ method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ model:id }) })
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+      .then(function(res){
+        if(!res.ok){ melding.textContent=(res.j&&res.j.error)||'Opslaan mislukt.'; return; }
+        dashModel=res.j.model;
+        dashModellenTonen({ keuzes:dashKeuzes, model:dashModel });
+        melding.textContent='Bewaard. Dit geldt alleen voor jou, en blijft staan.';
+      })
+      .catch(function(){ melding.textContent='Opslaan mislukt \u2014 probeer het zo opnieuw.'; });
+  }
+  function dashRegelsTonen(regels, bijwerken){
+    var doel=document.getElementById('dash-verbruik');
+    var body=doel.querySelector('tbody');
+    if(!bijwerken || !body){
+      doel.textContent='';
+      if(!regels.length){
+        var leeg=document.createElement('p'); leeg.className='dash-leeg';
+        leeg.textContent='Nog niets verbruikt. Klik een collega aan en stel je eerste vraag \u2014 dan zie je hier precies wat het kostte.';
+        doel.appendChild(leeg); return;
+      }
+      var wrap=document.createElement('div'); wrap.className='dashtabelwrap';
+      var tab=document.createElement('table'); tab.className='dashtabel';
+      var kop=document.createElement('thead'); var kr=document.createElement('tr');
+      ['Wanneer','Collega','Model','Credits'].forEach(function(h){
+        var th=document.createElement('th'); th.textContent=h; kr.appendChild(th);
+      });
+      kop.appendChild(kr); tab.appendChild(kop);
+      body=document.createElement('tbody'); tab.appendChild(body);
+      wrap.appendChild(tab); doel.appendChild(wrap);
+    }
+    regels.forEach(function(r){
+      var tr=document.createElement('tr');
+      function cel(tekst, getal){
+        var td=document.createElement('td'); td.textContent=tekst;
+        if(getal) td.className='getal'; tr.appendChild(td);
+      }
+      cel(dashTijd(r.tijd));
+      // Een correctie van Dirk is geen verbruik, maar verzwijgen zou het saldo
+      // onverklaarbaar maken. Daarom staat hij er wel in, met zijn reden erbij.
+      if(r.soort==='correctie'){
+        cel(r.credits<0?'Bijgeboekt door Dirk':'Afgeboekt door Dirk');
+        cel(r.reden||'');
+      } else {
+        cel(dashCollega(r.agent));
+        cel(dashModelLabel(r.model)||r.model||'');
+      }
+      cel((r.credits>=0?'-':'+')+Math.abs(r.credits||0), true);
+      body.appendChild(tr);
+    });
+  }
+  function dashLaad(bijwerken){
+    if(dashBezig) return;
+    dashBezig=true;
+    var meerKnop=document.getElementById('dash-meer');
+    meerKnop.disabled=true;
+    var url='/api/klant/dashboard'+(dashCursor?('?cursor='+encodeURIComponent(dashCursor)):'');
+    fetch(url).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+      .then(function(res){
+        dashBezig=false;
+        if(!res.ok){
+          document.getElementById('dash-verbruik').textContent=
+            (res.j&&res.j.error)||'Kon je gegevens niet laden. Log opnieuw in.';
+          meerKnop.classList.add('dash-uit');
+          return;
+        }
+        var j=res.j;
+        if(!bijwerken){ dashSaldoTonen(j); dashModellenTonen(j); }
+        var regels=j.regels||[];
+        dashRegelsTonen(regels, bijwerken && regels.length>0);
+        dashCursor=j.cursor||'';
+        // 'meer' kan waar zijn terwijl de volgende pagina leeg blijkt; dan verdwijnt
+        // de knop bij die klik alsnog.
+        var toonMeer = !!j.meer && (!bijwerken || regels.length>0);
+        meerKnop.disabled=false;
+        if(toonMeer) meerKnop.classList.remove('dash-uit'); else meerKnop.classList.add('dash-uit');
+      })
+      .catch(function(){
+        dashBezig=false; meerKnop.disabled=false;
+        document.getElementById('dash-verbruik').textContent='Kon je gegevens niet laden.';
+      });
+  }
+  document.getElementById('dash-sluit').addEventListener('click',dashDicht);
+  document.getElementById('dash-meer').addEventListener('click',function(){ dashLaad(true); });
+  document.getElementById('dash-koop').addEventListener('click',function(){
+    // NG-1: bijkopen komt in het volgende issue; hier alleen een eerlijke melding.
+    document.getElementById('dash-koopmelding').textContent=
+      'Bijkopen kan hier binnenkort zelf. Tot die tijd: mail Dirk, dan zet hij je credits erbij.';
+  });
+  dashOverlay.addEventListener('click',function(e){ if(e.target===dashOverlay) dashDicht(); });
+  var dashKnop=document.getElementById('zm-dashboard');
+  if(dashKnop) dashKnop.addEventListener('click',dashOpen);
+  // Rechtstreeks naar /dashboard: dan schuift het paneel meteen open. Wie niet is
+  // ingelogd ziet gewoon het kantoor; de gegevens zitten achter de sessie.
+  window.ddDashboardAutoOpen=function(){
+    if(location.pathname==='/dashboard') dashOpen();
+  };
+
   document.getElementById('poort-sluit').addEventListener('click',poortDicht);
   if(poortInlog) poortInlog.addEventListener('click',function(){
     // DIR-90: één klik. De uitleg en de privacyregel staan al in de modal, dus hier
@@ -4151,7 +4481,11 @@ const OFFICE_HTML = `<!doctype html>
           return res.ok;
         });
       }
-      if(soort==='klant'){ toonKlant(st.j.naam, st.j.credits); return true; }
+      if(soort==='klant'){
+        toonKlant(st.j.naam, st.j.credits);
+        if(window.ddDashboardAutoOpen) window.ddDashboardAutoOpen();
+        return true;
+      }
       toonGast(); return false;
     }).catch(function(){ toonGast(); return false; });
   }
@@ -4901,9 +5235,10 @@ async function handleChat(request, env, ctx) {
   // aanroepen waarin de agent eerst data ophaalt (AC-3). Wat verbruikt is wordt
   // geboekt, ook als het antwoord daarna alsnog mislukt.
   const meter = nieuweMeter();
+  const gekozenModel = await modelVoor(env, ctxData);   // DIR-93: keuze van de klant
   let finalText = "";
   let onbereikbaar = false;
-  try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter); }
+  try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
   boekVerbruik(env, ctx, ctxData, "gsc", meter);
   if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
@@ -5019,9 +5354,10 @@ async function handleGa4Chat(request, env, ctx) {
   // aanroepen waarin de agent eerst data ophaalt (AC-3). Wat verbruikt is wordt
   // geboekt, ook als het antwoord daarna alsnog mislukt.
   const meter = nieuweMeter();
+  const gekozenModel = await modelVoor(env, ctxData);   // DIR-93: keuze van de klant
   let finalText = "";
   let onbereikbaar = false;
-  try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter); }
+  try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
   boekVerbruik(env, ctx, ctxData, "ga4", meter);
   if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
@@ -5178,9 +5514,10 @@ async function handleAdsChat(request, env, ctx) {
   // aanroepen waarin de agent eerst data ophaalt (AC-3). Wat verbruikt is wordt
   // geboekt, ook als het antwoord daarna alsnog mislukt.
   const meter = nieuweMeter();
+  const gekozenModel = await modelVoor(env, ctxData);   // DIR-93: keuze van de klant
   let finalText = "";
   let onbereikbaar = false;
-  try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter); }
+  try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
   boekVerbruik(env, ctx, ctxData, "ads", meter);
   if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
@@ -5239,9 +5576,10 @@ async function handleContentChat(request, env, ctx) {
   // aanroepen waarin de agent eerst data ophaalt (AC-3). Wat verbruikt is wordt
   // geboekt, ook als het antwoord daarna alsnog mislukt.
   const meter = nieuweMeter();
+  const gekozenModel = await modelVoor(env, ctxData);   // DIR-93: keuze van de klant
   let finalText = "";
   let onbereikbaar = false;
-  try { finalText = await chatLoop(env, system, convo, col.tools, col.dispatch, meter); }
+  try { finalText = await chatLoop(env, system, convo, col.tools, col.dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
   boekVerbruik(env, ctx, ctxData, "anton", meter);
   if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
@@ -5415,6 +5753,15 @@ export default {
       return new Response(await officeHtml(env), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
+    // DIR-93 - het klantdashboard is een paneel IN het kantoor, niet een losse
+    // pagina: zo is het vanzelf dezelfde stijl (AC-10). Deze route dient dus gewoon
+    // het kantoor; de pagina ziet het pad en schuift het paneel meteen open. Wie niet
+    // is ingelogd ziet het kantoor en verder niets - de gegevens zitten achter
+    // /api/klant/dashboard, en dat geeft zonder sessie 401.
+    if (path === "/dashboard" && request.method === "GET") {
+      return new Response(await officeHtml(env), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
     // Iso-scène preview (DIR-49, WIP): alias van de echte scène `/` zodat de
     // critics de geïntegreerde iso-scène (agents + hond + chat) zien.
     if (path === "/iso" && request.method === "GET") {
@@ -5540,6 +5887,60 @@ export default {
         return json({ error: "Kon het gebruiksoverzicht niet laden." }, 502);
       }
     }
+    // DIR-93 - het klantdashboard. Het adres komt UITSLUITEND uit de ondertekende
+    // sessie: er wordt hier bewust niets uit de query, body of headers gelezen, dus
+    // een ander adres of id meesturen verandert niets aan wat je ziet (AC-9).
+    if (path === "/api/klant/dashboard" && request.method === "GET") {
+      const sessie = await huidigeSessie(request, env);
+      if (!sessie || !sessie.email) return geenSessie();
+      // De cursor is een grootboeksleutel uit een vorig antwoord. Hij zegt alleen
+      // HOE VER terug we bladeren, nooit van wie: het filteren gebeurt op het adres
+      // uit de sessie, dus een verzonnen cursor levert hooguit een lege pagina op.
+      const cursor = String(url.searchParams.get("cursor") || "").slice(0, 80);
+      try {
+        const cfg = await creditsConfig(env);
+        const resp = await creditsStub(env).fetch("https://do/credits/klant", {
+          method: "POST",
+          body: JSON.stringify({ email: sessie.email, cursor }),
+        });
+        const j = await resp.json();
+        const klant = sessie.key ? await kvGetClient(env, sessie.key) : null;
+        return json({
+          email: sessie.email,
+          naam: (klant && klant.naam) || "",
+          saldo: typeof j.saldo === "number" ? j.saldo : await saldoStart(env, sessie.email),
+          model: modelVoorKlant(j.model, await actiefModel(env)),
+          keuzes: klantModelKeuzes(),
+          regels: j.regels || [],
+          cursor: j.cursor || "",
+          meer: !!j.meer,
+          startsaldo: cfg.startsaldo,
+        });
+      } catch (e) {
+        return json({ error: "Kon je gegevens niet laden. Probeer het zo opnieuw." }, 502);
+      }
+    }
+    // AC-5/AC-6 - de klant zet zijn eigen model. Ook hier: het adres komt uit de
+    // sessie, alleen het model komt uit de body, en dat wordt tegen de vaste lijst
+    // gecontroleerd voordat het wordt bewaard.
+    if (path === "/api/klant/model" && request.method === "POST") {
+      const sessie = await huidigeSessie(request, env);
+      if (!sessie || !sessie.email) return geenSessie();
+      let b = {}; try { b = await request.json(); } catch (e) { /* leeg */ }
+      const gekozen = geldigKlantModel(b && b.model);
+      if (!gekozen) return json({ error: "Onbekende keuze." }, 400);
+      try {
+        const resp = await creditsStub(env).fetch("https://do/credits/model", {
+          method: "POST",
+          body: JSON.stringify({ email: sessie.email, model: gekozen }),
+        });
+        const j = await resp.json();
+        return json({ ok: true, model: j.model });
+      } catch (e) {
+        return json({ error: "Kon je keuze niet bewaren. Probeer het zo opnieuw." }, 502);
+      }
+    }
+
     // DIR-92 - credits: instellingen, saldo per klant en het grootboek. Alles achter
     // de admin-sessie: dit gaat over andermans geld en andermans adres.
     if (path === "/api/admin/credits" && request.method === "GET") {

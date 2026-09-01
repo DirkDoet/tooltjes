@@ -52,6 +52,10 @@ import {
   magChattenMetSaldo,
   schoneCreditsConfig,
   boekSleutel,
+  hoortBijGebruiker,
+  modelVoorKlant,
+  klantModelKeuzes,
+  geldigKlantModel,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -1031,4 +1035,104 @@ test("boekSleutel: sorteert chronologisch, ook over cijferlengtes heen", () => {
   const laat = boekSleutel(1000, "b");
   assert.equal(vroeg < laat, true);
   assert.match(vroeg, /^b:0{13}9-a$/);
+});
+
+
+// ── DIR-93 · klantdashboard ─────────────────────────────────────────────────
+
+test("hoortBijGebruiker: je ziet je eigen regels, en alleen die (AC-9)", () => {
+  const mijn = { email: "ik@voorbeeld.nl", credits: 12 };
+  const buurman = { email: "buurman@voorbeeld.nl", credits: 999 };
+  assert.equal(hoortBijGebruiker(mijn, "ik@voorbeeld.nl"), true);
+  assert.equal(hoortBijGebruiker(buurman, "ik@voorbeeld.nl"), false);
+  // Hoofdletters en spaties zijn hetzelfde adres, verder is het exact.
+  assert.equal(hoortBijGebruiker(mijn, "  IK@Voorbeeld.NL "), true);
+  assert.equal(hoortBijGebruiker({ email: "ik@voorbeeld.nl.x" }, "ik@voorbeeld.nl"), false);
+});
+
+test("hoortBijGebruiker: zonder adres zie je NIETS, niet alles", () => {
+  // Dit is de kern van AC-9: valt de sessie weg, dan mag de filter niet omslaan
+  // in 'laat maar alles zien'.
+  const regel = { email: "ik@voorbeeld.nl" };
+  assert.equal(hoortBijGebruiker(regel, ""), false);
+  assert.equal(hoortBijGebruiker(regel, null), false);
+  assert.equal(hoortBijGebruiker(regel, undefined), false);
+  // En een regel zonder adres hoort bij niemand.
+  assert.equal(hoortBijGebruiker({}, "ik@voorbeeld.nl"), false);
+  assert.equal(hoortBijGebruiker(null, "ik@voorbeeld.nl"), false);
+});
+
+test("hoortBijGebruiker: een meegestuurd adres verandert niets aan het filter", () => {
+  // De Worker geeft alleen het adres uit de ondertekende sessie door. Wat een
+  // bezoeker ook in zijn verzoek zet, het filter draait op dát adres — dus met de
+  // sessie van 'ik' komen de regels van de buurman er nooit doorheen.
+  const boek = [
+    { email: "ik@voorbeeld.nl", credits: 3 },
+    { email: "buurman@voorbeeld.nl", credits: 4 },
+    { email: "ik@voorbeeld.nl", credits: 5 },
+  ];
+  const sessieAdres = "ik@voorbeeld.nl";
+  const meegestuurd = "buurman@voorbeeld.nl";        // wat de aanvaller graag wil zien
+  const zichtbaar = boek.filter((r) => hoortBijGebruiker(r, sessieAdres));
+  assert.equal(zichtbaar.length, 2);
+  assert.deepEqual(zichtbaar.map((r) => r.credits), [3, 5]);
+  assert.equal(zichtbaar.some((r) => r.email === meegestuurd), false);
+});
+
+test("modelVoorKlant: de keuze van de klant wint van /admin (AC-6)", () => {
+  assert.equal(modelVoorKlant("claude-opus-5", "claude-sonnet-5"), "claude-opus-5");
+  assert.equal(modelVoorKlant("claude-sonnet-5", "claude-opus-5"), "claude-sonnet-5");
+});
+
+test("modelVoorKlant: zonder eigen keuze geldt de instelling in /admin", () => {
+  assert.equal(modelVoorKlant("", "claude-opus-4-8"), "claude-opus-4-8");
+  assert.equal(modelVoorKlant(null, "claude-opus-5"), "claude-opus-5");
+  // Staat er in /admin ook niets bruikbaars, dan de standaard.
+  assert.equal(modelVoorKlant("", ""), "claude-sonnet-5");
+});
+
+test("modelVoorKlant: een verzonnen model komt er nooit doorheen", () => {
+  // Anders zou een geknoeide of verouderde waarde alsnog naar de API gaan, en
+  // rekent de afboeking uit DIR-92 op een model dat niet bestaat.
+  assert.equal(modelVoorKlant("gpt-4", "claude-opus-5"), "claude-opus-5");
+  assert.equal(modelVoorKlant("claude-opus-5-super", "claude-sonnet-5"), "claude-sonnet-5");
+  assert.equal(modelVoorKlant("gpt-4", "ook-verzonnen"), "claude-sonnet-5");
+});
+
+test("klantmodellen: twee keuzes in gewone taal, Sonnet als standaard (AC-5)", () => {
+  const keuzes = klantModelKeuzes();
+  assert.equal(keuzes.length, 2);
+  assert.equal(keuzes[0].id, "claude-sonnet-5");
+  assert.match(keuzes[0].label, /standaard/i);
+  // Geen modelnamen of jargon in wat de klant leest.
+  for (const k of keuzes) {
+    assert.equal(k.label.length > 0, true);
+    assert.equal(k.uitleg.length > 0, true);
+    assert.doesNotMatch(k.label + " " + k.uitleg, /claude|sonnet|opus|token/i);
+  }
+  // De duurdere keuze legt uit dat hij meer kost.
+  assert.match(keuzes[1].uitleg, /credits/i);
+});
+
+test("geldigKlantModel: alleen wat de klant echt mag kiezen", () => {
+  assert.equal(geldigKlantModel("claude-sonnet-5"), "claude-sonnet-5");
+  assert.equal(geldigKlantModel("claude-opus-5"), "claude-opus-5");
+  // Niet aangeboden of verzonnen: geen keuze, dus valt hij terug op /admin.
+  assert.equal(geldigKlantModel("claude-opus-4-8"), "");
+  assert.equal(geldigKlantModel("gpt-4"), "");
+  assert.equal(geldigKlantModel(""), "");
+  assert.equal(geldigKlantModel(null), "");
+});
+
+test("de duurdere keuze kost aantoonbaar meer credits (AC-7)", () => {
+  // Dezelfde vraag, hetzelfde tokenverbruik, maar op het model dat de klant koos.
+  const usage = { input_tokens: 200000, output_tokens: 50000 };
+  const zuinig = nieuweMeter();
+  meetAanroep(zuinig, modelVoorKlant("claude-sonnet-5", "claude-sonnet-5"), usage);
+  const grondig = nieuweMeter();
+  meetAanroep(grondig, modelVoorKlant("claude-opus-5", "claude-sonnet-5"), usage);
+  const a = meterCredits(zuinig, 0.92, 2);
+  const b = meterCredits(grondig, 0.92, 2);
+  assert.equal(b > a, true, "de grondige keuze hoort meer te kosten");
+  assert.equal(b, a * 2.5);        // precies de prijsverhouding uit de tabel
 });
