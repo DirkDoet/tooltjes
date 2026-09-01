@@ -52,6 +52,12 @@ import {
   magChattenMetSaldo,
   schoneCreditsConfig,
   boekSleutel,
+  hoortBijGebruiker,
+  modelVoorKlant,
+  klantModelKeuzes,
+  geldigKlantModel,
+  nieuwSaldoRecord,
+  klantRegel,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -1031,4 +1037,186 @@ test("boekSleutel: sorteert chronologisch, ook over cijferlengtes heen", () => {
   const laat = boekSleutel(1000, "b");
   assert.equal(vroeg < laat, true);
   assert.match(vroeg, /^b:0{13}9-a$/);
+});
+
+
+// ── DIR-93 · klantdashboard ─────────────────────────────────────────────────
+
+test("hoortBijGebruiker: je ziet je eigen regels, en alleen die (AC-9)", () => {
+  const mijn = { email: "ik@voorbeeld.nl", credits: 12 };
+  const buurman = { email: "buurman@voorbeeld.nl", credits: 999 };
+  assert.equal(hoortBijGebruiker(mijn, "ik@voorbeeld.nl"), true);
+  assert.equal(hoortBijGebruiker(buurman, "ik@voorbeeld.nl"), false);
+  // Hoofdletters en spaties zijn hetzelfde adres, verder is het exact.
+  assert.equal(hoortBijGebruiker(mijn, "  IK@Voorbeeld.NL "), true);
+  assert.equal(hoortBijGebruiker({ email: "ik@voorbeeld.nl.x" }, "ik@voorbeeld.nl"), false);
+});
+
+test("hoortBijGebruiker: zonder adres zie je NIETS, niet alles", () => {
+  // Dit is de kern van AC-9: valt de sessie weg, dan mag de filter niet omslaan
+  // in 'laat maar alles zien'.
+  const regel = { email: "ik@voorbeeld.nl" };
+  assert.equal(hoortBijGebruiker(regel, ""), false);
+  assert.equal(hoortBijGebruiker(regel, null), false);
+  assert.equal(hoortBijGebruiker(regel, undefined), false);
+  // En een regel zonder adres hoort bij niemand.
+  assert.equal(hoortBijGebruiker({}, "ik@voorbeeld.nl"), false);
+  assert.equal(hoortBijGebruiker(null, "ik@voorbeeld.nl"), false);
+});
+
+test("hoortBijGebruiker: een meegestuurd adres verandert niets aan het filter", () => {
+  // De Worker geeft alleen het adres uit de ondertekende sessie door. Wat een
+  // bezoeker ook in zijn verzoek zet, het filter draait op dát adres — dus met de
+  // sessie van 'ik' komen de regels van de buurman er nooit doorheen.
+  const boek = [
+    { email: "ik@voorbeeld.nl", credits: 3 },
+    { email: "buurman@voorbeeld.nl", credits: 4 },
+    { email: "ik@voorbeeld.nl", credits: 5 },
+  ];
+  const sessieAdres = "ik@voorbeeld.nl";
+  const meegestuurd = "buurman@voorbeeld.nl";        // wat de aanvaller graag wil zien
+  const zichtbaar = boek.filter((r) => hoortBijGebruiker(r, sessieAdres));
+  assert.equal(zichtbaar.length, 2);
+  assert.deepEqual(zichtbaar.map((r) => r.credits), [3, 5]);
+  assert.equal(zichtbaar.some((r) => r.email === meegestuurd), false);
+});
+
+test("modelVoorKlant: de keuze van de klant wint van /admin (AC-6)", () => {
+  assert.equal(modelVoorKlant("claude-opus-5", "claude-sonnet-5"), "claude-opus-5");
+  assert.equal(modelVoorKlant("claude-sonnet-5", "claude-opus-5"), "claude-sonnet-5");
+});
+
+test("modelVoorKlant: zonder eigen keuze geldt de instelling in /admin", () => {
+  assert.equal(modelVoorKlant("", "claude-opus-4-8"), "claude-opus-4-8");
+  assert.equal(modelVoorKlant(null, "claude-opus-5"), "claude-opus-5");
+  // Staat er in /admin ook niets bruikbaars, dan de standaard.
+  assert.equal(modelVoorKlant("", ""), "claude-sonnet-5");
+});
+
+test("modelVoorKlant: een verzonnen model komt er nooit doorheen", () => {
+  // Anders zou een geknoeide of verouderde waarde alsnog naar de API gaan, en
+  // rekent de afboeking uit DIR-92 op een model dat niet bestaat.
+  assert.equal(modelVoorKlant("gpt-4", "claude-opus-5"), "claude-opus-5");
+  assert.equal(modelVoorKlant("claude-opus-5-super", "claude-sonnet-5"), "claude-sonnet-5");
+  assert.equal(modelVoorKlant("gpt-4", "ook-verzonnen"), "claude-sonnet-5");
+});
+
+test("klantmodellen: twee keuzes in gewone taal, Sonnet als standaard (AC-5)", () => {
+  const keuzes = klantModelKeuzes();
+  assert.equal(keuzes.length, 2);
+  assert.equal(keuzes[0].id, "claude-sonnet-5");
+  assert.match(keuzes[0].label, /standaard/i);
+  // Geen modelnamen of jargon in wat de klant leest.
+  for (const k of keuzes) {
+    assert.equal(k.label.length > 0, true);
+    assert.equal(k.uitleg.length > 0, true);
+    assert.doesNotMatch(k.label + " " + k.uitleg, /claude|sonnet|opus|token/i);
+  }
+  // De duurdere keuze legt uit dat hij meer kost.
+  assert.match(keuzes[1].uitleg, /credits/i);
+});
+
+test("geldigKlantModel: alleen wat de klant echt mag kiezen", () => {
+  assert.equal(geldigKlantModel("claude-sonnet-5"), "claude-sonnet-5");
+  assert.equal(geldigKlantModel("claude-opus-5"), "claude-opus-5");
+  // Niet aangeboden of verzonnen: geen keuze, dus valt hij terug op /admin.
+  assert.equal(geldigKlantModel("claude-opus-4-8"), "");
+  assert.equal(geldigKlantModel("gpt-4"), "");
+  assert.equal(geldigKlantModel(""), "");
+  assert.equal(geldigKlantModel(null), "");
+});
+
+test("de duurdere keuze kost aantoonbaar meer credits (AC-7)", () => {
+  // Dezelfde vraag, hetzelfde tokenverbruik, maar op het model dat de klant koos.
+  const usage = { input_tokens: 200000, output_tokens: 50000 };
+  const zuinig = nieuweMeter();
+  meetAanroep(zuinig, modelVoorKlant("claude-sonnet-5", "claude-sonnet-5"), usage);
+  const grondig = nieuweMeter();
+  meetAanroep(grondig, modelVoorKlant("claude-opus-5", "claude-sonnet-5"), usage);
+  const a = meterCredits(zuinig, 0.92, 2);
+  const b = meterCredits(grondig, 0.92, 2);
+  assert.equal(b > a, true, "de grondige keuze hoort meer te kosten");
+  assert.equal(b, a * 2.5);        // precies de prijsverhouding uit de tabel
+});
+
+
+// ── DIR-93 · review-fixes op #67 ────────────────────────────────────────────
+
+test("nieuwSaldoRecord: een nieuw record krijgt het startsaldo, nooit 0", () => {
+  const vers = nieuwSaldoRecord(null, 200, 1000);
+  assert.equal(vers.saldo, 200);
+  assert.equal(vers.gemaakt, 1000);
+  // Ook als de aanleiding iets anders is dan inloggen (bijvoorbeeld een modelkeuze).
+  assert.equal(nieuwSaldoRecord(undefined, 50, 1).saldo, 50);
+  // Onzin blijft binnen de rails.
+  assert.equal(nieuwSaldoRecord(null, -5, 1).saldo, 0);
+  assert.equal(nieuwSaldoRecord(null, 12.7, 1).saldo, 13);
+  assert.equal(nieuwSaldoRecord(null, "geen getal", 1).saldo, 0);
+});
+
+test("nieuwSaldoRecord: een bestaand record wordt NOOIT overschreven", () => {
+  // Dit is de kant die geld zou kosten: een tweede uitgifte op een lopend saldo.
+  const bestaand = { saldo: 137, gemaakt: 5, model: "claude-opus-5" };
+  assert.equal(nieuwSaldoRecord(bestaand, 200, 9), bestaand);
+  assert.equal(nieuwSaldoRecord(bestaand, 200, 9).saldo, 137);
+  // Een saldo van 0 is een bestaand record, geen ontbrekend record: wie zijn
+  // credits opmaakte hoort er geen nieuwe cadeau te krijgen.
+  const leeg = { saldo: 0, gemaakt: 5 };
+  assert.equal(nieuwSaldoRecord(leeg, 200, 9).saldo, 0);
+});
+
+test("modelkeuze vóór de eerste saldo-uitgifte kost het startsaldo niet", () => {
+  // De volgorde die misging: eerst een modelkeuze bewaren, daarna pas inloggen.
+  // Schreef dat een record met saldo 0 weg, dan deelde /credits/start daarna nooit
+  // meer uit - want die kijkt alleen of er al iets staat.
+  const STARTSALDO = 200;
+  let opslag = null;                                  // nog nooit een saldo gehad
+
+  // 1. /credits/model op een leeg adres
+  const naKeuze = nieuwSaldoRecord(opslag, STARTSALDO, 1);
+  naKeuze.model = "claude-opus-5";
+  opslag = naKeuze;
+  assert.equal(opslag.saldo, STARTSALDO, "de keuze mag het startsaldo niet wegnemen");
+
+  // 2. daarna /credits/start bij het inloggen: vindt een record en laat het staan
+  const naLogin = nieuwSaldoRecord(opslag, STARTSALDO, 2);
+  assert.equal(naLogin.saldo, STARTSALDO);
+  assert.equal(naLogin.model, "claude-opus-5", "en de keuze blijft ook bewaard");
+});
+
+test("klantRegel: de interne notitie van Dirk gaat niet mee naar de klant", () => {
+  const uitHetGrootboek = {
+    tijd: 123, soort: "correctie", email: "ik@voorbeeld.nl",
+    agent: "", model: "", invoer: 0, uitvoer: 0, cacheLees: 0, cacheSchrijf: 0,
+    credits: -100, saldoNa: 300, reden: "coulance na klacht over Dirk",
+  };
+  const naarDeKlant = klantRegel(uitHetGrootboek);
+  // Niet verbergen in de UI maar echt weglaten: anders staat het alsnog in de
+  // netwerk-inspectie van de browser.
+  assert.equal("reden" in naarDeKlant, false);
+  assert.equal(Object.keys(naarDeKlant).indexOf("reden"), -1);
+  assert.equal(JSON.stringify(naarDeKlant).includes("coulance"), false);
+  // Het adres hoeft er ook niet in: het is per definitie je eigen regel.
+  assert.equal("email" in naarDeKlant, false);
+  // Wat de klant wél moet zien blijft staan.
+  assert.equal(naarDeKlant.soort, "correctie");
+  assert.equal(naarDeKlant.credits, -100);
+  assert.equal(naarDeKlant.saldoNa, 300);
+  assert.equal(naarDeKlant.tijd, 123);
+});
+
+test("klantRegel: een verbruiksregel houdt alles wat de klant nodig heeft", () => {
+  const regel = klantRegel({
+    tijd: 9, soort: "verbruik", email: "ik@voorbeeld.nl", agent: "gsc",
+    model: "claude-opus-5", invoer: 120, uitvoer: 30, cacheLees: 5, cacheSchrijf: 7,
+    credits: 14, saldoNa: 186, reden: "",
+  });
+  assert.deepEqual(regel, {
+    tijd: 9, soort: "verbruik", agent: "gsc", model: "claude-opus-5",
+    invoer: 120, uitvoer: 30, cacheLees: 5, cacheSchrijf: 7,
+    credits: 14, saldoNa: 186,
+  });
+  // Een onbekende soort telt als verbruik, niet als correctie.
+  assert.equal(klantRegel({ soort: "iets anders" }).soort, "verbruik");
+  assert.equal(klantRegel(null).credits, 0);
 });
