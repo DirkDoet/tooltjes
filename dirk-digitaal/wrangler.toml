@@ -2,9 +2,14 @@ name = "dirkdigitaal"
 main = "src/index.js"
 compatibility_date = "2026-08-25"
 
-# Het oude workers.dev-adres blijft naast het eigen adres bestaan tot de
-# redirect-URI in Google is omgezet, zodat inloggen niet omvalt.
+# Het oude workers.dev-adres blijft bestaan, maar uitsluitend als doorstuuradres:
+# bestaande links komen via een 301 op het eigen adres uit in plaats van dood te lopen.
 workers_dev = true
+
+# Het ene adres waar alles op uitkomt (DIR-91). De Worker stuurt elk ander adres
+# hiernaartoe door; de redirect-URI hoort bij dit adres in Google Cloud Console.
+[vars]
+CANONIEKE_HOST = "dirkdigitaal.nl"
 
 # Durable Object voor de ephemere sessie (token + laatste-activiteit).
 [[durable_objects.bindings]]
