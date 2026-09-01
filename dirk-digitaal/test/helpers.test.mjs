@@ -93,6 +93,9 @@ import {
   bronnenSysteemTekst,
   bouwSysteem,
   leesBegrensd,
+  bestandSoort,
+  tekstUitDocumentXml,
+  tekstUitDocx,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -2270,4 +2273,133 @@ test("leesBegrensd: leest bytes, niet tekens", async () => {
   assert.equal(uit.teGroot, true);
   const past = await leesBegrensd(new Response("€€"), 6);
   assert.equal(past.tekst, "€€");
+});
+
+
+// ── DIR-107 · Word en PDF als kennisbron ────────────────────────────────────
+
+// Een echte .docx in elkaar zetten: een zip met word/document.xml erin. Zo test de
+// docx-lezer op een bestand zoals Word het maakt, en niet op een nagebouwd geval.
+async function maakDocx(xml, opties) {
+  const o = opties || {};
+  const naam = new TextEncoder().encode(o.naam || "word/document.xml");
+  const ruw = new TextEncoder().encode(xml);
+  let data = ruw;
+  let methode = 0;
+  if (o.deflate !== false) {
+    const stroom = new Blob([ruw]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+    data = new Uint8Array(await new Response(stroom).arrayBuffer());
+    methode = 8;
+  }
+  const lokaal = 30 + naam.length + data.length;
+  const totaal = lokaal + 46 + naam.length + 22;
+  const uit = new Uint8Array(totaal);
+  const dv = new DataView(uit.buffer);
+  let o1 = 0;
+  // lokale kop
+  dv.setUint32(o1, 0x04034b50, true);
+  dv.setUint16(o1 + 8, methode, true);
+  dv.setUint32(o1 + 18, data.length, true);
+  dv.setUint32(o1 + 22, ruw.length, true);
+  dv.setUint16(o1 + 26, naam.length, true);
+  uit.set(naam, o1 + 30);
+  uit.set(data, o1 + 30 + naam.length);
+  // centrale index
+  const c = lokaal;
+  dv.setUint32(c, 0x02014b50, true);
+  dv.setUint16(c + 10, methode, true);
+  dv.setUint32(c + 20, data.length, true);
+  dv.setUint32(c + 24, ruw.length, true);
+  dv.setUint16(c + 28, naam.length, true);
+  dv.setUint32(c + 42, 0, true);
+  uit.set(naam, c + 46);
+  // afsluiter
+  const e = c + 46 + naam.length;
+  dv.setUint32(e, 0x06054b50, true);
+  dv.setUint16(e + 8, 1, true);
+  dv.setUint16(e + 10, 1, true);
+  dv.setUint32(e + 12, 46 + naam.length, true);
+  dv.setUint32(e + 16, c, true);
+  return uit;
+}
+
+const DOCX_XML = '<?xml version="1.0"?><w:document><w:body>'
+  + '<w:p><w:r><w:t>Dirk Doet hanteert een minimumtarief van 750 euro per maand.</w:t></w:r></w:p>'
+  + '<w:p><w:r><w:t>Tweede alinea met een tab</w:t></w:r><w:r><w:tab/><w:t>erin.</w:t></w:r></w:p>'
+  + '</w:body></w:document>';
+
+test("tekstUitDocx: de tekst komt uit een echte, ingepakte .docx (AC-2)", async () => {
+  const uit = await tekstUitDocx(await maakDocx(DOCX_XML));
+  assert.equal(uit.fout, undefined);
+  assert.match(uit.tekst, /Dirk Doet hanteert een minimumtarief van 750 euro per maand\./);
+  assert.match(uit.tekst, /Tweede alinea met een tab\terin\./);
+  // Alinea's worden regels, de XML zelf blijft nergens staan.
+  assert.doesNotMatch(uit.tekst, /<w:/);
+  assert.equal(uit.tekst.split("\n").length, 2);
+});
+
+test("tekstUitDocx: werkt ook als het bestand niet is ingepakt", async () => {
+  const uit = await tekstUitDocx(await maakDocx(DOCX_XML, { deflate: false }));
+  assert.match(uit.tekst, /750 euro/);
+});
+
+test("tekstUitDocx: onderscheidt 'geen Word-bestand' van 'geen tekst erin' (AC-6)", async () => {
+  // Geen zip.
+  const rommel = await tekstUitDocx(new TextEncoder().encode("dit is gewoon tekst, geen zip"));
+  assert.match(rommel.fout, /geen leesbaar Word-bestand/);
+  assert.equal(rommel.tekst, undefined);
+  // Wel een zip, maar zonder word/document.xml.
+  const anders = await tekstUitDocx(await maakDocx(DOCX_XML, { naam: "xl/workbook.xml" }));
+  assert.match(anders.fout, /geen leesbaar Word-bestand/);
+  // Wel een document, maar leeg.
+  const leeg = await tekstUitDocx(await maakDocx('<w:document><w:body></w:body></w:document>'));
+  assert.match(leeg.fout, /geen tekst uit dit document/);
+  assert.notEqual(leeg.fout, rommel.fout, "de twee meldingen horen te verschillen");
+});
+
+test("tekstUitDocumentXml: alinea's, tabs en entiteiten", () => {
+  assert.equal(tekstUitDocumentXml("<w:p><w:t>een</w:t></w:p><w:p><w:t>twee</w:t></w:p>"), "een\ntwee");
+  assert.equal(tekstUitDocumentXml("<w:t>a</w:t><w:tab/><w:t>b</w:t>"), "a\tb");
+  assert.equal(tekstUitDocumentXml("<w:t>Jan &amp; Piet</w:t>"), "Jan & Piet");
+  // &amp; wordt als laatste vertaald, anders wordt dit alsnog een punthaak.
+  assert.equal(tekstUitDocumentXml("<w:t>&amp;lt;niet een tag&amp;gt;</w:t>"), "&lt;niet een tag&gt;");
+  assert.equal(tekstUitDocumentXml(""), "");
+  assert.equal(tekstUitDocumentXml(null), "");
+});
+
+test("bestandSoort: alleen .docx en .pdf (AC-1/NG-2)", () => {
+  assert.equal(bestandSoort("werkwijze.docx"), "docx");
+  assert.equal(bestandSoort("Werkwijze.DOCX"), "docx");
+  assert.equal(bestandSoort("rapport.pdf"), "pdf");
+  assert.equal(bestandSoort("rapport.PDF"), "pdf");
+  // Het oude Word-formaat, spreadsheets en presentaties horen er niet bij.
+  assert.equal(bestandSoort("oud.doc"), "");
+  assert.equal(bestandSoort("cijfers.xlsx"), "");
+  assert.equal(bestandSoort("praatje.pptx"), "");
+  assert.equal(bestandSoort("plaatje.png"), "");
+  assert.equal(bestandSoort("notities.txt"), "");
+  assert.equal(bestandSoort(""), "");
+  assert.equal(bestandSoort(null), "");
+});
+
+test("de tekenlimiet van DIR-99 geldt ook voor een omgezet document (AC-7)", () => {
+  // Een document dat 60.000 tekens oplevert past niet, ook niet in een lege agent.
+  const uitDocument = "x".repeat(60000);
+  assert.equal(bronPast([], uitDocument), false);
+  assert.equal(bronPast([], "x".repeat(50000)), true);
+  // En naast bestaande bronnen telt het gewoon mee.
+  assert.equal(bronPast([{ id: "a", tekst: "y".repeat(30000) }], "x".repeat(20001)), false);
+});
+
+test("conversiekosten landen niet op een klantsaldo (AC-8)", () => {
+  // De kostenregel draagt geen adres, en hoortBijGebruiker geeft bij een leeg adres
+  // nooit een treffer. Geen enkele klant ziet deze regel dus in zijn dashboard, en er
+  // is ook geen saldo waar hij vanaf zou kunnen.
+  const kosten = { soort: "kosten", email: "", agent: "conversie", credits: 12, saldoNa: null };
+  assert.equal(hoortBijGebruiker(kosten, "ik@voorbeeld.nl"), false);
+  assert.equal(hoortBijGebruiker(kosten, ""), false);
+  // Ook niet als iemand toevallig geen adres in zijn sessie heeft.
+  assert.equal(hoortBijGebruiker(kosten, null), false);
+  // En de regel zelf zegt met zoveel woorden dat er geen saldo bij hoort.
+  assert.equal(kosten.saldoNa, null);
 });
