@@ -1191,10 +1191,12 @@ export function koersUitAntwoord(data) {
 
 // Mag deze waarde de prijzen bepalen? Alleen een echt getal binnen de bandbreedte.
 export function bruikbareKoers(waarde) {
-  const n = Number(waarde);
-  if (!Number.isFinite(n)) return null;
-  if (n < KOERS_MIN || n > KOERS_MAX) return null;
-  return n;
+  // typeof-strikt, niet Number(). Met Number() zou "0.95" er gewoon doorheen komen en
+  // zou de garantie bij de bandbreedte en bij de enige aanroeper liggen in plaats van
+  // hier. Een functie die bepaalt wat klanten betalen hoort zelf streng te zijn.
+  if (typeof waarde !== "number" || !Number.isFinite(waarde)) return null;
+  if (waarde < KOERS_MIN || waarde > KOERS_MAX) return null;
+  return waarde;
 }
 
 // Wat wordt de nieuwe stand? De huidige koers is het uitgangspunt: die blijft staan
@@ -1259,7 +1261,7 @@ export function keurCreditsConfig(ruw) {
 // alleen als er iets bruikbaars uitkwam. Boekt niets af en raakt het grootboek niet
 // aan (AC-9); een nieuwe koers geldt alleen voor wat er daarna wordt afgeboekt (AC-8),
 // want elke boeking leest de koers op dat moment.
-async function koersBijwerken(env, nu) {
+export async function koersBijwerken(env, nu) {
   const tijd = Number(nu) || Date.now();
   if (!env.CLIENTS) return { overgeslagen: "geen KV" };
   const cfg = await creditsConfig(env);
@@ -1269,8 +1271,18 @@ async function koersBijwerken(env, nu) {
   let netwerkfout = "";
   try {
     const resp = await fetch(KOERS_BRON_URL, { headers: { Accept: "application/json" } });
-    if (resp.ok) ruw = koersUitAntwoord(await resp.json());
-    else netwerkfout = "De bron antwoordde met status " + resp.status + ".";
+    if (!resp.ok) {
+      netwerkfout = "De bron antwoordde met status " + resp.status + ".";
+    } else {
+      // Het lezen van het antwoord staat apart van het ophalen: een 200 met HTML of
+      // stukke JSON is iets anders dan een bron die plat ligt, en in /admin wil je
+      // lezen wat er echt aan de hand was.
+      try {
+        ruw = koersUitAntwoord(await resp.json());
+      } catch (e) {
+        netwerkfout = "De bron was bereikbaar maar gaf geen leesbaar antwoord.";
+      }
+    }
   } catch (e) {
     netwerkfout = "De bron was niet te bereiken.";
   }
@@ -1278,16 +1290,26 @@ async function koersBijwerken(env, nu) {
   const besluit = koersBesluit(cfg.koers, ruw, tijd);
   if (netwerkfout && !besluit.gelukt) besluit.fout = netwerkfout;
 
+  // Tussen het lezen van de instellingen hierboven en dit moment zit een
+  // netwerkaanroep van seconden. Slaat Dirk in dat venster iets op, dan zou deze taak
+  // zijn koers EN zijn koersAuto:false overschrijven. KV kent geen compare-and-swap,
+  // dus helemaal dicht kan het niet - maar door hier opnieuw te lezen en af te breken
+  // als er iets veranderd is, gaat het venster van seconden naar microseconden.
+  // Bij twijfel wint Dirk: dit is een automatisering, hij is een mens met een reden.
+  if (besluit.gelukt && besluit.koers !== cfg.koers) {
+    const nuCfg = await creditsConfig(env);
+    if (!magKoersBijwerken(nuCfg) || nuCfg.koers !== cfg.koers) {
+      return { overgeslagen: "instellingen zijn tijdens het ophalen gewijzigd" };
+    }
+    // Schrijven op basis van wat er NU staat, zodat een wijziging van iets anders in
+    // datzelfde venster ook niet stilletjes wordt teruggedraaid.
+    await env.CLIENTS.put(CREDITS_KV_SLEUTEL, JSON.stringify(
+      schoneCreditsConfig(Object.assign({}, nuCfg, { koers: besluit.koers }))));
+  }
+
   let oudeStand = null;
   try { oudeStand = JSON.parse(await env.CLIENTS.get(KOERS_KV_SLEUTEL)); } catch (e) { /* nog niets */ }
   await env.CLIENTS.put(KOERS_KV_SLEUTEL, JSON.stringify(nieuweKoersStand(oudeStand, besluit)));
-
-  // Alleen schrijven als de koers echt verandert: een mislukte poging hoort de
-  // instellingen niet aan te raken.
-  if (besluit.gelukt && besluit.koers !== cfg.koers) {
-    await env.CLIENTS.put(CREDITS_KV_SLEUTEL, JSON.stringify(
-      schoneCreditsConfig(Object.assign({}, cfg, { koers: besluit.koers }))));
-  }
   return besluit;
 }
 

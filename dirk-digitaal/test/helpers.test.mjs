@@ -81,6 +81,7 @@ import {
   koersBesluit,
   magKoersBijwerken,
   nieuweKoersStand,
+  koersBijwerken,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -1794,6 +1795,12 @@ test("bruikbareKoers: alleen binnen 0,80 en 1,10 (AC-3)", () => {
   assert.equal(bruikbareKoers(0), null);
   assert.equal(bruikbareKoers(-0.92), null);
   assert.equal(bruikbareKoers("geen getal"), null);
+  // typeof-strikt: een getal als tekst telt niet. Anders zou de garantie bij de band
+  // en bij de aanroeper liggen in plaats van in deze functie.
+  assert.equal(bruikbareKoers("0.95"), null);
+  assert.equal(bruikbareKoers("0,95"), null);
+  assert.equal(bruikbareKoers(true), null);
+  assert.equal(bruikbareKoers([0.95]), null);
   assert.equal(bruikbareKoers(null), null);
   assert.equal(bruikbareKoers(undefined), null);
   assert.equal(bruikbareKoers(NaN), null);
@@ -1888,4 +1895,107 @@ test("een nieuwe koers raakt alleen toekomstige afboekingen (AC-8)", () => {
   const regel = klantRegel({ tijd: 1, soort: "verbruik", agent: "gsc", credits: oudeKoers, saldoNa: 5 });
   assert.equal(regel.credits, oudeKoers);
   assert.equal("koers" in regel, false);
+});
+
+
+// ── DIR-103 · de taak zelf, met een neppe bron en KV ────────────────────────
+// De losse functies waren gedekt, maar de VOLGORDE in koersBijwerken niet: lezen,
+// netwerk, opnieuw lezen, schrijven. Juist daar zit het venster waarin een
+// handmatige wijziging van Dirk overschreven kon worden.
+
+function nepBron(maker) {
+  const echt = globalThis.fetch;
+  globalThis.fetch = async (...args) => maker(...args);
+  return () => { globalThis.fetch = echt; };
+}
+
+const KOERS_CFG = {
+  startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365, koersAuto: true,
+};
+
+function koersOmgeving(begin) {
+  const store = { "config:credits": JSON.stringify(Object.assign({}, KOERS_CFG, begin || {})) };
+  return { env: { CLIENTS: nepKv(store) }, store, cfg: () => JSON.parse(store["config:credits"]) };
+}
+
+test("koersBijwerken: een goede koers wordt opgeslagen", async () => {
+  const { env, cfg, store } = koersOmgeving();
+  const terug = nepBron(async () => new Response(JSON.stringify({ rates: { EUR: 0.87 } })));
+  try {
+    const uit = await koersBijwerken(env, 1000);
+    assert.equal(uit.gelukt, true);
+    assert.equal(cfg().koers, 0.87);
+    assert.equal(JSON.parse(store["config:koersbron"]).bijgewerkt, 1000);
+  } finally { terug(); }
+});
+
+test("koersBijwerken: een wijziging tijdens het ophalen wint van de taak", async () => {
+  // Dit is het venster dat de reviewer aanwees: de taak leest de instellingen, doet
+  // er seconden over om de koers op te halen, en schreef daarna terug op basis van de
+  // OUDE instellingen. Sloeg Dirk in dat venster op, dan waren zijn koers én zijn
+  // koersAuto:false weg. De neppe bron doet hieronder precies dat: hij wijzigt de
+  // opslag terwijl het "netwerk" bezig is.
+  const { env, cfg, store } = koersOmgeving();
+  const terug = nepBron(async () => {
+    store["config:credits"] = JSON.stringify(
+      Object.assign({}, KOERS_CFG, { koers: 0.95, koersAuto: false }));
+    return new Response(JSON.stringify({ rates: { EUR: 0.87 } }));
+  });
+  try {
+    const uit = await koersBijwerken(env, 1000);
+    assert.equal(uit.gelukt, undefined, "de taak hoort af te breken, niet te slagen");
+    assert.match(uit.overgeslagen, /gewijzigd/);
+    assert.equal(cfg().koers, 0.95, "de handmatige koers van Dirk blijft staan");
+    assert.equal(cfg().koersAuto, false, "en zijn schakelaar ook");
+  } finally { terug(); }
+});
+
+test("koersBijwerken: staat de schakelaar al uit, dan gebeurt er niets", async () => {
+  const { env, cfg } = koersOmgeving({ koersAuto: false, koers: 0.95 });
+  let geroepen = false;
+  const terug = nepBron(async () => { geroepen = true; return new Response("{}"); });
+  try {
+    const uit = await koersBijwerken(env, 1000);
+    assert.match(uit.overgeslagen, /handmatig/);
+    assert.equal(geroepen, false, "er hoort niet eens een aanroep naar de bron te gaan");
+    assert.equal(cfg().koers, 0.95);
+  } finally { terug(); }
+});
+
+test("koersBijwerken: bereikbaar maar onleesbaar is iets anders dan onbereikbaar", async () => {
+  // Een 200 met HTML erin betekent niet dat de bron plat lag. Datzelfde onderscheid
+  // maakten we al tussen "gaf niets" en "gaf 0"; hier hoort het ook te staan.
+  const { env, cfg, store } = koersOmgeving();
+  const terug = nepBron(async () => new Response("<html>onderhoud</html>"));
+  try {
+    const uit = await koersBijwerken(env, 1000);
+    assert.equal(uit.gelukt, false);
+    assert.match(uit.fout, /bereikbaar maar/);
+    assert.doesNotMatch(uit.fout, /niet te bereiken/);
+    assert.equal(cfg().koers, 0.92, "de koers blijft staan");
+    assert.equal(JSON.parse(store["config:koersbron"]).bijgewerkt, 0);
+  } finally { terug(); }
+});
+
+test("koersBijwerken: een bron die plat ligt meldt dat ook zo", async () => {
+  const { env, cfg } = koersOmgeving();
+  const terug = nepBron(async () => { throw new Error("ECONNREFUSED"); });
+  try {
+    const uit = await koersBijwerken(env, 1000);
+    assert.equal(uit.gelukt, false);
+    assert.match(uit.fout, /niet te bereiken/);
+    assert.equal(cfg().koers, 0.92);
+  } finally { terug(); }
+});
+
+test("koersBijwerken: een waarde buiten de band laat de koers staan", async () => {
+  const { env, cfg, store } = koersOmgeving();
+  const terug = nepBron(async () => new Response(JSON.stringify({ rates: { EUR: 1.1676 } })));
+  try {
+    const uit = await koersBijwerken(env, 1000);
+    assert.equal(uit.gelukt, false);
+    assert.match(uit.fout, /genegeerd/);
+    assert.equal(cfg().koers, 0.92);
+    assert.equal(JSON.parse(store["config:koersbron"]).foutTijd, 1000);
+  } finally { terug(); }
 });
