@@ -1018,6 +1018,41 @@ async function bewaarBronnen(env, key, lijst) {
 // AC-3/AC-4 - een pagina één keer ophalen en er de leesbare tekst uit halen. Mislukt
 // het, dan komt er een foutmelding terug en wordt er niets opgeslagen: liever geen
 // bron dan een halve.
+// Hoeveel ruwe bytes we hoogstens van een pagina lezen. Een bron van 50.000 tekens
+// past hier ruim in, ook met alle opmaak eromheen; dit is bedoeld om te voorkomen dat
+// een verkeerd adres (een download, een videobestand) het verzoek opblaast.
+const BRON_OPHAAL_MAX_BYTES = 2 * 1024 * 1024;
+
+// Leest een antwoord tot een grens en stopt daarboven. Zonder grens zou een groot
+// bestand het verzoek op zijn geheugen laten sneuvelen, en dan is de enige melding
+// "niet te bereiken" - terwijl de pagina er prima was en alleen te groot. Dat is
+// precies de verkeerde aanwijzing om mee verder te zoeken.
+export async function leesBegrensd(resp, maxBytes) {
+  const grens = Math.max(1, Number(maxBytes) || 0);
+  const opgegeven = Number(resp.headers && resp.headers.get("Content-Length"));
+  // Zegt de server zelf al dat het te groot is, dan hoeven we niets te lezen.
+  if (Number.isFinite(opgegeven) && opgegeven > grens) return { teGroot: true };
+  if (!resp.body) return { tekst: await resp.text() };
+
+  const lezer = resp.body.getReader();
+  const stukken = [];
+  let gelezen = 0;
+  while (true) {
+    const { done, value } = await lezer.read();
+    if (done) break;
+    gelezen += value.byteLength;
+    if (gelezen > grens) {
+      try { await lezer.cancel(); } catch (e) { /* al klaar */ }
+      return { teGroot: true };
+    }
+    stukken.push(value);
+  }
+  const alles = new Uint8Array(gelezen);
+  let i = 0;
+  for (const stuk of stukken) { alles.set(stuk, i); i += stuk.byteLength; }
+  return { tekst: new TextDecoder("utf-8").decode(alles) };
+}
+
 async function haalBronOp(url) {
   const adres = geldigeBronUrl(url);
   if (!adres) return { fout: "Dat is geen geldig webadres (alleen http of https)." };
@@ -1026,7 +1061,13 @@ async function haalBronOp(url) {
       headers: { "User-Agent": "DirkDigitaal/1.0 (+https://dirkdigitaal.nl)", Accept: "text/html,text/plain" },
     });
     if (!resp.ok) return { fout: "De pagina antwoordde met status " + resp.status + "." };
-    const tekst = tekstUitHtml(await resp.text());
+    const gelezen = await leesBegrensd(resp, BRON_OPHAAL_MAX_BYTES);
+    if (gelezen.teGroot) {
+      return { fout: "Die pagina is te groot om op te halen (meer dan "
+        + Math.round(BRON_OPHAAL_MAX_BYTES / (1024 * 1024)) + " MB). Wijs naar een pagina met alleen de tekst,"
+        + " of plak de tekst zelf als bron." };
+    }
+    const tekst = tekstUitHtml(gelezen.tekst);
     if (!tekst) return { fout: "Er was geen leesbare tekst te vinden op die pagina." };
     return { tekst };
   } catch (e) {
@@ -5828,6 +5869,14 @@ const ADMIN_HTML = `<!doctype html>
 
     var meter=document.createElement('p'); meter.className='bronmeter'; meter.id='bronmeter';
     blok.appendChild(meter);
+    // Zonder deze zin zou Dirk bij een kort bronnetje concluderen dat de cache stuk
+    // is, terwijl hij simpelweg nog niet aanslaat.
+    var cache=document.createElement('p'); cache.className='muted';
+    cache.textContent='De korting op herhaald gebruik gaat pas in vanaf ongeveer 4.000 tekens; '
+      + 'dat is de ondergrens die Anthropic aanhoudt voordat het loont om iets te bewaren. '
+      + 'Blijf je daaronder, dan kost elk bericht gewoon de volle prijs voor deze bronnen — '
+      + 'er is dan niets stuk, er valt alleen nog niets te besparen.';
+    blok.appendChild(cache);
     var lijst=document.createElement('div'); lijst.id='bronlijst'; blok.appendChild(lijst);
 
     // Toevoegen: tekst plakken of een .txt/.md kiezen, of een URL.

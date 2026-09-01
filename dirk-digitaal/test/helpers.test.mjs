@@ -92,6 +92,7 @@ import {
   tekstUitHtml,
   bronnenSysteemTekst,
   bouwSysteem,
+  leesBegrensd,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -2219,4 +2220,54 @@ test("schoneBron: de herkomst blijft bewaard, de rest wordt begrensd", () => {
   // Titels worden afgekapt in plaats van geweigerd.
   assert.equal(schoneBron({ titel: "t".repeat(200) }).titel.length, 120);
   assert.equal(schoneBron(null).tekst, "");
+});
+
+
+// ── DIR-99 · een pagina lezen met een grens erop ────────────────────────────
+// Zonder grens sneuvelt een groot bestand op het geheugen van het verzoek, en dan is
+// de enige melding "niet te bereiken" — terwijl de pagina er prima was en alleen te
+// groot. Dat is de verkeerde aanwijzing om mee verder te zoeken.
+
+test("leesBegrensd: iets kleins komt gewoon door", async () => {
+  const uit = await leesBegrensd(new Response("hallo wereld"), 1000);
+  assert.equal(uit.tekst, "hallo wereld");
+  assert.equal(uit.teGroot, undefined);
+});
+
+test("leesBegrensd: een opgegeven lengte boven de grens wordt niet eens gelezen", async () => {
+  const resp = new Response("x".repeat(50), { headers: { "Content-Length": "999999" } });
+  const uit = await leesBegrensd(resp, 100);
+  assert.equal(uit.teGroot, true);
+  assert.equal(uit.tekst, undefined);
+  // De body is niet aangeraakt, dus die is nog te lezen.
+  assert.equal(resp.bodyUsed, false);
+});
+
+test("leesBegrensd: zonder opgegeven lengte stopt hij alsnog op de grens", async () => {
+  // Een server die chunked stuurt geeft geen Content-Length mee; dan moet de grens
+  // tijdens het lezen bewaken, anders is er geen grens.
+  const stroom = new ReadableStream({
+    start(c) {
+      const blok = new Uint8Array(1000);
+      for (let i = 0; i < 10; i++) c.enqueue(blok);
+      c.close();
+    },
+  });
+  const uit = await leesBegrensd(new Response(stroom), 2500);
+  assert.equal(uit.teGroot, true);
+});
+
+test("leesBegrensd: precies op de grens mag nog", async () => {
+  const uit = await leesBegrensd(new Response("x".repeat(100)), 100);
+  assert.equal(uit.teGroot, undefined);
+  assert.equal(uit.tekst.length, 100);
+});
+
+test("leesBegrensd: leest bytes, niet tekens", async () => {
+  // Een euroteken is één teken maar drie bytes; de grens gaat over wat er echt
+  // binnenkomt, want dat is wat het geheugen kost.
+  const uit = await leesBegrensd(new Response("€€"), 5);
+  assert.equal(uit.teGroot, true);
+  const past = await leesBegrensd(new Response("€€"), 6);
+  assert.equal(past.tekst, "€€");
 });
