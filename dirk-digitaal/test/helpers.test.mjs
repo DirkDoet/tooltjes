@@ -68,6 +68,7 @@ import {
   reserveringVerlopen,
   verrekenActie,
   saldoEvent,
+  metGeduld,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -1421,4 +1422,41 @@ test("saldoEvent: de bestaande SSE-lezer struikelt niet over het extra event", (
     'data: [DONE]',
   ].join("\n");
   assert.equal(extractTextFromSSE(sse), "Hallo wereld");
+});
+
+
+// ── DIR-102 · een traag grootboek mag het antwoord niet ophouden ────────────
+// Vóór DIR-102 stond de boeking in waitUntil, dus een hikkende Durable Object raakte
+// de gebruiker niet. Nu wachten we er kort op om het saldo mee te kunnen sturen, en
+// deze tests leggen vast dat dat wachten begrensd blijft.
+
+test("metGeduld: een snel antwoord komt gewoon door", async () => {
+  const uit = await metGeduld(Promise.resolve({ saldo: 42 }), 1000);
+  assert.deepEqual(uit, { saldo: 42 });
+  // Ook een waarde die al klaar is.
+  assert.equal(await metGeduld(7, 1000), 7);
+});
+
+test("metGeduld: duurt de boeking te lang, dan gaat het antwoord zonder saldo", async () => {
+  // Een belofte die nooit afkomt staat voor een Durable Object die blijft hangen.
+  const nooit = new Promise(() => {});
+  const begin = Date.now();
+  const uit = await metGeduld(nooit, 20);
+  assert.equal(uit, null, "geen saldo, dus straks ook geen saldo-event");
+  assert.equal(Date.now() - begin < 1000, true, "en er wordt niet op gewacht");
+  // saldoEvent maakt er dan niets van, dus de pagina laat het oude bedrag staan.
+  assert.equal(saldoEvent(uit), "");
+});
+
+test("metGeduld: een mislukte boeking breekt het antwoord niet af", async () => {
+  const stuk = Promise.reject(new Error("grootboek onbereikbaar"));
+  const uit = await metGeduld(stuk, 1000);
+  assert.equal(uit, null);
+  assert.equal(saldoEvent(uit), "");
+});
+
+test("metGeduld: een onzinnige wachttijd valt terug op meteen opgeven", async () => {
+  assert.equal(await metGeduld(new Promise(() => {}), 0), null);
+  assert.equal(await metGeduld(new Promise(() => {}), -5), null);
+  assert.equal(await metGeduld(new Promise(() => {}), "geen getal"), null);
 });

@@ -2779,6 +2779,24 @@ async function buildCollegas(env, stub, token, leadKey, body, ctxData) {
 // Geen getal, geen event: bij een mislukte of overgeslagen boeking sturen we liever
 // niets dan een bedrag waarvan we niet zeker zijn. De pagina laat dan staan wat er
 // stond, in plaats van even leeg of nul te tonen (AC-7).
+// DIR-102 - hoe lang het antwoord hooguit op de boeking wacht.
+//
+// De boeking stond vroeger in waitUntil: een hikkende Durable Object raakte de
+// gebruiker dan niet. Nu wachten we er kort op, want anders kan het nieuwe saldo niet
+// mee. Duurt het langer dan dit, dan gaat het antwoord zonder saldo-event de deur uit
+// en laat de pagina het oude bedrag staan (AC-7). De boeking zelf loopt gewoon door
+// via waitUntil, dus er gaat niets verloren - het bedrag klopt weer bij het volgende
+// antwoord of zodra het dashboard opengaat.
+const SALDO_GEDULD_MS = 1000;
+
+// Wacht hooguit `ms` op een belofte. Mislukt hij, of duurt het te lang, dan is de
+// uitkomst null: een antwoord dat al gemaakt is mag nooit blijven hangen of stukgaan
+// op de administratie erachter.
+export function metGeduld(belofte, ms) {
+  const wachten = new Promise((klaar) => setTimeout(() => klaar(null), Math.max(0, Number(ms) || 0)));
+  return Promise.race([Promise.resolve(belofte).catch(() => null), wachten]);
+}
+
 export function saldoEvent(na) {
   if (!na || typeof na.saldo !== "number") return "";
   const evt = { type: "dd_saldo", saldo: na.saldo };
@@ -5573,10 +5591,11 @@ async function handleChat(request, env, ctx, krediet) {
   let onbereikbaar = false;
   try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
-  // DIR-102: even wachten tot de boeking rond is, zodat het nieuwe saldo mee kan
-  // met dit antwoord. Het is dezelfde aanroep als voorheen, alleen niet meer
-  // fire-and-forget - er komt geen extra verzoek bij.
-  const naSaldo = await verrekenKrediet(env, ctx, krediet, "gsc", meter);
+  // DIR-102: kort wachten tot de boeking rond is, zodat het nieuwe saldo mee kan met
+  // dit antwoord. Dezelfde aanroep als voorheen, alleen niet meer fire-and-forget -
+  // er komt geen extra verzoek bij. Duurt het te lang of gaat het mis, dan gaat het
+  // antwoord gewoon de deur uit zonder saldo-event.
+  const naSaldo = await metGeduld(verrekenKrediet(env, ctx, krediet, "gsc", meter), SALDO_GEDULD_MS);
   if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
   if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
@@ -5697,10 +5716,11 @@ async function handleGa4Chat(request, env, ctx, krediet) {
   let onbereikbaar = false;
   try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
-  // DIR-102: even wachten tot de boeking rond is, zodat het nieuwe saldo mee kan
-  // met dit antwoord. Het is dezelfde aanroep als voorheen, alleen niet meer
-  // fire-and-forget - er komt geen extra verzoek bij.
-  const naSaldo = await verrekenKrediet(env, ctx, krediet, "ga4", meter);
+  // DIR-102: kort wachten tot de boeking rond is, zodat het nieuwe saldo mee kan met
+  // dit antwoord. Dezelfde aanroep als voorheen, alleen niet meer fire-and-forget -
+  // er komt geen extra verzoek bij. Duurt het te lang of gaat het mis, dan gaat het
+  // antwoord gewoon de deur uit zonder saldo-event.
+  const naSaldo = await metGeduld(verrekenKrediet(env, ctx, krediet, "ga4", meter), SALDO_GEDULD_MS);
   if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
   if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
@@ -5862,10 +5882,11 @@ async function handleAdsChat(request, env, ctx, krediet) {
   let onbereikbaar = false;
   try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
-  // DIR-102: even wachten tot de boeking rond is, zodat het nieuwe saldo mee kan
-  // met dit antwoord. Het is dezelfde aanroep als voorheen, alleen niet meer
-  // fire-and-forget - er komt geen extra verzoek bij.
-  const naSaldo = await verrekenKrediet(env, ctx, krediet, "ads", meter);
+  // DIR-102: kort wachten tot de boeking rond is, zodat het nieuwe saldo mee kan met
+  // dit antwoord. Dezelfde aanroep als voorheen, alleen niet meer fire-and-forget -
+  // er komt geen extra verzoek bij. Duurt het te lang of gaat het mis, dan gaat het
+  // antwoord gewoon de deur uit zonder saldo-event.
+  const naSaldo = await metGeduld(verrekenKrediet(env, ctx, krediet, "ads", meter), SALDO_GEDULD_MS);
   if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
   if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
@@ -5929,10 +5950,11 @@ async function handleContentChat(request, env, ctx, krediet) {
   let onbereikbaar = false;
   try { finalText = await chatLoop(env, system, convo, col.tools, col.dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
-  // DIR-102: even wachten tot de boeking rond is, zodat het nieuwe saldo mee kan
-  // met dit antwoord. Het is dezelfde aanroep als voorheen, alleen niet meer
-  // fire-and-forget - er komt geen extra verzoek bij.
-  const naSaldo = await verrekenKrediet(env, ctx, krediet, "anton", meter);
+  // DIR-102: kort wachten tot de boeking rond is, zodat het nieuwe saldo mee kan met
+  // dit antwoord. Dezelfde aanroep als voorheen, alleen niet meer fire-and-forget -
+  // er komt geen extra verzoek bij. Duurt het te lang of gaat het mis, dan gaat het
+  // antwoord gewoon de deur uit zonder saldo-event.
+  const naSaldo = await metGeduld(verrekenKrediet(env, ctx, krediet, "anton", meter), SALDO_GEDULD_MS);
   if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
   if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
