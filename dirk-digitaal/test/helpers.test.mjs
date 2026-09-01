@@ -82,6 +82,8 @@ import {
   magKoersBijwerken,
   nieuweKoersStand,
   koersBijwerken,
+  keerZoDuurAlsStandaard,
+  keerTekst,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -1113,19 +1115,32 @@ test("modelVoorKlant: de keuze van de klant wint van /admin (AC-6)", () => {
   assert.equal(modelVoorKlant("claude-sonnet-5", "claude-opus-5"), "claude-sonnet-5");
 });
 
-test("modelVoorKlant: zonder eigen keuze geldt de instelling in /admin", () => {
-  assert.equal(modelVoorKlant("", "claude-opus-4-8"), "claude-opus-4-8");
-  assert.equal(modelVoorKlant(null, "claude-opus-5"), "claude-opus-5");
-  // Staat er in /admin ook niets bruikbaars, dan de standaard.
-  assert.equal(modelVoorKlant("", ""), "claude-sonnet-5");
+test("modelVoorKlant: zonder eigen keuze altijd Standaard (AC-1)", () => {
+  // DIR-105: hiervoor volgde zo iemand de instelling in /admin. Zet Dirk die op
+  // Opus, dan betaalde een klant ineens ongeveer 2,5x zoveel per vraag zonder er
+  // ooit op geklikt te hebben. Nu is het altijd Standaard.
+  assert.equal(modelVoorKlant(""), "claude-sonnet-5");
+  assert.equal(modelVoorKlant(null), "claude-sonnet-5");
+  assert.equal(modelVoorKlant(undefined), "claude-sonnet-5");
+  // En Standaard is ook echt de goedkoopste van de drie, anders is de regel zinloos.
+  const standaard = modelPrijs(modelVoorKlant(""));
+  for (const k of klantModelKeuzes()) {
+    assert.equal(modelPrijs(k.id).uitvoer >= standaard.uitvoer, true, k.label);
+  }
 });
 
-test("modelVoorKlant: een verzonnen model komt er nooit doorheen", () => {
+test("modelVoorKlant: een verzonnen model telt als 'niets gekozen' (AC-1)", () => {
   // Anders zou een geknoeide of verouderde waarde alsnog naar de API gaan, en
   // rekent de afboeking uit DIR-92 op een model dat niet bestaat.
-  assert.equal(modelVoorKlant("gpt-4", "claude-opus-5"), "claude-opus-5");
-  assert.equal(modelVoorKlant("claude-opus-5-super", "claude-sonnet-5"), "claude-sonnet-5");
-  assert.equal(modelVoorKlant("gpt-4", "ook-verzonnen"), "claude-sonnet-5");
+  assert.equal(modelVoorKlant("gpt-4"), "claude-sonnet-5");
+  assert.equal(modelVoorKlant("claude-opus-5-super"), "claude-sonnet-5");
+  assert.equal(modelVoorKlant(42), "claude-sonnet-5");
+});
+
+test("modelVoorKlant: een echte keuze blijft staan (AC-3)", () => {
+  for (const k of klantModelKeuzes()) {
+    assert.equal(modelVoorKlant(k.id), k.id, k.label + " hoort te blijven staan");
+  }
 });
 
 test("klantmodellen: drie treden in gewone woorden, Standaard voorop (AC-1c/AC-4)", () => {
@@ -1134,7 +1149,7 @@ test("klantmodellen: drie treden in gewone woorden, Standaard voorop (AC-1c/AC-4
   assert.deepEqual(keuzes.map((k) => k.label), ["Standaard", "Beter", "Super"]);
   // Standaard staat vooraan en is het model waar iemand zonder keuze op draait.
   assert.equal(keuzes[0].id, "claude-sonnet-5");
-  assert.equal(modelVoorKlant("", ""), keuzes[0].id);
+  assert.equal(modelVoorKlant(""), keuzes[0].id);
   // De namen zijn korte woorden, want ze vullen ook de Model-kolom (AC-5).
   for (const k of keuzes) assert.equal(k.label.split(" ").length, 1, k.label + " is geen kort woord");
 });
@@ -1172,8 +1187,12 @@ test("klantmodellen: Beter en Super zeggen allebei wat ze kosten (AC-3)", () => 
   // Ze kosten hetzelfde - dat is een besluit van Dirk, geen vergissing. De uitleg
   // hoort dat dan ook bij allebei eerlijk te noemen in plaats van bij een van de twee.
   const [, beter, sup] = klantModelKeuzes();
-  assert.match(beter.uitleg, /2,5x zoveel credits/);
-  assert.match(sup.uitleg, /2,5x zoveel credits/);
+  // DIR-105: het getal komt uit de prijstabel, dus hier staat geen 2,5 hardcoded.
+  // Anders zou een prijswijziging deze test rood maken op een getal in plaats van op
+  // de zin die dan verouderd is - precies wat DIR-105 wilde wegnemen.
+  for (const k of [beter, sup]) {
+    assert.match(k.uitleg, new RegExp(keerTekst(keerZoDuurAlsStandaard(k.id)).replace(",", "[,.]") + "x zoveel credits"));
+  }
   assert.equal(modelPrijs(beter.id).invoer, modelPrijs(sup.id).invoer);
   assert.equal(modelPrijs(beter.id).uitvoer, modelPrijs(sup.id).uitvoer);
 });
@@ -1729,8 +1748,8 @@ test("een keuze van vóór DIR-101 blijft gewoon geldig (AC-6)", () => {
   // Er wordt niemand teruggezet: dezelfde opgeslagen waarde blijft werken.
   assert.equal(geldigKlantModel("claude-sonnet-5"), "claude-sonnet-5");
   assert.equal(geldigKlantModel("claude-opus-5"), "claude-opus-5");
-  assert.equal(modelVoorKlant("claude-sonnet-5", "claude-opus-5"), "claude-sonnet-5");
-  assert.equal(modelVoorKlant("claude-opus-5", "claude-sonnet-5"), "claude-opus-5");
+  assert.equal(modelVoorKlant("claude-sonnet-5"), "claude-sonnet-5");
+  assert.equal(modelVoorKlant("claude-opus-5"), "claude-opus-5");
   // En ze horen bij de juiste trede in de nieuwe namen.
   const opId = (id) => klantModelKeuzes().find((k) => k.id === id).label;
   assert.equal(opId("claude-sonnet-5"), "Standaard");
@@ -1761,7 +1780,10 @@ test("Beter en Super rekenen allebei het Opus-tarief af (AC-8)", () => {
   const sup = kosten("claude-opus-5");
   assert.equal(beter, sup);
   assert.equal(beter > standaard, true);
-  assert.equal(Math.abs(beter / standaard - 2.5) < 0.05, true, standaard + " -> " + beter);
+  // De verhouding komt uit de prijstabel, niet uit een hardcoded 2,5 (DIR-105).
+  const verwacht = keerZoDuurAlsStandaard("claude-opus-4-8");
+  assert.equal(Math.abs(beter / standaard - verwacht) < 0.05, true,
+    "afgeboekt " + standaard + " -> " + beter + ", verwacht ongeveer " + verwacht + "x");
 });
 
 // ── DIR-103 · de dollarkoers automatisch bijhouden ──────────────────────────
@@ -1998,4 +2020,53 @@ test("koersBijwerken: een waarde buiten de band laat de koers staan", async () =
     assert.equal(cfg().koers, 0.92);
     assert.equal(JSON.parse(store["config:koersbron"]).foutTijd, 1000);
   } finally { terug(); }
+});
+
+
+// ── DIR-105 · de uitlegzin en de prijstabel kunnen niet uit elkaar lopen ────
+
+test("de uitleg bij Beter en Super noemt het getal uit de prijstabel (AC-6)", () => {
+  // Het getal in de zin wordt afgeleid uit dezelfde tabel als de afboeking, dus het
+  // kán niet verouderen. Deze test toont dat de zin en de tabel hetzelfde zeggen.
+  for (const id of ["claude-opus-4-8", "claude-opus-5"]) {
+    const keuze = klantModelKeuzes().find((k) => k.id === id);
+    const echt = keerTekst(keerZoDuurAlsStandaard(id));
+    assert.match(keuze.uitleg, new RegExp(echt.replace(",", "[,.]") + "x zoveel credits"),
+      keuze.label + ": de zin op het scherm hoort " + echt + "x te noemen");
+  }
+});
+
+test("verandert het tarief, dan valt dit om en wijst het naar de zin (AC-7)", () => {
+  // Vandaag is de verhouding precies 2,5. Verandert iemand het Opus-tarief, dan faalt
+  // deze test met een melding die naar de tekst op het scherm wijst - niet naar een
+  // los getal in een testbestand. Dat is het verschil dat DIR-105 wilde.
+  const beter = keerZoDuurAlsStandaard("claude-opus-4-8");
+  const sup = keerZoDuurAlsStandaard("claude-opus-5");
+  const zin = klantModelKeuzes().find((k) => k.id === "claude-opus-4-8").uitleg;
+  assert.equal(beter, 2.5,
+    "De prijstabel is gewijzigd. Op het scherm staat nu: \"" + zin + "\" - controleer of"
+    + " die zin nog klopt en of \"ongeveer\" hier nog eerlijk is.");
+  assert.equal(sup, 2.5,
+    "Beter en Super horen hetzelfde te kosten; dat is een besluit van Dirk uit DIR-101.");
+});
+
+test("één getal in de zin klopt alleen als invoer en uitvoer gelijk opschalen (AC-7)", () => {
+  // De zin belooft één verhouding voor de hele vraag. Dat mag alleen zolang invoer en
+  // uitvoer met dezelfde factor schalen; lopen ze uiteen, dan hangt de werkelijke
+  // verhouding af van de vraag en is één getal misleidend, wat je er ook invult.
+  const standaard = modelPrijs("claude-sonnet-5");
+  for (const id of ["claude-opus-4-8", "claude-opus-5"]) {
+    const p = modelPrijs(id);
+    assert.equal(p.invoer / standaard.invoer, p.uitvoer / standaard.uitvoer,
+      id + ": invoer en uitvoer schalen niet meer gelijk op, dus één getal in de"
+      + " uitlegzin klopt niet meer. De zin moet dan anders geformuleerd worden.");
+  }
+});
+
+test("keerTekst: Nederlandse notatie, afgerond op één decimaal", () => {
+  assert.equal(keerTekst(2.5), "2,5");
+  assert.equal(keerTekst(3), "3");
+  assert.equal(keerTekst(2.46), "2,5");
+  assert.equal(keerTekst(2.44), "2,4");
+  assert.equal(keerTekst("geen getal"), "0");
 });
