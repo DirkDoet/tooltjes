@@ -5109,7 +5109,7 @@ const ADMIN_HTML = `<!doctype html>
         <div class="veld"><label for="cDagen">Bewaartermijn (dagen)</label><input id="cDagen" type="text"><span class="hint">Oudere regels worden opgeruimd. Het saldo verandert daar nooit door.</span></div>
         <div class="knoppen"><button id="cBewaar">Instellingen bewaren</button><span class="melding" id="cMelding"></span></div>
         <p class="muted">Geldt vanaf nu: het startsaldo voor wie hierna voor het eerst inlogt, koers en marge voor wat hierna wordt afgeboekt.</p>
-        <p class="muted"><b>Let op met de onderste twee.</b> Verlaag je de bewaartermijn of het maximum, dan worden grootboekregels die daarbuiten vallen bij de eerstvolgende boeking opgeruimd, en die komen niet terug. Verlagen vraagt daarom eerst om bevestiging, met het aantal regels erbij dat het nu zou kosten. Verhogen kan altijd zonder gevolgen.</p>
+        <p class="muted"><b>Let op met de onderste twee.</b> Verlaag je de bewaartermijn of het maximum, dan worden grootboekregels die daarbuiten vallen opgeruimd zodra er voor die klant weer geboekt wordt, en die komen niet terug. Verlagen vraagt daarom eerst om bevestiging, met het aantal regels erbij dat het uiteindelijk kost. Verhogen kan altijd zonder gevolgen.</p>
       </div>
       <div class="balk">
         <div class="veld"><label for="cEmail">Handmatig boeken &mdash; e-mailadres</label><input id="cEmail" type="text" placeholder="naam@bedrijf.nl"></div>
@@ -5563,8 +5563,12 @@ const ADMIN_HTML = `<!doctype html>
     }).then(function(res){
       if(res.status===409 && res.j && res.j.bevestigingNodig){
         var n=res.j.aantal;
+        // "Uiteindelijk", niet "nu": het opruimen loopt gefaseerd en begint pas bij de
+        // eerstvolgende boeking van die klant. Wie meteen gaat kijken ziet er dus
+        // minder weg, en dan ga je twijfelen aan het enige getal waar dit op rust.
         var wat = (typeof n === 'number')
-          ? ('Dit ruimt nu ' + n + ' grootboekregel' + (n===1?'':'s') + ' op.')
+          ? ('Dit ruimt uiteindelijk ' + n + ' grootboekregel' + (n===1?'':'s') + ' op, '
+             + 'verspreid over de eerstvolgende boekingen van die klanten.')
           : 'Dit ruimt grootboekregels op (aantal onbekend: het grootboek was even niet te lezen).';
         if(confirm(wat + ' Die komen niet terug. Doorgaan?')){ bewaarCredits(true); }
         else {

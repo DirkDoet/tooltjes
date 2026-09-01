@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import worker from "../src/index.js";
 import {
   buildGoogleAuthUrl,
   parseCookies,
@@ -1571,4 +1572,106 @@ test("snoeiAantal: telt de union, niet de som (AC-2)", () => {
   // Geen maximum meegegeven blijft "niets opruimen" (de veilige kant uit DIR-100).
   assert.equal(snoeiAantal(0, 5000, undefined), 0);
   assert.equal(snoeiAantal(9, 5000, undefined), 9);
+});
+
+
+// ── DIR-104 · de volgorde in de route zelf ─────────────────────────────────
+// De losse functies zijn gedekt, maar de VOLGORDE niet: keuren, normaliseren, de
+// huidige instelling lezen, de poort, en pas dan schrijven. Verhuist die put later
+// een paar regels omhoog, of vervangt iemand cfg door de ruwe body in de
+// vergelijking, dan valt AC-3 om zonder dat er een test faalt. Daarom hier de route
+// zelf, met een neppe KV en Durable Object eromheen.
+
+function nepCredits(antwoord) {
+  return {
+    idFromName() { return "nep"; },
+    get() {
+      return {
+        async fetch() {
+          return new Response(JSON.stringify(antwoord), { headers: { "Content-Type": "application/json" } });
+        },
+      };
+    },
+  };
+}
+
+const START_CONFIG = { startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365 };
+
+async function adminOmgeving(aantal) {
+  const store = { "config:credits": JSON.stringify(START_CONFIG) };
+  const env = {
+    ADMIN_PASSWORD: "geheim-voor-de-test",
+    CLIENTS: nepKv(store),                    // dezelfde neppe KV als bij DIR-82
+    CREDITS: nepCredits({ aantal: aantal == null ? 7 : aantal }),
+  };
+  const ctx = { waitUntil() {} };
+  // Via de echte inlogroute, zodat we het cookie niet hoeven na te bouwen.
+  const resp = await worker.fetch(new Request("https://dd.test/api/admin/login", {
+    method: "POST", body: JSON.stringify({ password: "geheim-voor-de-test" }),
+  }), env, ctx);
+  const cookie = String(resp.headers.get("Set-Cookie") || "").split(";")[0];
+  const zetConfig = (body) => worker.fetch(new Request("https://dd.test/api/admin/credits/config", {
+    method: "POST", headers: { Cookie: cookie }, body: JSON.stringify(body),
+  }), env, ctx);
+  const opgeslagen = () => JSON.parse(store["config:credits"]);
+  return { env, zetConfig, opgeslagen };
+}
+
+test("route: een onbevestigde verlaging schrijft NIETS weg (AC-3)", async () => {
+  const { zetConfig, opgeslagen } = await adminOmgeving(7);
+  const resp = await zetConfig({ ...START_CONFIG, bewaardagen: 200 });
+  assert.equal(resp.status, 409);
+  const j = await resp.json();
+  assert.equal(j.bevestigingNodig, true);
+  assert.equal(j.aantal, 7, "het getal uit het grootboek hoort mee te komen");
+  // Dit is de kern: de opgeslagen instelling is niet aangeraakt.
+  assert.equal(opgeslagen().bewaardagen, 365);
+  assert.deepEqual(opgeslagen(), START_CONFIG);
+});
+
+test("route: met bevestiging gaat dezelfde verlaging wel door", async () => {
+  const { zetConfig, opgeslagen } = await adminOmgeving(7);
+  const resp = await zetConfig({ ...START_CONFIG, bewaardagen: 200, bevestigd: true });
+  assert.equal(resp.status, 200);
+  assert.equal(opgeslagen().bewaardagen, 200);
+});
+
+test("route: verhogen gaat direct door, zonder bevestiging (AC-1)", async () => {
+  const { zetConfig, opgeslagen } = await adminOmgeving(7);
+  const resp = await zetConfig({ ...START_CONFIG, bewaardagen: 400, maxRegels: 600 });
+  assert.equal(resp.status, 200);
+  assert.equal(opgeslagen().bewaardagen, 400);
+  assert.equal(opgeslagen().maxRegels, 600);
+});
+
+test("route: een weggelaten veld telt als verlaging, niet als 'ongewijzigd'", async () => {
+  // De vergelijking gaat over de genormaliseerde instelling, niet over de ruwe body.
+  // Staat er 400 opgeslagen en laat het verzoek bewaardagen weg, dan wordt het de
+  // standaard 365 - en dat is lager, dus dat hoort bevestigd te worden.
+  const { env, zetConfig, opgeslagen } = await adminOmgeving(3);
+  await env.CLIENTS.put("config:credits", JSON.stringify({ ...START_CONFIG, bewaardagen: 400 }));
+  const resp = await zetConfig({ startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500 });
+  assert.equal(resp.status, 409);
+  assert.equal(opgeslagen().bewaardagen, 400, "en er is nog steeds niets weggeschreven");
+});
+
+test("route: een te lage waarde komt niet eens tot de bevestiging (AC-4)", async () => {
+  const { zetConfig, opgeslagen } = await adminOmgeving(7);
+  const resp = await zetConfig({ ...START_CONFIG, bewaardagen: 1 });
+  assert.equal(resp.status, 400);
+  assert.match((await resp.json()).error, /30 dagen/);
+  assert.deepEqual(opgeslagen(), START_CONFIG);
+  // Ook niet met bevestigd erbij: keuren staat vóór de poort.
+  const tweede = await zetConfig({ ...START_CONFIG, bewaardagen: 1, bevestigd: true });
+  assert.equal(tweede.status, 400);
+  assert.deepEqual(opgeslagen(), START_CONFIG);
+});
+
+test("route: zonder admin-sessie verandert er niets", async () => {
+  const { env, opgeslagen } = await adminOmgeving(7);
+  const resp = await worker.fetch(new Request("https://dd.test/api/admin/credits/config", {
+    method: "POST", body: JSON.stringify({ ...START_CONFIG, bewaardagen: 200, bevestigd: true }),
+  }), env, { waitUntil() {} });
+  assert.equal(resp.status, 401);
+  assert.deepEqual(opgeslagen(), START_CONFIG);
 });
