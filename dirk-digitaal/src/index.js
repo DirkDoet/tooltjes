@@ -1987,7 +1987,7 @@ export class CreditsDO {
       await this.state.storage.put("s:" + email, rec);
       // Wat hier NIET in staat: de vraag, het antwoord of de opgehaalde cijfers.
       // Alleen wie, wanneer, welke agent, welk model en hoeveel tokens.
-      await this.schrijfRegel({
+      const geschreven = {
         tijd: now, soort: "verbruik", email,
         agent: String(inv.agent || ""), model: String(inv.model || ""),
         invoer: Math.max(0, Math.round(Number(inv.invoer) || 0)),
@@ -1995,8 +1995,12 @@ export class CreditsDO {
         cacheLees: Math.max(0, Math.round(Number(inv.cacheLees) || 0)),
         cacheSchrijf: Math.max(0, Math.round(Number(inv.cacheSchrijf) || 0)),
         credits, saldoNa: rec.saldo, reden: "",
-      }, { maxRegels: inv.maxRegels, bewaardagen: inv.bewaardagen });
-      return json({ saldo: rec.saldo });
+      };
+      await this.schrijfRegel(geschreven, { maxRegels: inv.maxRegels, bewaardagen: inv.bewaardagen });
+      // DIR-102: de zojuist geschreven regel gaat mee terug, zodat het chat-antwoord
+      // hem kan meesturen en het dashboard hem bovenaan kan tonen zonder een tweede
+      // verzoek. Door klantRegel() heen, dus zonder de interne notitie van Dirk.
+      return json({ saldo: rec.saldo, regel: klantRegel(geschreven) });
     }
 
     // AC-8 - handmatige correctie door Dirk, met reden. `credits` is hier het
@@ -2089,21 +2093,28 @@ async function saldoStart(env, email) {
 // die ervoor stond wordt daarmee verrekend (AC-5). Is er niets verbruikt, dan valt de
 // reservering vrij en houdt de klant zijn credits (AC-6). Een mislukte verrekening mag
 // een gebruiker nooit in de weg zitten: hij heeft zijn antwoord al.
+// DIR-102: geeft het nieuwe saldo terug (en de zojuist geschreven grootboekregel),
+// zodat het antwoord van de chat die meteen kan meesturen. Dat is precies de aanroep
+// die er toch al was - er komt er dus geen enkele bij. Bij een vrijgave of een
+// storing is het antwoord null: de pagina laat dan gewoon staan wat er stond.
 function verrekenKrediet(env, ctx, krediet, agent, meter) {
-  if (!krediet || !krediet.email || krediet.verrekend) return;
+  if (!krediet || !krediet.email || krediet.verrekend) return Promise.resolve(null);
   krediet.verrekend = true;                     // ook het vangnet in de router weet dit
   const actie = verrekenActie(meter);
   const werk = (async () => {
     try {
-      const cfg = await creditsConfig(env);
+      // DIR-102: de poort heeft de instellingen al gelezen; die nog eens uit KV halen
+      // zou binnen het wachtbudget van SALDO_GEDULD_MS vallen en dus ten koste gaan
+      // van de kans dat het saldo dit antwoord nog haalt.
+      const cfg = krediet.cfg || await creditsConfig(env);
       if (actie === "vrijgeef") {
         await creditsStub(env).fetch("https://do/credits/vrijgeef", {
           method: "POST",
           body: JSON.stringify({ email: krediet.email, reservering: krediet.reservering }),
         });
-        return;
+        return null;
       }
-      await creditsStub(env).fetch("https://do/credits/boek", {
+      const resp = await creditsStub(env).fetch("https://do/credits/boek", {
         method: "POST",
         body: JSON.stringify({
           email: krediet.email, agent, model: meter.model,
@@ -2114,9 +2125,11 @@ function verrekenKrediet(env, ctx, krediet, agent, meter) {
           maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen,
         }),
       });
-    } catch (e) { /* verrekenen is best-effort */ }
+      return await resp.json();
+    } catch (e) { return null; }                /* verrekenen is best-effort */
   })();
   if (ctx && ctx.waitUntil) ctx.waitUntil(werk);
+  return werk;
 }
 
 // AC-0/AC-5/AC-6 - de poort voor de chat. Eén Durable-Object-aanroep doet alles wat
@@ -2156,6 +2169,7 @@ async function creditsReserveer(request, env) {
       krediet: {
         email: sessie.email, model: j.model || adminModel,
         reservering: j.reservering || "", verrekend: false,
+        cfg,                                  // scheelt een tweede KV-lezing bij het boeken
       },
     };
   } catch (e) {
@@ -2763,16 +2777,63 @@ async function buildCollegas(env, stub, token, leadKey, body, ctxData) {
 }
 
 // Verpakt platte tekst als een SSE-stream die de bestaande frontend (content_block_delta) leest.
-function sseResponse(text, extraHeaders) {
+// DIR-102 - het nieuwe saldo reist mee in de stroom die er toch al is (AC-4). De
+// pagina hoeft er dus niets voor op te halen en trekt zelf niets af (AC-3).
+//
+// Geen getal, geen event: bij een mislukte of overgeslagen boeking sturen we liever
+// niets dan een bedrag waarvan we niet zeker zijn. De pagina laat dan staan wat er
+// stond, in plaats van even leeg of nul te tonen (AC-7).
+// DIR-102 - hoe lang het antwoord hooguit op de boeking wacht.
+//
+// De boeking stond vroeger in waitUntil: een hikkende Durable Object raakte de
+// gebruiker dan niet. Nu wachten we er kort op, want anders kan het nieuwe saldo niet
+// mee. Duurt het langer dan dit, dan gaat het antwoord zonder saldo-event de deur uit
+// en laat de pagina het oude bedrag staan (AC-7). De boeking zelf loopt gewoon door
+// via waitUntil, dus er gaat niets verloren - het bedrag klopt weer bij het volgende
+// antwoord of zodra het dashboard opengaat.
+const SALDO_GEDULD_MS = 1000;
+
+// Wacht hooguit `ms` op een belofte. Mislukt hij, of duurt het te lang, dan is de
+// uitkomst null: een antwoord dat al gemaakt is mag nooit blijven hangen of stukgaan
+// op de administratie erachter.
+export function metGeduld(belofte, ms) {
+  const wachten = new Promise((klaar) => setTimeout(() => klaar(null), Math.max(0, Number(ms) || 0)));
+  return Promise.race([Promise.resolve(belofte).catch(() => null), wachten]);
+}
+
+// DIR-102 - hetzelfde saldo, maar dan voor een JSON-antwoord in plaats van de
+// SSE-stroom. Een antwoord dat op een fout eindigt kan best credits gekost hebben:
+// de meter telt de aanroepen die vóór de fout wél slaagden, en die worden geboekt.
+// Zonder dit veld daalt het saldo dan zonder dat de klant het ziet - precies de
+// klacht waar dit issue over gaat.
+//
+// Geen zeker bedrag, geen veld: dan laat de pagina staan wat er stond (AC-7).
+export function saldoVeld(na) {
+  if (!na || typeof na.saldo !== "number") return {};
+  const uit = { credits: na.saldo };
+  if (na.regel) uit.regel = na.regel;
+  return uit;
+}
+
+export function saldoEvent(na) {
+  if (!na || typeof na.saldo !== "number") return "";
+  const evt = { type: "dd_saldo", saldo: na.saldo };
+  if (na.regel) evt.regel = na.regel;
+  return "data: " + JSON.stringify(evt) + "\n\n";
+}
+
+function sseResponse(text, extraHeaders, na) {
   const enc = new TextEncoder();
   const stuk = [];
   for (let i = 0; i < text.length; i += 48) stuk.push(text.slice(i, i + 48));
+  const saldoRegel = saldoEvent(na);
   const stream = new ReadableStream({
     start(controller) {
       for (const p of stuk) {
         const evt = { type: "content_block_delta", delta: { type: "text_delta", text: p } };
         controller.enqueue(enc.encode("data: " + JSON.stringify(evt) + "\n\n"));
       }
+      if (saldoRegel) controller.enqueue(enc.encode(saldoRegel));
       controller.enqueue(enc.encode("data: [DONE]\n\n"));
       controller.close();
     },
@@ -4073,6 +4134,15 @@ const OFFICE_HTML = `<!doctype html>
     return html;
   }
 
+  // DIR-102 - één plek waar een saldo van de server in beeld komt, of het nu uit de
+  // stroom van een geslaagd antwoord komt of uit een foutantwoord. Zonder echt getal
+  // gebeurt er niets: dan blijft staan wat er stond (AC-7).
+  function ddSaldoUit(saldo, regel){
+    if(typeof saldo !== 'number') return;
+    if(window.ddMenuSaldo) window.ddMenuSaldo(saldo);
+    if(window.ddDashboardSaldo) window.ddDashboardSaldo(saldo, regel);
+  }
+
   async function streamChat(payload, dashboard){
     if(busy) return; busy=true; sendBtn.disabled=true;
     if(avatarEl) avatarEl.classList.add('aantypen');   // portret 'typt' terwijl antwoord binnenkomt (DIR-40)
@@ -4087,6 +4157,9 @@ const OFFICE_HTML = `<!doctype html>
         if(j&&j[cur.needKey]){ bubble.remove(); wisOpening(); renderPicker(j[cur.listKey]); busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen'); return; }
         wisOpening();                 // ook bij een fout: niet zeggen dat je kijkt terwijl het misging
         bubble.textContent=(j&&j.error)||'Er ging iets mis. Probeer het opnieuw.';
+        // DIR-102: ook een foutantwoord kan het nieuwe saldo dragen - er kan verbruikt
+        // zijn voordat het misging. Zelfde behandeling als bij een geslaagd antwoord.
+        if(j) ddSaldoUit(j.credits, j.regel);
         if(r.status===401){ setConnected(false); setActive(false); started=false; }
         busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen'); return;
       }
@@ -4098,7 +4171,11 @@ const OFFICE_HTML = `<!doctype html>
           if(!p||p==='[DONE]') continue;
           try{ var evt=JSON.parse(p);
             if(evt.type==='content_block_delta'&&evt.delta&&typeof evt.delta.text==='string'){
-              got+=evt.delta.text; bubble.textContent=got; msgs.scrollTop=msgs.scrollHeight; } }catch(e){} } }
+              got+=evt.delta.text; bubble.textContent=got; msgs.scrollTop=msgs.scrollHeight; }
+            // DIR-102: het nieuwe saldo reist mee met dit antwoord, dus er hoeft
+            // niets extra's opgehaald te worden en er wordt hier niets afgetrokken.
+            else if(evt.type==='dd_saldo'){ ddSaldoUit(evt.saldo, evt.regel); }
+          }catch(e){} } }
       if(!got){ wisOpening(); bubble.textContent='De agent gaf geen antwoord. Probeer het opnieuw.'; setActive(true); }
       else if(dashboard){ msgs.replaceChild(renderDashboard(got), bubble); msgs.scrollTop=msgs.scrollHeight; setActive(true); }
       else {
@@ -4284,18 +4361,23 @@ const OFFICE_HTML = `<!doctype html>
     document.getElementById('dash-modelmelding').textContent='';
     dashLaad(false);
   }
-  function dashSaldoTonen(j){
-    document.getElementById('dash-bedrag').textContent=dashEuro(j.saldo);
-    var n=Number(j.saldo||0);
-    document.getElementById('dash-credits').textContent=n+' credit'+(n===1?'':'s');
-    document.getElementById('dash-wie').textContent='Ingelogd als '+(j.naam?(j.naam+' ('+j.email+')'):j.email);
+  // DIR-102: alleen het bedrag en de melding eronder, zodat een antwoord dit kan
+  // bijwerken zonder dat de rest van het paneel opnieuw opgebouwd hoeft te worden.
+  function dashSaldoBedrag(saldo){
+    if(typeof saldo !== 'number') return;                   // bij twijfel niets wijzigen
+    document.getElementById('dash-bedrag').textContent=dashEuro(saldo);
+    document.getElementById('dash-credits').textContent=saldo+' credit'+(saldo===1?'':'s');
     var op=document.getElementById('dash-op');
-    if(n<=0){
+    if(saldo<=0){
       op.textContent='Je credits zijn op. Koop bij om weer met je collega\u2019s te kunnen praten \u2014 kijken en rondlopen blijft gewoon werken.';
       op.classList.remove('dash-uit');
     } else {
       op.textContent=''; op.classList.add('dash-uit');
     }
+  }
+  function dashSaldoTonen(j){
+    dashSaldoBedrag(Number(j.saldo||0));
+    document.getElementById('dash-wie').textContent='Ingelogd als '+(j.naam?(j.naam+' ('+j.email+')'):j.email);
   }
   function dashModellenTonen(j){
     dashKeuzes=j.keuzes||[]; dashModel=j.model||'';
@@ -4344,27 +4426,36 @@ const OFFICE_HTML = `<!doctype html>
       body=document.createElement('tbody'); tab.appendChild(body);
       wrap.appendChild(tab); doel.appendChild(wrap);
     }
-    regels.forEach(function(r){
-      var tr=document.createElement('tr');
-      function cel(tekst, getal){
-        var td=document.createElement('td'); td.textContent=tekst;
-        if(getal) td.className='getal'; tr.appendChild(td);
-      }
-      cel(dashTijd(r.tijd));
-      // Een correctie van Dirk is geen verbruik, maar verzwijgen zou het saldo
-      // onverklaarbaar maken: dan verschijnt er geld zonder regel. Hij staat er dus
-      // wel in, maar zonder de notitie die Dirk erbij schreef - die is voor /admin
-      // en komt niet eens mee in het antwoord.
-      if(r.soort==='correctie'){
-        cel('Handmatige correctie');
-        cel('\u2014');
-      } else {
-        cel(dashCollega(r.agent));
-        cel(dashModelLabel(r.model)||r.model||'');
-      }
-      cel((r.credits>=0?'-':'+')+Math.abs(r.credits||0), true);
-      body.appendChild(tr);
-    });
+    regels.forEach(function(r){ body.appendChild(dashRij(r)); });
+  }
+  function dashRij(r){
+    var tr=document.createElement('tr');
+    function cel(tekst, getal){
+      var td=document.createElement('td'); td.textContent=tekst;
+      if(getal) td.className='getal'; tr.appendChild(td);
+    }
+    cel(dashTijd(r.tijd));
+    // Een correctie van Dirk is geen verbruik, maar verzwijgen zou het saldo
+    // onverklaarbaar maken: dan verschijnt er geld zonder regel. Hij staat er dus
+    // wel in, maar zonder de notitie die Dirk erbij schreef - die is voor /admin
+    // en komt niet eens mee in het antwoord.
+    if(r.soort==='correctie'){
+      cel('Handmatige correctie');
+      cel('\u2014');
+    } else {
+      cel(dashCollega(r.agent));
+      cel(dashModelLabel(r.model)||r.model||'');
+    }
+    cel((r.credits>=0?'-':'+')+Math.abs(r.credits||0), true);
+    return tr;
+  }
+  // DIR-102 - een verse regel bovenaan. Stond er nog de lege staat, dan bouwt
+  // dashRegelsTonen de tabel alsnog op met deze ene regel erin.
+  function dashRegelBovenaan(r){
+    var doel=document.getElementById('dash-verbruik');
+    var body=doel.querySelector('tbody');
+    if(!body){ dashRegelsTonen([r], false); return; }
+    body.insertBefore(dashRij(r), body.firstChild);
   }
   function dashLaad(bijwerken){
     if(dashBezig) return;
@@ -4411,6 +4502,14 @@ const OFFICE_HTML = `<!doctype html>
   // ingelogd ziet gewoon het kantoor; de gegevens zitten achter de sessie.
   window.ddDashboardAutoOpen=function(){
     if(location.pathname==='/dashboard') dashOpen();
+  };
+  // DIR-102 - staat het paneel open terwijl er een antwoord binnenkomt, dan werkt het
+  // saldo daar meteen bij en komt de nieuwe regel er bovenaan bij (AC-2). Is het
+  // paneel dicht, dan valt er niets bij te werken: het wordt vers geladen bij openen.
+  window.ddDashboardSaldo=function(saldo, regel){
+    if(dashOverlay.style.display!=='flex') return;
+    dashSaldoBedrag(saldo);
+    if(regel) dashRegelBovenaan(regel);
   };
 
   document.getElementById('poort-sluit').addEventListener('click',poortDicht);
@@ -4710,16 +4809,28 @@ const OFFICE_HTML = `<!doctype html>
   }
   function toonGast(){ toon(gast,true); toon(form,false);
     toon(klantBlok,false); toon(admin,false); melding(fout,''); melding(klantFout,''); }
+  // DIR-102 - het saldoregeltje, apart zodat het na elk antwoord bijgewerkt kan
+  // worden zonder de rest van het menu aan te raken.
+  //
+  // Alleen bijwerken als de server echt een bedrag gaf. Weten we het niet zeker, dan
+  // blijft staan wat er stond: een leeg of nul-bedrag tonen terwijl we het niet weten
+  // is precies het moment waarop iemand denkt dat zijn credits weg zijn (AC-7).
+  function toonKlantCredits(credits){
+    if(typeof credits !== 'number') return;
+    klantCredits.textContent = credits > 0
+      ? ('Je hebt nog ' + credits + ' credits.')
+      : 'Je credits zijn op — koop bij om verder te praten.';
+  }
   function toonKlant(naam, credits){
     klantNaam.textContent = naam || 'klant';
     // DIR-92: alleen het saldo, verder niets - een eigen dashboard komt later.
-    klantCredits.textContent = (typeof credits === 'number')
-      ? (credits > 0 ? ('Je hebt nog ' + credits + ' credits.')
-                     : 'Je credits zijn op — koop bij om verder te praten.')
-      : '';
+    klantCredits.textContent = '';
+    toonKlantCredits(credits);
     toon(gast,false); toon(form,false); toon(admin,false); toon(klantBlok,true);
     melding(klantFout,'');
   }
+  // De chat roept dit aan zodra een antwoord het nieuwe saldo meestuurt.
+  window.ddMenuSaldo = toonKlantCredits;
   function toonAdmin(res){
     sel.innerHTML='';
     (res.keuzes||[]).forEach(function(k){
@@ -5508,9 +5619,14 @@ async function handleChat(request, env, ctx, krediet) {
   let onbereikbaar = false;
   try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
-  verrekenKrediet(env, ctx, krediet, "gsc", meter);
-  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
-  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+  // DIR-102: kort wachten tot de boeking rond is, zodat het nieuwe saldo mee kan met
+  // dit antwoord. Dezelfde aanroep als voorheen, alleen niet meer fire-and-forget -
+  // er komt geen extra verzoek bij. Duurt het te lang of gaat het mis, dan gaat het
+  // antwoord gewoon de deur uit zonder saldo-event.
+  const naSaldo = await metGeduld(verrekenKrediet(env, ctx, krediet, "gsc", meter), SALDO_GEDULD_MS);
+  // Ook als het misging gaat het saldo mee: er kan verbruikt zijn vóór de fout.
+  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
+  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
   ctx.waitUntil(
@@ -5520,7 +5636,7 @@ async function handleChat(request, env, ctx, krediet) {
     }).catch(() => {})
   );
 
-  return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined);
+  return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined, naSaldo);
 }
 
 // GA4-property kiezen: overzicht laden + in de sessie zetten (ga4-historie schoon).
@@ -5629,9 +5745,14 @@ async function handleGa4Chat(request, env, ctx, krediet) {
   let onbereikbaar = false;
   try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
-  verrekenKrediet(env, ctx, krediet, "ga4", meter);
-  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
-  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+  // DIR-102: kort wachten tot de boeking rond is, zodat het nieuwe saldo mee kan met
+  // dit antwoord. Dezelfde aanroep als voorheen, alleen niet meer fire-and-forget -
+  // er komt geen extra verzoek bij. Duurt het te lang of gaat het mis, dan gaat het
+  // antwoord gewoon de deur uit zonder saldo-event.
+  const naSaldo = await metGeduld(verrekenKrediet(env, ctx, krediet, "ga4", meter), SALDO_GEDULD_MS);
+  // Ook als het misging gaat het saldo mee: er kan verbruikt zijn vóór de fout.
+  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
+  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
   ctx.waitUntil(
@@ -5641,7 +5762,7 @@ async function handleGa4Chat(request, env, ctx, krediet) {
     }).catch(() => {})
   );
 
-  return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined);
+  return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined, naSaldo);
 }
 
 // Ads-account kiezen: overzicht laden + in de sessie zetten (ads-historie schoon).
@@ -5791,9 +5912,14 @@ async function handleAdsChat(request, env, ctx, krediet) {
   let onbereikbaar = false;
   try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
-  verrekenKrediet(env, ctx, krediet, "ads", meter);
-  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
-  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+  // DIR-102: kort wachten tot de boeking rond is, zodat het nieuwe saldo mee kan met
+  // dit antwoord. Dezelfde aanroep als voorheen, alleen niet meer fire-and-forget -
+  // er komt geen extra verzoek bij. Duurt het te lang of gaat het mis, dan gaat het
+  // antwoord gewoon de deur uit zonder saldo-event.
+  const naSaldo = await metGeduld(verrekenKrediet(env, ctx, krediet, "ads", meter), SALDO_GEDULD_MS);
+  // Ook als het misging gaat het saldo mee: er kan verbruikt zijn vóór de fout.
+  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
+  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
   ctx.waitUntil(
@@ -5803,7 +5929,7 @@ async function handleAdsChat(request, env, ctx, krediet) {
     }).catch(() => {})
   );
 
-  return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined);
+  return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined, naSaldo);
 }
 
 // Anton (content/tekst): pure Claude-agent, geen databron/koppeling (DIR-39).
@@ -5855,9 +5981,14 @@ async function handleContentChat(request, env, ctx, krediet) {
   let onbereikbaar = false;
   try { finalText = await chatLoop(env, system, convo, col.tools, col.dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
-  verrekenKrediet(env, ctx, krediet, "anton", meter);
-  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
-  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+  // DIR-102: kort wachten tot de boeking rond is, zodat het nieuwe saldo mee kan met
+  // dit antwoord. Dezelfde aanroep als voorheen, alleen niet meer fire-and-forget -
+  // er komt geen extra verzoek bij. Duurt het te lang of gaat het mis, dan gaat het
+  // antwoord gewoon de deur uit zonder saldo-event.
+  const naSaldo = await metGeduld(verrekenKrediet(env, ctx, krediet, "anton", meter), SALDO_GEDULD_MS);
+  // Ook als het misging gaat het saldo mee: er kan verbruikt zijn vóór de fout.
+  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
+  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
   ctx.waitUntil(
@@ -5867,7 +5998,7 @@ async function handleContentChat(request, env, ctx, krediet) {
     }).catch(() => {})
   );
 
-  return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined);
+  return sseResponse(finalText, setCookie ? { "Set-Cookie": setCookie } : undefined, naSaldo);
 }
 
 // -- Privacy en voorwaarden (DIR-91) -----------------------------------------
