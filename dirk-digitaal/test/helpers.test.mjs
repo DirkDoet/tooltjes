@@ -56,6 +56,8 @@ import {
   modelVoorKlant,
   klantModelKeuzes,
   geldigKlantModel,
+  nieuwSaldoRecord,
+  klantRegel,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -1135,4 +1137,86 @@ test("de duurdere keuze kost aantoonbaar meer credits (AC-7)", () => {
   const b = meterCredits(grondig, 0.92, 2);
   assert.equal(b > a, true, "de grondige keuze hoort meer te kosten");
   assert.equal(b, a * 2.5);        // precies de prijsverhouding uit de tabel
+});
+
+
+// ── DIR-93 · review-fixes op #67 ────────────────────────────────────────────
+
+test("nieuwSaldoRecord: een nieuw record krijgt het startsaldo, nooit 0", () => {
+  const vers = nieuwSaldoRecord(null, 200, 1000);
+  assert.equal(vers.saldo, 200);
+  assert.equal(vers.gemaakt, 1000);
+  // Ook als de aanleiding iets anders is dan inloggen (bijvoorbeeld een modelkeuze).
+  assert.equal(nieuwSaldoRecord(undefined, 50, 1).saldo, 50);
+  // Onzin blijft binnen de rails.
+  assert.equal(nieuwSaldoRecord(null, -5, 1).saldo, 0);
+  assert.equal(nieuwSaldoRecord(null, 12.7, 1).saldo, 13);
+  assert.equal(nieuwSaldoRecord(null, "geen getal", 1).saldo, 0);
+});
+
+test("nieuwSaldoRecord: een bestaand record wordt NOOIT overschreven", () => {
+  // Dit is de kant die geld zou kosten: een tweede uitgifte op een lopend saldo.
+  const bestaand = { saldo: 137, gemaakt: 5, model: "claude-opus-5" };
+  assert.equal(nieuwSaldoRecord(bestaand, 200, 9), bestaand);
+  assert.equal(nieuwSaldoRecord(bestaand, 200, 9).saldo, 137);
+  // Een saldo van 0 is een bestaand record, geen ontbrekend record: wie zijn
+  // credits opmaakte hoort er geen nieuwe cadeau te krijgen.
+  const leeg = { saldo: 0, gemaakt: 5 };
+  assert.equal(nieuwSaldoRecord(leeg, 200, 9).saldo, 0);
+});
+
+test("modelkeuze vóór de eerste saldo-uitgifte kost het startsaldo niet", () => {
+  // De volgorde die misging: eerst een modelkeuze bewaren, daarna pas inloggen.
+  // Schreef dat een record met saldo 0 weg, dan deelde /credits/start daarna nooit
+  // meer uit - want die kijkt alleen of er al iets staat.
+  const STARTSALDO = 200;
+  let opslag = null;                                  // nog nooit een saldo gehad
+
+  // 1. /credits/model op een leeg adres
+  const naKeuze = nieuwSaldoRecord(opslag, STARTSALDO, 1);
+  naKeuze.model = "claude-opus-5";
+  opslag = naKeuze;
+  assert.equal(opslag.saldo, STARTSALDO, "de keuze mag het startsaldo niet wegnemen");
+
+  // 2. daarna /credits/start bij het inloggen: vindt een record en laat het staan
+  const naLogin = nieuwSaldoRecord(opslag, STARTSALDO, 2);
+  assert.equal(naLogin.saldo, STARTSALDO);
+  assert.equal(naLogin.model, "claude-opus-5", "en de keuze blijft ook bewaard");
+});
+
+test("klantRegel: de interne notitie van Dirk gaat niet mee naar de klant", () => {
+  const uitHetGrootboek = {
+    tijd: 123, soort: "correctie", email: "ik@voorbeeld.nl",
+    agent: "", model: "", invoer: 0, uitvoer: 0, cacheLees: 0, cacheSchrijf: 0,
+    credits: -100, saldoNa: 300, reden: "coulance na klacht over Dirk",
+  };
+  const naarDeKlant = klantRegel(uitHetGrootboek);
+  // Niet verbergen in de UI maar echt weglaten: anders staat het alsnog in de
+  // netwerk-inspectie van de browser.
+  assert.equal("reden" in naarDeKlant, false);
+  assert.equal(Object.keys(naarDeKlant).indexOf("reden"), -1);
+  assert.equal(JSON.stringify(naarDeKlant).includes("coulance"), false);
+  // Het adres hoeft er ook niet in: het is per definitie je eigen regel.
+  assert.equal("email" in naarDeKlant, false);
+  // Wat de klant wél moet zien blijft staan.
+  assert.equal(naarDeKlant.soort, "correctie");
+  assert.equal(naarDeKlant.credits, -100);
+  assert.equal(naarDeKlant.saldoNa, 300);
+  assert.equal(naarDeKlant.tijd, 123);
+});
+
+test("klantRegel: een verbruiksregel houdt alles wat de klant nodig heeft", () => {
+  const regel = klantRegel({
+    tijd: 9, soort: "verbruik", email: "ik@voorbeeld.nl", agent: "gsc",
+    model: "claude-opus-5", invoer: 120, uitvoer: 30, cacheLees: 5, cacheSchrijf: 7,
+    credits: 14, saldoNa: 186, reden: "",
+  });
+  assert.deepEqual(regel, {
+    tijd: 9, soort: "verbruik", agent: "gsc", model: "claude-opus-5",
+    invoer: 120, uitvoer: 30, cacheLees: 5, cacheSchrijf: 7,
+    credits: 14, saldoNa: 186,
+  });
+  // Een onbekende soort telt als verbruik, niet als correctie.
+  assert.equal(klantRegel({ soort: "iets anders" }).soort, "verbruik");
+  assert.equal(klantRegel(null).credits, 0);
 });

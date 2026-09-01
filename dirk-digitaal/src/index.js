@@ -1180,6 +1180,37 @@ export function hoortBijGebruiker(regel, email) {
   return normaliseerEmail(regel && regel.email) === wie;
 }
 
+// Een saldorecord dat er nog niet is, wordt aangemaakt MET het gratis startsaldo -
+// ook als de aanleiding iets anders is dan inloggen, zoals het bewaren van een
+// modelkeuze. Zou dat een record op 0 opleveren, dan deelt /credits/start daarna
+// nooit meer uit (die kijkt of er al iets staat) en zit die klant permanent op nul.
+export function nieuwSaldoRecord(bestaand, startsaldo, nu) {
+  if (bestaand && typeof bestaand.saldo === "number") return bestaand;
+  return { saldo: Math.max(0, Math.round(Number(startsaldo) || 0)), gemaakt: nu };
+}
+
+// Wat de klant van een grootboekregel te zien krijgt. Een witte lijst, geen
+// zwarte: alleen deze velden gaan naar buiten. `reden` hoort er met opzet NIET bij,
+// dat is de interne notitie van Dirk in /admin - "coulance na klacht" leest heel
+// anders als de klant meekijkt. Weglaten in plaats van verbergen in de UI, want
+// anders staat het alsnog in de netwerk-inspectie van de browser.
+export function klantRegel(regel) {
+  const r = regel || {};
+  const getal = (v) => Math.round(Number(v) || 0);
+  return {
+    tijd: getal(r.tijd),
+    soort: r.soort === "correctie" ? "correctie" : "verbruik",
+    agent: String(r.agent || ""),
+    model: String(r.model || ""),
+    invoer: getal(r.invoer),
+    uitvoer: getal(r.uitvoer),
+    cacheLees: getal(r.cacheLees),
+    cacheSchrijf: getal(r.cacheSchrijf),
+    credits: getal(r.credits),
+    saldoNa: getal(r.saldoNa),
+  };
+}
+
 // Hoeveel regels de klant per keer ziet (AC-4); de rest komt met 'meer laden'.
 const DASHBOARD_PAGINA = 50;
 // Hoeveel sleutels we per keer uit het grootboek lezen terwijl we naar de regels van
@@ -1682,11 +1713,9 @@ export class CreditsDO {
     // keer inloggen levert dus geen tweede startsaldo op.
     if (url.pathname === "/credits/start") {
       if (!email) return json({ error: "geen adres" }, 400);
-      let rec = await this.saldoVan(email);
-      if (!rec) {
-        rec = { saldo: Math.max(0, Math.round(Number(inv.startsaldo) || 0)), gemaakt: now };
-        await this.state.storage.put("s:" + email, rec);
-      }
+      const bestaand = await this.saldoVan(email);
+      const rec = nieuwSaldoRecord(bestaand, inv.startsaldo, now);
+      if (!bestaand) await this.state.storage.put("s:" + email, rec);
       return json({ saldo: rec.saldo, model: rec.model || "" });
     }
 
@@ -1699,7 +1728,10 @@ export class CreditsDO {
     // ophalen van saldo en keuze samen een DO-aanroep is.
     if (url.pathname === "/credits/model") {
       if (!email) return json({ error: "geen adres" }, 400);
-      const rec = (await this.saldoVan(email)) || { saldo: 0, gemaakt: now };
+      // Kiest iemand zijn model voordat zijn saldo ooit is uitgedeeld, dan krijgt hij
+      // het startsaldo hier alsnog. Een record op 0 wegschrijven zou hem permanent op
+      // nul zetten, want /credits/start deelt alleen uit als er nog niets staat.
+      const rec = nieuwSaldoRecord(await this.saldoVan(email), inv.startsaldo, now);
       rec.model = geldigKlantModel(inv.model);
       await this.state.storage.put("s:" + email, rec);
       return json({ saldo: rec.saldo, model: rec.model });
@@ -1728,7 +1760,7 @@ export class CreditsDO {
         let vol = false;
         for (const [sleutel, waarde] of brok) {
           cursor = sleutel;
-          if (hoortBijGebruiker(waarde, email)) regels.push(waarde);
+          if (hoortBijGebruiker(waarde, email)) regels.push(klantRegel(waarde));
           if (regels.length >= DASHBOARD_PAGINA) { vol = true; break; }
         }
         if (vol) break;
@@ -4094,10 +4126,12 @@ const OFFICE_HTML = `<!doctype html>
       }
       cel(dashTijd(r.tijd));
       // Een correctie van Dirk is geen verbruik, maar verzwijgen zou het saldo
-      // onverklaarbaar maken. Daarom staat hij er wel in, met zijn reden erbij.
+      // onverklaarbaar maken: dan verschijnt er geld zonder regel. Hij staat er dus
+      // wel in, maar zonder de notitie die Dirk erbij schreef - die is voor /admin
+      // en komt niet eens mee in het antwoord.
       if(r.soort==='correctie'){
-        cel(r.credits<0?'Bijgeboekt door Dirk':'Afgeboekt door Dirk');
-        cel(r.reden||'');
+        cel('Handmatige correctie');
+        cel('\u2014');
       } else {
         cel(dashCollega(r.agent));
         cel(dashModelLabel(r.model)||r.model||'');
@@ -5930,9 +5964,12 @@ export default {
       const gekozen = geldigKlantModel(b && b.model);
       if (!gekozen) return json({ error: "Onbekende keuze." }, 400);
       try {
+        // Het startsaldo gaat mee, zodat het bewaren van een keuze nooit een leeg
+        // saldorecord achterlaat bij iemand die nog niets heeft gekregen.
+        const cfg = await creditsConfig(env);
         const resp = await creditsStub(env).fetch("https://do/credits/model", {
           method: "POST",
-          body: JSON.stringify({ email: sessie.email, model: gekozen }),
+          body: JSON.stringify({ email: sessie.email, model: gekozen, startsaldo: cfg.startsaldo }),
         });
         const j = await resp.json();
         return json({ ok: true, model: j.model });
