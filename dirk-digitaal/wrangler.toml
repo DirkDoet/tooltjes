@@ -16,9 +16,21 @@ CANONIEKE_HOST = "dirkdigitaal.nl"
 name = "SESSIONS"
 class_name = "SessionDO"
 
+# DIR-92 - saldo en grootboek. Eigen klasse naast SessionDO, omdat SessionDO zichzelf
+# na 30 minuten inactiviteit wist en een saldo dat nooit mag doen.
+[[durable_objects.bindings]]
+name = "CREDITS"
+class_name = "CreditsDO"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SessionDO"]
+
+# Op het gratis plan moet een nieuwe klasse via new_sqlite_classes; new_classes is
+# alleen voor het betaalde plan en wordt hier geweigerd.
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["CreditsDO"]
 
 # KV voor klant-config (DIR-30): sleutel -> { naam, adAccountId }. Alleen config, geen klantdata.
 [[kv_namespaces]]
