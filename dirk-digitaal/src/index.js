@@ -1054,7 +1054,9 @@ const PRIJS_ONBEKEND = { invoer: 5, uitvoer: 25 };
 // tegen grenzen gecontroleerd. De koers staat los van de marge, zodat de marge niet
 // met de wisselkoers meebeweegt.
 const CREDITS_KV_SLEUTEL = "config:credits";
-const CREDITS_STANDAARD = { startsaldo: 200, koers: 0.92, marge: 2 };
+// DIR-100: `maxRegels` en `bewaardagen` gelden PER KLANT. Een drukke klant kan de
+// historie van een rustige klant dus niet meer wegdrukken.
+const CREDITS_STANDAARD = { startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365 };
 
 export function modelPrijs(model) {
   return MODEL_PRIJZEN[String(model || "")] || PRIJS_ONBEKEND;
@@ -1132,6 +1134,8 @@ export function schoneCreditsConfig(ruw) {
     startsaldo: Math.round(binnenGrens(r.startsaldo, 0, 100000, CREDITS_STANDAARD.startsaldo)),
     koers: binnenGrens(r.koers, 0.01, 10, CREDITS_STANDAARD.koers),
     marge: binnenGrens(r.marge, 1, 100, CREDITS_STANDAARD.marge),
+    maxRegels: Math.round(binnenGrens(r.maxRegels, 10, 100000, CREDITS_STANDAARD.maxRegels)),
+    bewaardagen: Math.round(binnenGrens(r.bewaardagen, 1, 3650, CREDITS_STANDAARD.bewaardagen)),
   };
 }
 
@@ -1221,12 +1225,113 @@ const GROOTBOEK_BROK = 200;
 // Grootboeksleutel die chronologisch sorteert — zelfde truc als het gebruikslog
 // (DIR-87): de DO geeft list() op sleutelvolgorde terug.
 export function boekSleutel(tijd, rand) {
-  return "b:" + String(Math.max(0, Math.floor(Number(tijd) || 0))).padStart(14, "0") + "-" + (rand || "");
+  return "b:" + tijdSleutel(tijd) + "-" + (rand || "");
 }
-// Een grootboek is een geldadministratie, dus hier snoeien we niet op leeftijd: een
-// boeking van vorig jaar hoort er nog te staan. Alleen een harde bovengrens, zodat
-// de opslag niet onbeperkt groeit.
-const GROOTBOEK_MAX_REGELS = 5000;
+
+// Een tijdstip als sleuteldeel: vaste breedte, zodat 9 vóór 1000 sorteert.
+function tijdSleutel(tijd) {
+  return String(Math.max(0, Math.floor(Number(tijd) || 0))).padStart(14, "0");
+}
+
+// DIR-100 - naast elke grootboekregel staat een indexsleutel PER KLANT. Daarmee kan
+// er per klant gesnoeid worden zonder het hele boek te lezen: alles van een klant
+// staat onder zijn eigen prefix, chronologisch gesorteerd.
+//
+// Het adres wordt ge-encodeerd, zodat een adres met een dubbele punt erin niet in de
+// prefix van een ander adres kan vallen. Dat kan bij Google niet, maar een
+// sleutelindeling waarbij dat wél zou uitmaken hoort niet in een geldadministratie.
+export function boekIndexPrefix(email) {
+  return "i:" + encodeURIComponent(normaliseerEmail(email)) + ":";
+}
+export function boekIndexSleutel(email, tijd, rand) {
+  return boekIndexPrefix(email) + tijdSleutel(tijd) + "-" + (rand || "");
+}
+
+// De bovengrens voor een list() die alleen de te oude regels van deze klant pakt.
+// `end` is exclusief, dus dit is precies "alles ouder dan de bewaartermijn".
+export function snoeiGrensSleutel(email, nu, bewaardagen) {
+  const dagen = Math.max(0, Number(bewaardagen) || 0);
+  // Geen bewaartermijn ingesteld betekent NIETS opruimen, niet alles: de grens ligt
+  // dan op het begin der tijden. Een functie die bij een ontbrekende instelling het
+  // hele grootboek aanwijst hoort niet in een geldadministratie thuis.
+  const grens = dagen > 0 ? Math.max(0, (Number(nu) || 0) - dagen * 24 * 60 * 60 * 1000) : 0;
+  return boekIndexPrefix(email) + tijdSleutel(grens);
+}
+
+// Hoeveel regels heeft deze klant er te veel? Nooit negatief. Is er geen maximum
+// meegegeven, dan is het antwoord nul: een ontbrekende instelling mag NOOIT als
+// "maximum nul" gelezen worden, want dan snoeit hij de hele historie weg. Zelfde
+// keuze als bij snoeiGrensSleutel - bij twijfel niets weggooien.
+export function overschot(aantal, maxPerKlant) {
+  const max = Math.floor(Number(maxPerKlant) || 0);
+  if (max <= 0) return 0;
+  const n = Math.max(0, Math.floor(Number(aantal) || 0));
+  return Math.max(0, n - max);
+}
+
+// Hoeveel te oude regels we per boeking opruimen. Bewust een klein getal: snoeien
+// mag nooit uitgroeien tot een scan over het hele boek, en achterstand haalt zichzelf
+// bij de volgende boekingen in.
+const SNOEI_BROK = 25;
+
+// ---- DIR-100 · reserveren -------------------------------------------------
+// Een antwoord kost pas credits als het klaar is, maar de poort moet nú al weten of
+// er ruimte is. Zonder reservering lezen vijf tegelijk afgevuurde vragen alle vijf
+// hetzelfde oude saldo en komen ze er alle vijf door. Daarom houdt de Durable Object
+// per lopend antwoord een reservering vast, en die telt mee als de volgende vraag
+// binnenkomt.
+//
+// De reservering is een SCHATTING vooraf; na afloop wordt hij vervangen door wat het
+// antwoord werkelijk kostte. Hij is dus geen tweede grens: hij verandert niets aan
+// wat een klant uiteindelijk betaalt.
+const RESERVERING_INVOER = 20000;                 // ruime invoer voor één antwoord
+const RESERVERING_TTL_MS = 10 * 60 * 1000;        // vangnet voor afgebroken verzoeken
+
+// Wat reserveren we voor één antwoord? De prijs van een volledig antwoord op het
+// gekozen model. Ruim genoeg om gelijktijdige vragen tegen elkaar af te wegen, en
+// klein genoeg om een normaal gesprek niet in de weg te zitten.
+export function reserveringSchatting(model, koers, marge) {
+  return kostenNaarCredits(tokenKosten(model, {
+    input_tokens: RESERVERING_INVOER,
+    output_tokens: CHAT_MAX_TOKENS,
+  }), koers, marge);
+}
+
+// Wat is er nog vrij? Het saldo min alles wat op dit moment vastligt in lopende
+// antwoorden. Reserveringen die zijn blijven hangen (browser dicht, Worker gestopt)
+// tellen na hun TTL niet meer mee, anders zou één afgebroken verzoek een klant tien
+// minuten kunnen blokkeren.
+export function beschikbaarSaldo(saldo, reserveringen, nu, ttlMs) {
+  const ttl = ttlMs == null ? RESERVERING_TTL_MS : ttlMs;
+  let vast = 0;
+  for (const r of reserveringen || []) {
+    if (!r) continue;
+    if ((Number(nu) || 0) - (Number(r.tijd) || 0) > ttl) continue;   // verlopen
+    vast += Math.max(0, Math.round(Number(r.bedrag) || 0));
+  }
+  return (Number(saldo) || 0) - vast;
+}
+
+// Alle reserveringen van een klant staan onder zijn eigen prefix, om dezelfde reden
+// als bij de grootboekindex: geen enkel adres mag in de prefix van een ander vallen.
+export function reserveringPrefix(email) {
+  return "r:" + encodeURIComponent(normaliseerEmail(email)) + ":";
+}
+
+// Is een reservering blijven hangen? Dan mag hij weg.
+export function reserveringVerlopen(reservering, nu, ttlMs) {
+  const ttl = ttlMs == null ? RESERVERING_TTL_MS : ttlMs;
+  const tijd = Number(reservering && reservering.tijd) || 0;
+  return (Number(nu) || 0) - tijd > ttl;
+}
+
+// Na afloop: is er iets te boeken, of valt de reservering gewoon vrij? Zijn er geen
+// API-aanroepen geweest, dan is er niets verbruikt en houdt de klant zijn credits
+// (AC-6). Is er wél gebeld, dan betaalt hij wat het kostte - ook als het antwoord
+// daarna alsnog misging, want die tokens zijn echt verbruikt.
+export function verrekenActie(meter) {
+  return meter && meter.aanroepen ? "boek" : "vrijgeef";
+}
 
 // De vraag die de SEO-analyse uitlokt. Vraagt om een dashboard met vaste secties
 // (## koppen), zodat de frontend het als kaarten kan renderen (AC-4/AC-5).
@@ -1689,16 +1794,72 @@ export class CreditsDO {
     return rec && typeof rec.saldo === "number" ? rec : null;
   }
 
-  // Een boeking schrijven en meteen de bovengrens afdwingen (oudste eerst weg).
-  async schrijfRegel(regel) {
-    await this.state.storage.put(boekSleutel(regel.tijd, crypto.randomUUID().slice(0, 8)), regel);
-    const alles = await this.state.storage.list({ prefix: "b:" });
-    let teveel = alles.size - GROOTBOEK_MAX_REGELS;
-    if (teveel <= 0) return;
-    for (const sleutel of alles.keys()) {
-      if (teveel-- <= 0) break;
-      await this.state.storage.delete(sleutel);
+  // Een boeking schrijven, met een indexsleutel per klant erbij, en daarna snoeien
+  // binnen de historie van DIE klant (AC-1/AC-3). Er wordt nergens meer over het hele
+  // boek gelezen: een teller zegt hoeveel regels deze klant heeft, en de twee list()
+  // -aanroepen hieronder kijken alleen naar wat er weg zou kunnen.
+  async schrijfRegel(regel, opties) {
+    const o = opties || {};
+    const email = normaliseerEmail(regel.email);
+    const rand = crypto.randomUUID().slice(0, 8);
+    const sleutel = boekSleutel(regel.tijd, rand);
+    // De index bewaart alleen de sleutel van de regel; de regel zelf staat maar op
+    // één plek, dus er valt niets uit de pas te lopen.
+    await this.state.storage.put(sleutel, regel);
+    await this.state.storage.put(boekIndexSleutel(email, regel.tijd, rand), sleutel);
+
+    const tellerSleutel = "n:" + email;
+    let aantal = (Number(await this.state.storage.get(tellerSleutel)) || 0) + 1;
+    aantal -= await this.snoei(email, aantal, o, regel.tijd);
+    await this.state.storage.put(tellerSleutel, Math.max(0, aantal));
+  }
+
+  // Snoeien raakt uitsluitend de historie: het saldo wordt hier niet aangeraakt en
+  // ook niet gelezen (AC-4). Geeft terug hoeveel regels er weg zijn.
+  async snoei(email, aantal, opties, nu) {
+    const prefix = boekIndexPrefix(email);
+    let weg = 0;
+
+    // 1. Te veel regels: de oudste eruit. De limiet is precies het overschot, dus we
+    //    lezen nooit meer sleutels dan er weg moeten.
+    const teveel = overschot(aantal, opties.maxRegels);
+    if (teveel > 0) {
+      weg += await this.wisIndex(await this.state.storage.list({ prefix, limit: teveel }));
     }
+
+    // 2. Te oud: alles vóór de bewaartermijn. `end` begrenst de list, en SNOEI_BROK
+    //    houdt het werk per boeking klein - een achterstand haalt zichzelf bij de
+    //    volgende boekingen in.
+    if (opties.bewaardagen) {
+      const lijst = await this.state.storage.list({
+        prefix, end: snoeiGrensSleutel(email, nu, opties.bewaardagen), limit: SNOEI_BROK,
+      });
+      weg += await this.wisIndex(lijst);
+    }
+    return weg;
+  }
+
+  // Wist de regels waar deze indexsleutels naar wijzen, plus de indexsleutels zelf.
+  async wisIndex(lijst) {
+    let weg = 0;
+    for (const [indexSleutel, regelSleutel] of lijst) {
+      if (regelSleutel) await this.state.storage.delete(regelSleutel);
+      await this.state.storage.delete(indexSleutel);
+      weg += 1;
+    }
+    return weg;
+  }
+
+  // Openstaande reserveringen van deze klant. Verlopen reserveringen worden meteen
+  // opgeruimd, zodat een afgebroken verzoek niemand blijft blokkeren.
+  async reserveringenVan(email, nu) {
+    const prefix = reserveringPrefix(email);
+    const open = [];
+    for (const [sleutel, waarde] of await this.state.storage.list({ prefix })) {
+      if (reserveringVerlopen(waarde, nu)) { await this.state.storage.delete(sleutel); continue; }
+      open.push(waarde);
+    }
+    return { prefix, open };
   }
 
   async fetch(request) {
@@ -1775,12 +1936,52 @@ export class CreditsDO {
       });
     }
 
+    // DIR-100 AC-5 - controleren en reserveren in DEZELFDE aanroep. Een Durable
+    // Object verwerkt zijn verzoeken een voor een, dus twee vragen die tegelijk
+    // binnenkomen zien elkaars reservering en kunnen niet allebei op hetzelfde
+    // saldo doorglippen. AC-0: dit is meteen de enige keer per bericht dat het
+    // saldo-en-modelrecord wordt opgehaald - het model gaat mee terug.
+    if (url.pathname === "/credits/reserveer") {
+      if (!email) return json({ error: "geen adres" }, 400);
+      const bestaand = await this.saldoVan(email);
+      const rec = nieuwSaldoRecord(bestaand, inv.startsaldo, now);
+      if (!bestaand) await this.state.storage.put("s:" + email, rec);
+      const model = modelVoorKlant(rec.model, inv.adminModel);
+      const { prefix, open } = await this.reserveringenVan(email, now);
+      // De grens blijft die van DIR-92: op nul of lager gaat de deur dicht. De
+      // reservering is geen minimumbedrag - hij neemt alleen ruimte in zolang een
+      // antwoord loopt, zodat de volgende vraag ziet dat die ruimte bezet is.
+      const vrij = beschikbaarSaldo(rec.saldo, open, now);
+      if (!magChattenMetSaldo(vrij)) {
+        return json({ toegestaan: false, saldo: rec.saldo, model });
+      }
+      const id = crypto.randomUUID();
+      await this.state.storage.put(prefix + id, {
+        bedrag: reserveringSchatting(model, inv.koers, inv.marge),
+        tijd: now,
+      });
+      return json({ toegestaan: true, saldo: rec.saldo, model, reservering: id });
+    }
+
+    // AC-6 - er is niets verbruikt: de reservering valt vrij en de klant houdt zijn
+    // credits. Er komt met opzet geen grootboekregel van, want er is niets gebeurd.
+    if (url.pathname === "/credits/vrijgeef") {
+      if (!email) return json({ error: "geen adres" }, 400);
+      const id = String(inv.reservering || "");
+      if (id) await this.state.storage.delete(reserveringPrefix(email) + id);
+      return json({ ok: true });
+    }
+
     // AC-2/AC-3/AC-4 - verbruik afboeken en vastleggen. Het saldo mag hierdoor onder
     // nul zakken: het antwoord is al gegeven, dat verzwijgen we niet. De poort houdt
     // het volgende bericht tegen (AC-7).
     if (url.pathname === "/credits/boek") {
       if (!email) return json({ error: "geen adres" }, 400);
       const credits = Math.max(0, Math.round(Number(inv.credits) || 0));
+      // De reservering wordt hier vervangen door wat het antwoord werkelijk kostte
+      // (AC-5). Vanaf dit moment telt alleen nog het afgeboekte bedrag mee.
+      const id = String(inv.reservering || "");
+      if (id) await this.state.storage.delete(reserveringPrefix(email) + id);
       const rec = (await this.saldoVan(email)) || { saldo: 0, gemaakt: now };
       rec.saldo -= credits;
       await this.state.storage.put("s:" + email, rec);
@@ -1794,7 +1995,7 @@ export class CreditsDO {
         cacheLees: Math.max(0, Math.round(Number(inv.cacheLees) || 0)),
         cacheSchrijf: Math.max(0, Math.round(Number(inv.cacheSchrijf) || 0)),
         credits, saldoNa: rec.saldo, reden: "",
-      });
+      }, { maxRegels: inv.maxRegels, bewaardagen: inv.bewaardagen });
       return json({ saldo: rec.saldo });
     }
 
@@ -1811,7 +2012,7 @@ export class CreditsDO {
         tijd: now, soort: "correctie", email, agent: "", model: "",
         invoer: 0, uitvoer: 0, cacheLees: 0, cacheSchrijf: 0,
         credits: -bij, saldoNa: rec.saldo, reden: String(inv.reden || "").slice(0, 200),
-      });
+      }, { maxRegels: inv.maxRegels, bewaardagen: inv.bewaardagen });
       return json({ saldo: rec.saldo });
     }
 
@@ -1884,59 +2085,84 @@ async function saldoStart(env, email) {
   return typeof j.saldo === "number" ? j.saldo : null;
 }
 
-// AC-2/AC-3/AC-4 - wat dit ene antwoord kostte, in een boeking. Een mislukte boeking
-// mag een gebruiker nooit in de weg zitten: hij heeft zijn antwoord al, het staat dan
-// alleen niet in het grootboek. Admin en niet-ingelogde bezoekers hebben geen saldo.
-function boekVerbruik(env, ctx, ctxData, agent, meter) {
-  if (!meter || !meter.aanroepen) return;
-  const email = ctxData && ctxData.soort === "klant" ? ctxData.email : "";
-  if (!email) return;
+// AC-2/AC-3/AC-4 - wat dit ene antwoord kostte, in een boeking, en de reservering
+// die ervoor stond wordt daarmee verrekend (AC-5). Is er niets verbruikt, dan valt de
+// reservering vrij en houdt de klant zijn credits (AC-6). Een mislukte verrekening mag
+// een gebruiker nooit in de weg zitten: hij heeft zijn antwoord al.
+function verrekenKrediet(env, ctx, krediet, agent, meter) {
+  if (!krediet || !krediet.email || krediet.verrekend) return;
+  krediet.verrekend = true;                     // ook het vangnet in de router weet dit
+  const actie = verrekenActie(meter);
   const werk = (async () => {
     try {
       const cfg = await creditsConfig(env);
+      if (actie === "vrijgeef") {
+        await creditsStub(env).fetch("https://do/credits/vrijgeef", {
+          method: "POST",
+          body: JSON.stringify({ email: krediet.email, reservering: krediet.reservering }),
+        });
+        return;
+      }
       await creditsStub(env).fetch("https://do/credits/boek", {
         method: "POST",
         body: JSON.stringify({
-          email, agent, model: meter.model,
+          email: krediet.email, agent, model: meter.model,
           invoer: meter.invoer, uitvoer: meter.uitvoer,
           cacheLees: meter.cacheLees, cacheSchrijf: meter.cacheSchrijf,
           credits: meterCredits(meter, cfg.koers, cfg.marge),
+          reservering: krediet.reservering,
+          maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen,
         }),
       });
-    } catch (e) { /* afboeken is best-effort */ }
+    } catch (e) { /* verrekenen is best-effort */ }
   })();
   if (ctx && ctx.waitUntil) ctx.waitUntil(werk);
 }
 
-// DIR-93 - welk model draait er voor DEZE gebruiker? De keuze van de klant wint van
-// de instelling in /admin (AC-6). Een bezoeker zonder klant-sessie krijgt gewoon de
-// admin-instelling.
-async function modelVoor(env, ctxData) {
+// AC-0/AC-5/AC-6 - de poort voor de chat. Eén Durable-Object-aanroep doet alles wat
+// er vooraf nodig is: saldo aanmaken als het er nog niet is, kijken of er ruimte is,
+// die ruimte reserveren, en het model van deze klant teruggeven. Voorheen waren dat
+// twee aanroepen naar hetzelfde record.
+//
+// Kijken, inloggen en het kantoor bekijken komen hier niet langs; alleen praten.
+async function creditsReserveer(request, env) {
   const adminModel = await actiefModel(env);
-  const email = ctxData && ctxData.soort === "klant" ? ctxData.email : "";
-  if (!email) return adminModel;
+  // Dirk zelf heeft geen saldo, en wie niet is ingelogd is al door de chat-poort
+  // tegengehouden. Beiden draaien op het model uit /admin en hebben niets te
+  // verrekenen.
+  const geenKrediet = { email: "", model: adminModel, reservering: "", verrekend: true };
+  if (await isAdmin(request, env)) return { weigering: null, krediet: geenKrediet };
+  const sessie = await huidigeSessie(request, env);
+  if (!sessie || !sessie.email) return { weigering: null, krediet: geenKrediet };
+
+  const cfg = await creditsConfig(env);
   try {
-    const resp = await creditsStub(env).fetch("https://do/credits/saldo", {
+    const resp = await creditsStub(env).fetch("https://do/credits/reserveer", {
       method: "POST",
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({
+        email: sessie.email, startsaldo: cfg.startsaldo,
+        koers: cfg.koers, marge: cfg.marge, adminModel,
+      }),
     });
     const j = await resp.json();
-    return modelVoorKlant(j.model, adminModel);
-  } catch (e) { return adminModel; }
-}
-
-// AC-6/AC-7 - de poort voor de chat: staat het saldo op nul of lager, dan gaat er
-// geen enkel token naar Anthropic. Geeft de weigering terug, of null als het mag.
-// Kijken, inloggen en het kantoor bekijken komen hier niet langs.
-async function creditsPoort(request, env) {
-  if (await isAdmin(request, env)) return null;              // Dirk zelf heeft geen saldo
-  const sessie = await huidigeSessie(request, env);
-  if (!sessie || !sessie.email) return null;                 // de chat-poort ving dit al af
-  let saldo = null;
-  try { saldo = await saldoStart(env, sessie.email); }
-  catch (e) { return null; }                                 // storing in het grootboek sluit niemand buiten
-  if (magChattenMetSaldo(saldo)) return null;
-  return json({ error: "Je credits zijn op — koop bij om verder te praten.", credits: saldo }, 402);
+    if (!j.toegestaan) {
+      return {
+        weigering: json({ error: "Je credits zijn op — koop bij om verder te praten.", credits: j.saldo }, 402),
+        krediet: null,
+      };
+    }
+    return {
+      weigering: null,
+      krediet: {
+        email: sessie.email, model: j.model || adminModel,
+        reservering: j.reservering || "", verrekend: false,
+      },
+    };
+  } catch (e) {
+    // Een storing in het grootboek sluit niemand buiten; dan draait dit bericht
+    // gewoon op de instelling uit /admin en valt er niets te verrekenen.
+    return { weigering: null, krediet: geenKrediet };
+  }
 }
 
 // Bezoekerssessies zitten in hun eigen naamruimte ("sess:"). De aanroeper geeft een
@@ -4694,6 +4920,8 @@ const ADMIN_HTML = `<!doctype html>
         <div class="veld"><label for="cStart">Gratis startsaldo (credits)</label><input id="cStart" type="text"></div>
         <div class="veld"><label for="cKoers">Dollarkoers (1 USD in euro)</label><input id="cKoers" type="text"></div>
         <div class="veld"><label for="cMarge">Margefactor</label><input id="cMarge" type="text"></div>
+        <div class="veld"><label for="cMax">Grootboekregels per klant</label><input id="cMax" type="text"><span class="hint">Elke klant houdt zijn eigen laatste regels; een drukke klant duwt die van een rustige niet weg.</span></div>
+        <div class="veld"><label for="cDagen">Bewaartermijn (dagen)</label><input id="cDagen" type="text"><span class="hint">Oudere regels worden opgeruimd. Het saldo verandert daar nooit door.</span></div>
         <div class="knoppen"><button id="cBewaar">Instellingen bewaren</button><span class="melding" id="cMelding"></span></div>
         <p class="muted">Geldt vanaf nu: het startsaldo voor wie hierna voor het eerst inlogt, koers en marge voor wat hierna wordt afgeboekt.</p>
       </div>
@@ -5087,6 +5315,8 @@ const ADMIN_HTML = `<!doctype html>
       document.getElementById('cStart').value=cfg.startsaldo;
       document.getElementById('cKoers').value=cfg.koers;
       document.getElementById('cMarge').value=cfg.marge;
+      document.getElementById('cMax').value=cfg.maxRegels;
+      document.getElementById('cDagen').value=cfg.bewaardagen;
       renderSaldi((res.j&&res.j.saldi)||[]);
       renderBoekingen((res.j&&res.j.regels)||[]);
     });
@@ -5135,7 +5365,9 @@ const ADMIN_HTML = `<!doctype html>
     api('POST','/api/admin/credits/config',{
       startsaldo:Number(document.getElementById('cStart').value),
       koers:Number(document.getElementById('cKoers').value),
-      marge:Number(document.getElementById('cMarge').value)
+      marge:Number(document.getElementById('cMarge').value),
+      maxRegels:Number(document.getElementById('cMax').value),
+      bewaardagen:Number(document.getElementById('cDagen').value)
     }).then(function(res){
       if(!res.ok){ meld((res.j&&res.j.error)||'Opslaan mislukt.'); return; }
       meld(''); document.getElementById('cMelding').textContent='Bewaard.'; laadCredits();
@@ -5167,7 +5399,7 @@ async function selectSite(stub, token, siteUrl, alleSites) {
   return gsc;
 }
 
-async function handleChat(request, env, ctx) {
+async function handleChat(request, env, ctx, krediet) {
   if (!env.ANTHROPIC_API_KEY) {
     return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
   }
@@ -5269,12 +5501,14 @@ async function handleChat(request, env, ctx) {
   // aanroepen waarin de agent eerst data ophaalt (AC-3). Wat verbruikt is wordt
   // geboekt, ook als het antwoord daarna alsnog mislukt.
   const meter = nieuweMeter();
-  const gekozenModel = await modelVoor(env, ctxData);   // DIR-93: keuze van de klant
+  // DIR-100 AC-0: de poort haalde saldo en model al in één aanroep op, dus hier
+  // hoeft het record niet nog een keer uit de Durable Object.
+  const gekozenModel = (krediet && krediet.model) || "";
   let finalText = "";
   let onbereikbaar = false;
   try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
-  boekVerbruik(env, ctx, ctxData, "gsc", meter);
+  verrekenKrediet(env, ctx, krediet, "gsc", meter);
   if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
   if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
@@ -5299,7 +5533,7 @@ async function selectGa4Property(stub, token, property, alleProps) {
 }
 
 // Gertjan-chat (GA4). Zelfde vorm als handleChat, maar met GA4-state/tool/persona.
-async function handleGa4Chat(request, env, ctx) {
+async function handleGa4Chat(request, env, ctx, krediet) {
   if (!env.ANTHROPIC_API_KEY) {
     return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
   }
@@ -5388,12 +5622,14 @@ async function handleGa4Chat(request, env, ctx) {
   // aanroepen waarin de agent eerst data ophaalt (AC-3). Wat verbruikt is wordt
   // geboekt, ook als het antwoord daarna alsnog mislukt.
   const meter = nieuweMeter();
-  const gekozenModel = await modelVoor(env, ctxData);   // DIR-93: keuze van de klant
+  // DIR-100 AC-0: de poort haalde saldo en model al in één aanroep op, dus hier
+  // hoeft het record niet nog een keer uit de Durable Object.
+  const gekozenModel = (krediet && krediet.model) || "";
   let finalText = "";
   let onbereikbaar = false;
   try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
-  boekVerbruik(env, ctx, ctxData, "ga4", meter);
+  verrekenKrediet(env, ctx, krediet, "ga4", meter);
   if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
   if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
@@ -5418,7 +5654,7 @@ async function selectAdsCustomer(stub, token, env, customer, alle, loginCid) {
 }
 
 // Ilona-chat (Google Ads). Zelfde vorm als handleChat/handleGa4Chat.
-async function handleAdsChat(request, env, ctx) {
+async function handleAdsChat(request, env, ctx, krediet) {
   if (!env.ANTHROPIC_API_KEY) {
     return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
   }
@@ -5548,12 +5784,14 @@ async function handleAdsChat(request, env, ctx) {
   // aanroepen waarin de agent eerst data ophaalt (AC-3). Wat verbruikt is wordt
   // geboekt, ook als het antwoord daarna alsnog mislukt.
   const meter = nieuweMeter();
-  const gekozenModel = await modelVoor(env, ctxData);   // DIR-93: keuze van de klant
+  // DIR-100 AC-0: de poort haalde saldo en model al in één aanroep op, dus hier
+  // hoeft het record niet nog een keer uit de Durable Object.
+  const gekozenModel = (krediet && krediet.model) || "";
   let finalText = "";
   let onbereikbaar = false;
   try { finalText = await chatLoop(env, system, convo, tools, dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
-  boekVerbruik(env, ctx, ctxData, "ads", meter);
+  verrekenKrediet(env, ctx, krediet, "ads", meter);
   if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
   if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
@@ -5569,7 +5807,7 @@ async function handleAdsChat(request, env, ctx) {
 }
 
 // Anton (content/tekst): pure Claude-agent, geen databron/koppeling (DIR-39).
-async function handleContentChat(request, env, ctx) {
+async function handleContentChat(request, env, ctx, krediet) {
   if (!env.ANTHROPIC_API_KEY) {
     return json({ error: "De agent is nog niet geconfigureerd (API-sleutel ontbreekt)." }, 500);
   }
@@ -5610,12 +5848,14 @@ async function handleContentChat(request, env, ctx) {
   // aanroepen waarin de agent eerst data ophaalt (AC-3). Wat verbruikt is wordt
   // geboekt, ook als het antwoord daarna alsnog mislukt.
   const meter = nieuweMeter();
-  const gekozenModel = await modelVoor(env, ctxData);   // DIR-93: keuze van de klant
+  // DIR-100 AC-0: de poort haalde saldo en model al in één aanroep op, dus hier
+  // hoeft het record niet nog een keer uit de Durable Object.
+  const gekozenModel = (krediet && krediet.model) || "";
   let finalText = "";
   let onbereikbaar = false;
   try { finalText = await chatLoop(env, system, convo, col.tools, col.dispatch, meter, gekozenModel); }
   catch (e) { onbereikbaar = true; }
-  boekVerbruik(env, ctx, ctxData, "anton", meter);
+  verrekenKrediet(env, ctx, krediet, "anton", meter);
   if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
   if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
@@ -6010,9 +6250,13 @@ export default {
       if (!bij) return json({ error: "Geef een aantal credits op (negatief = afboeken)." }, 400);
       if (!reden) return json({ error: "Geef een reden op." }, 400);
       try {
+        const cfg = await creditsConfig(env);
         const r = await creditsStub(env).fetch("https://do/credits/correctie", {
           method: "POST",
-          body: JSON.stringify({ email: doelEmail, credits: bij, reden }),
+          body: JSON.stringify({
+            email: doelEmail, credits: bij, reden,
+            maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen,
+          }),
         });
         const j = await r.json();
         return json({ ok: true, saldo: j.saldo });
@@ -6233,10 +6477,29 @@ export default {
     // DIR-92 - praten kost credits. Deze controle staat voor de handlers, dus voor
     // elke API-aanroep (AC-7), en dekt in een keer alle vier de agents (AC-6). De
     // data-endpoints staan er bewust niet bij: die kosten geen Anthropic-tokens.
-    const CHAT_PADEN = ["/api/chat", "/api/ga4/chat", "/api/ads/chat", "/api/content/chat"];
-    if (CHAT_PADEN.indexOf(path) >= 0 && request.method === "POST") {
-      const weigering = await creditsPoort(request, env);
-      if (weigering) return weigering;
+    //
+    // DIR-100: de vier chat-endpoints worden hier ook meteen afgehandeld. Dat moet
+    // wel: de reservering die de poort neerzet hoort altijd weer vrij te vallen, ook
+    // als een handler er halverwege uitstapt omdat er bijvoorbeeld geen vraag in het
+    // bericht stond. Door het hier te dispatchen is er één plek waar dat vangnet
+    // staat, in plaats van bij elke vroege uitgang apart.
+    const CHAT_PADEN = {
+      "/api/chat": handleChat,
+      "/api/ga4/chat": handleGa4Chat,
+      "/api/ads/chat": handleAdsChat,
+      "/api/content/chat": handleContentChat,
+    };
+    if (CHAT_PADEN[path] && request.method === "POST") {
+      const poort = await creditsReserveer(request, env);
+      if (poort.weigering) return poort.weigering;
+      const krediet = poort.krediet;
+      try {
+        return await CHAT_PADEN[path](request, env, ctx, krediet);
+      } finally {
+        // Heeft de handler niets verrekend, dan is er ook niets verbruikt: de
+        // reservering valt vrij en de klant houdt zijn credits (AC-6).
+        verrekenKrediet(env, ctx, krediet, "", nieuweMeter());
+      }
     }
 
     // Mag DEZE bezoeker chatten? Altijd 200, zodat de pagina bij een gewone
@@ -6292,11 +6555,6 @@ export default {
       return json(perf);
     }
 
-    // AC-1..AC-6 — GSC-agent: streaming chat gegrond in de sessie-data.
-    if (path === "/api/chat" && request.method === "POST") {
-      return handleChat(request, env, ctx);
-    }
-
     // DIR-28 — GA4/Gertjan: properties oplijsten (AC-2).
     // DIR-86: met een vastgelegde property ziet de klant alleen die; anders zijn
     // eigen lijst uit zijn eigen koppeling.
@@ -6331,11 +6589,6 @@ export default {
       });
       if (out && out.error) return json(out, 502);
       return json(out);
-    }
-
-    // DIR-28 — Gertjan-agent (GA4): streaming chat met live tool-use (AC-4/AC-5).
-    if (path === "/api/ga4/chat" && request.method === "POST") {
-      return handleGa4Chat(request, env, ctx);
     }
 
     // DIR-30 — Google Ads/Ilona: toegankelijke accounts (AC-2).
@@ -6385,11 +6638,6 @@ export default {
       return json(out);
     }
 
-    // DIR-30 — Ilona-agent (Google Ads): streaming chat met live tool-use (AC-4/AC-5).
-    if (path === "/api/ads/chat" && request.method === "POST") {
-      return handleAdsChat(request, env, ctx);
-    }
-
     // DIR-42/DIR-82 — de Meta-knop vroeg hier of deze sessie een Meta-context had.
     // Die kwam uit de magic-link, en die ingang is vervallen. Het endpoint zit nu
     // achter de chat-poort (geen anonieme aanroep meer) en meldt eerlijk dat Meta
@@ -6397,11 +6645,6 @@ export default {
     if (path === "/api/meta/status" && request.method === "GET") {
       if (!(await magChatten(request, env))) return geenSessie();
       return json({ available: false, naam: null });
-    }
-
-    // DIR-39 — Anton (content/tekst): pure Claude-agent, geen koppeling.
-    if (path === "/api/content/chat" && request.method === "POST") {
-      return handleContentChat(request, env, ctx);
     }
 
     return json({ error: "Onbekende route." }, 404);

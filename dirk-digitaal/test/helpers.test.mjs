@@ -58,6 +58,15 @@ import {
   geldigKlantModel,
   nieuwSaldoRecord,
   klantRegel,
+  boekIndexPrefix,
+  boekIndexSleutel,
+  snoeiGrensSleutel,
+  overschot,
+  reserveringPrefix,
+  reserveringSchatting,
+  beschikbaarSaldo,
+  reserveringVerlopen,
+  verrekenActie,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -1021,9 +1030,11 @@ test("magChattenMetSaldo: op nul gaat de deur dicht (AC-6/AC-7)", () => {
 });
 
 test("schoneCreditsConfig: onzin uit het formulier wordt een bruikbare instelling", () => {
-  assert.deepEqual(schoneCreditsConfig({}), { startsaldo: 200, koers: 0.92, marge: 2 });
+  // DIR-100 heeft hier maxRegels en bewaardagen bij gezet; de rest is ongewijzigd.
+  assert.deepEqual(schoneCreditsConfig({}),
+    { startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365 });
   assert.deepEqual(schoneCreditsConfig({ startsaldo: 50, koers: 0.9, marge: 3 }),
-    { startsaldo: 50, koers: 0.9, marge: 3 });
+    { startsaldo: 50, koers: 0.9, marge: 3, maxRegels: 500, bewaardagen: 365 });
   // Geen halve credits, geen negatief startsaldo, geen marge onder 1 (dat zou
   // betekenen dat Dirk onder de kostprijs verkoopt).
   assert.equal(schoneCreditsConfig({ startsaldo: 12.7 }).startsaldo, 13);
@@ -1219,4 +1230,148 @@ test("klantRegel: een verbruiksregel houdt alles wat de klant nodig heeft", () =
   // Een onbekende soort telt als verbruik, niet als correctie.
   assert.equal(klantRegel({ soort: "iets anders" }).soort, "verbruik");
   assert.equal(klantRegel(null).credits, 0);
+});
+
+
+// ── DIR-100 · snoeien per klant en reserveren ───────────────────────────────
+
+test("snoeien per klant: de index van A en die van B raken elkaar nooit (AC-1)", () => {
+  const a = boekIndexPrefix("aap@voorbeeld.nl");
+  const b = boekIndexPrefix("noot@voorbeeld.nl");
+  assert.notEqual(a, b);
+  // Honderd regels van A vallen allemaal onder de prefix van A en onder geen enkele
+  // andere. Snoeien met list({prefix: a}) kan dus nooit een regel van B raken - dat
+  // is precies wat de globale variant wél deed.
+  const vanA = [];
+  for (let i = 0; i < 100; i++) vanA.push(boekIndexSleutel("aap@voorbeeld.nl", 1000 + i, "x" + i));
+  assert.equal(vanA.every((k) => k.startsWith(a)), true);
+  assert.equal(vanA.some((k) => k.startsWith(b)), false);
+  // Hoofdletters en spaties zijn hetzelfde adres, dus dezelfde bak.
+  assert.equal(boekIndexPrefix("  AAP@Voorbeeld.NL "), a);
+});
+
+test("de indexprefix van de een kan niet in die van de ander vallen", () => {
+  // Zonder encoderen zou een adres met een dubbele punt in de prefix van een ander
+  // adres kunnen vallen, en dan snoeit de een de historie van de ander weg.
+  const gewoon = boekIndexPrefix("aap@voorbeeld.nl");
+  const gemeen = boekIndexPrefix("aap@voorbeeld.nl:noot@voorbeeld.nl");
+  assert.equal(gemeen.startsWith(gewoon), false);
+  assert.equal(gewoon.startsWith(gemeen), false);
+  // Zelfde bescherming voor de reserveringen.
+  assert.equal(reserveringPrefix("aap@voorbeeld.nl:x").startsWith(reserveringPrefix("aap@voorbeeld.nl")), false);
+});
+
+test("indexsleutels sorteren chronologisch, ook over cijferlengtes heen", () => {
+  const vroeg = boekIndexSleutel("ik@voorbeeld.nl", 9, "a");
+  const laat = boekIndexSleutel("ik@voorbeeld.nl", 1000, "b");
+  assert.equal(vroeg < laat, true);
+});
+
+test("overschot: alleen wat er echt te veel is (AC-3)", () => {
+  assert.equal(overschot(6, 5), 1);
+  assert.equal(overschot(5, 5), 0);
+  assert.equal(overschot(2, 5), 0);       // nooit negatief
+  assert.equal(overschot(0, 5), 0);
+  // Dit getal is de limiet van de list() bij het snoeien: er worden dus nooit meer
+  // sleutels gelezen dan er weg moeten. Geen scan over het hele boek.
+  assert.equal(overschot(5000, 500), 4500);
+  // Geen maximum meegegeven betekent niets snoeien. Zou dit 5000 teruggeven, dan
+  // wist een ontbrekende instelling de hele historie van een klant.
+  assert.equal(overschot(5000, undefined), 0);
+  assert.equal(overschot(5000, 0), 0);
+  assert.equal(overschot(5000, null), 0);
+  assert.equal(overschot(5000, "geen getal"), 0);
+});
+
+test("snoeiGrensSleutel: de bewaartermijn wordt een bovengrens voor list() (AC-2)", () => {
+  const nu = 100 * 24 * 60 * 60 * 1000;                 // dag 100
+  const grens = snoeiGrensSleutel("ik@voorbeeld.nl", nu, 30);
+  const prefix = boekIndexPrefix("ik@voorbeeld.nl");
+  assert.equal(grens.startsWith(prefix), true);
+  // Een regel van dag 60 valt vóór de grens (dus weg), een van dag 80 erna (blijft).
+  const dag = 24 * 60 * 60 * 1000;
+  assert.equal(boekIndexSleutel("ik@voorbeeld.nl", 60 * dag, "a") < grens, true);
+  assert.equal(boekIndexSleutel("ik@voorbeeld.nl", 80 * dag, "a") < grens, false);
+  // Zonder bewaartermijn ligt de grens op het begin der tijden: er valt niets weg.
+  assert.equal(snoeiGrensSleutel("ik@voorbeeld.nl", nu, 0), prefix + "0".repeat(14));
+});
+
+test("snoeien raakt alleen de historie, nooit het geld (AC-4)", () => {
+  // Alles wat het snoeien aanwijst zit onder de index- of grootboekprefix. Het
+  // saldorecord staat onder "s:" en komt in geen enkele van die lijsten voor, dus
+  // een gesnoeide regel kan het saldo niet veranderen.
+  const prefix = boekIndexPrefix("ik@voorbeeld.nl");
+  assert.equal(prefix.startsWith("s:"), false);
+  assert.equal(prefix.startsWith("i:"), true);
+  assert.equal(boekIndexSleutel("ik@voorbeeld.nl", 1, "a").indexOf("s:"), -1);
+  // En de grens voor de bewaartermijn blijft ook binnen de index van deze klant.
+  assert.equal(snoeiGrensSleutel("ik@voorbeeld.nl", 999, 1).startsWith(prefix), true);
+});
+
+test("reserveringSchatting: een grondiger model reserveert meer (AC-5)", () => {
+  const zuinig = reserveringSchatting("claude-sonnet-5", 0.92, 2);
+  const grondig = reserveringSchatting("claude-opus-5", 0.92, 2);
+  assert.equal(zuinig > 0, true);
+  assert.equal(grondig > zuinig, true);
+  // Ongeveer de prijsverhouding uit de tabel. Niet exact 2,5x: er wordt naar boven
+  // afgerond nadat de verhouding is toegepast, niet erna.
+  assert.equal(Math.abs(grondig / zuinig - 2.5) < 0.1, true, zuinig + ' -> ' + grondig);
+});
+
+test("twee gelijktijdige reserveringen slagen niet allebei (AC-5)", () => {
+  const nu = 1000;
+  const saldo = 20;
+  // Vraag 1 komt binnen: er is ruimte, dus hij mag en legt zijn schatting vast.
+  const eerste = { bedrag: reserveringSchatting("claude-sonnet-5", 0.92, 2), tijd: nu };
+  assert.equal(beschikbaarSaldo(saldo, [], nu) > 0, true);
+  // Vraag 2 komt binnen terwijl vraag 1 nog loopt: die ziet de reservering staan.
+  const naEerste = beschikbaarSaldo(saldo, [eerste], nu);
+  assert.equal(naEerste < saldo, true, "de reservering hoort ruimte in te nemen");
+  const tweede = { bedrag: eerste.bedrag, tijd: nu };
+  // Vraag 3 zou er zonder reserveringen gewoon doorheen zijn gekomen; nu niet meer.
+  assert.equal(beschikbaarSaldo(saldo, [eerste, tweede], nu) <= 0, true);
+  assert.equal(beschikbaarSaldo(saldo, [], nu) > 0, true, "zonder reserveringen mag het wel");
+});
+
+test("een reservering die blijft hangen blokkeert niet voor altijd (AC-7)", () => {
+  const ttl = 10 * 60 * 1000;
+  const oud = { bedrag: 15, tijd: 0 };
+  // Binnen de looptijd telt hij mee: een lopend antwoord mag niet dubbel betaald.
+  assert.equal(beschikbaarSaldo(20, [oud], 1000, ttl), 5);
+  assert.equal(reserveringVerlopen(oud, 1000, ttl), false);
+  // Daarna niet meer, anders zou een afgebroken verzoek een klant blijven blokkeren.
+  assert.equal(beschikbaarSaldo(20, [oud], ttl + 1, ttl), 20);
+  assert.equal(reserveringVerlopen(oud, ttl + 1, ttl), true);
+});
+
+test("beschikbaarSaldo: rare invoer telt als nul, niet als gratis saldo", () => {
+  assert.equal(beschikbaarSaldo(100, [null, undefined, {}], 1), 100);
+  assert.equal(beschikbaarSaldo(100, [{ bedrag: -50, tijd: 1 }], 1), 100);   // nooit erbij
+  assert.equal(beschikbaarSaldo(0, [], 1), 0);
+});
+
+test("een mislukt antwoord geeft de reservering vrij (AC-6)", () => {
+  // Geen enkele API-aanroep gedaan: er is niets verbruikt, dus de klant houdt alles.
+  assert.equal(verrekenActie(nieuweMeter()), "vrijgeef");
+  assert.equal(verrekenActie(null), "vrijgeef");
+  assert.equal(verrekenActie(undefined), "vrijgeef");
+  // Wel gebeld, maar het antwoord ging daarna mis: die tokens zijn echt verbruikt,
+  // dus die worden geboekt. Anders zou een fout in de laatste stap gratis zijn.
+  const gebruikt = nieuweMeter();
+  meetAanroep(gebruikt, "claude-sonnet-5", { input_tokens: 10, output_tokens: 5 });
+  assert.equal(verrekenActie(gebruikt), "boek");
+});
+
+test("credits-instellingen: maximum per klant en bewaartermijn zijn begrensd (AC-2)", () => {
+  const standaard = schoneCreditsConfig({});
+  assert.equal(standaard.maxRegels, 500);
+  assert.equal(standaard.bewaardagen, 365);
+  assert.equal(schoneCreditsConfig({ maxRegels: 5, bewaardagen: 0 }).maxRegels, 10);
+  assert.equal(schoneCreditsConfig({ bewaardagen: 0 }).bewaardagen, 1);
+  assert.equal(schoneCreditsConfig({ bewaardagen: 99999 }).bewaardagen, 3650);
+  assert.equal(schoneCreditsConfig({ maxRegels: 12.6 }).maxRegels, 13);
+  // De bestaande instellingen blijven werken zoals ze waren.
+  assert.equal(standaard.startsaldo, 200);
+  assert.equal(standaard.koers, 0.92);
+  assert.equal(standaard.marge, 2);
 });
