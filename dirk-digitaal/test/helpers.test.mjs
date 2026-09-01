@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import worker from "../src/index.js";
 import {
   buildGoogleAuthUrl,
   parseCookies,
@@ -70,6 +71,9 @@ import {
   saldoEvent,
   metGeduld,
   saldoVeld,
+  keurCreditsConfig,
+  snoeitVerderOp,
+  snoeiAantal,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -1369,10 +1373,13 @@ test("credits-instellingen: maximum per klant en bewaartermijn zijn begrensd (AC
   const standaard = schoneCreditsConfig({});
   assert.equal(standaard.maxRegels, 500);
   assert.equal(standaard.bewaardagen, 365);
-  assert.equal(schoneCreditsConfig({ maxRegels: 5, bewaardagen: 0 }).maxRegels, 10);
-  assert.equal(schoneCreditsConfig({ bewaardagen: 0 }).bewaardagen, 1);
+  assert.equal(schoneCreditsConfig({ maxRegels: 5, bewaardagen: 0 }).maxRegels, 50);
+  assert.equal(schoneCreditsConfig({ bewaardagen: 0 }).bewaardagen, 30);
   assert.equal(schoneCreditsConfig({ bewaardagen: 99999 }).bewaardagen, 3650);
-  assert.equal(schoneCreditsConfig({ maxRegels: 12.6 }).maxRegels, 13);
+  // DIR-104: 12,6 valt nu onder de ondergrens van 50; afronden op hele regels toont
+  // een waarde die er wel boven ligt.
+  assert.equal(schoneCreditsConfig({ maxRegels: 12.6 }).maxRegels, 50);
+  assert.equal(schoneCreditsConfig({ maxRegels: 120.6 }).maxRegels, 121);
   // De bestaande instellingen blijven werken zoals ze waren.
   assert.equal(standaard.startsaldo, 200);
   assert.equal(standaard.koers, 0.92);
@@ -1507,4 +1514,164 @@ test("saldoVeld en saldoEvent geven hetzelfde bedrag door", () => {
   // En allebei zwijgen ze bij een onzeker bedrag.
   assert.equal(saldoEvent({ saldo: "x" }), "");
   assert.deepEqual(saldoVeld({ saldo: "x" }), {});
+});
+
+
+// ── DIR-104 · verlagen vraagt om bevestiging ────────────────────────────────
+
+test("ondergrenzen: 30 dagen en 50 regels worden afgedwongen (AC-4)", () => {
+  // schoneCreditsConfig knijpt recht (voor wat er al in KV staat)...
+  assert.equal(schoneCreditsConfig({ bewaardagen: 1 }).bewaardagen, 30);
+  assert.equal(schoneCreditsConfig({ bewaardagen: 29 }).bewaardagen, 30);
+  assert.equal(schoneCreditsConfig({ maxRegels: 10 }).maxRegels, 50);
+  assert.equal(schoneCreditsConfig({ maxRegels: 49 }).maxRegels, 50);
+  // ...en wat er precies op de grens zit mag gewoon.
+  assert.equal(schoneCreditsConfig({ bewaardagen: 30 }).bewaardagen, 30);
+  assert.equal(schoneCreditsConfig({ maxRegels: 50 }).maxRegels, 50);
+});
+
+test("keurCreditsConfig: een te lage waarde wordt geweigerd, niet stil rechtgezet", () => {
+  // Dit is het verschil met schoneCreditsConfig: typt Dirk 1 in plaats van 100, dan
+  // hoort hij dat te horen in plaats van stilzwijgend 30 te krijgen.
+  assert.match(keurCreditsConfig({ bewaardagen: 1 }), /30 dagen/);
+  assert.match(keurCreditsConfig({ maxRegels: 10 }), /50 regels/);
+  // Beide meldingen zeggen waarom het erg is, niet alleen dat het niet mag.
+  assert.match(keurCreditsConfig({ bewaardagen: 1 }), /niet terugkrijgt/);
+  // Wat mag, mag.
+  assert.equal(keurCreditsConfig({ bewaardagen: 30, maxRegels: 50 }), "");
+  assert.equal(keurCreditsConfig({ bewaardagen: 365, maxRegels: 500 }), "");
+  assert.equal(keurCreditsConfig({}), "");
+  // Onzin telt als te laag: liever weigeren dan een lege waarde doorlaten.
+  assert.notEqual(keurCreditsConfig({ bewaardagen: "veel" }), "");
+  assert.notEqual(keurCreditsConfig({ maxRegels: null }), "");
+});
+
+test("snoeitVerderOp: alleen verlagen is destructief (AC-1)", () => {
+  const nu = { bewaardagen: 365, maxRegels: 500 };
+  assert.equal(snoeitVerderOp(nu, { bewaardagen: 200, maxRegels: 500 }), true);
+  assert.equal(snoeitVerderOp(nu, { bewaardagen: 365, maxRegels: 100 }), true);
+  // Verhogen of gelijk laten gaat zonder onderbreking.
+  assert.equal(snoeitVerderOp(nu, { bewaardagen: 400, maxRegels: 500 }), false);
+  assert.equal(snoeitVerderOp(nu, { bewaardagen: 365, maxRegels: 500 }), false);
+  assert.equal(snoeitVerderOp(nu, { bewaardagen: 400, maxRegels: 900 }), false);
+});
+
+test("snoeiAantal: telt de union, niet de som (AC-2)", () => {
+  // Allebei de snoeiregels raken de oudste regels, dus de ene verzameling zit in de
+  // andere. Zou je optellen, dan stond er een te hoog getal in de bevestiging.
+  // 100 regels, maximum 60 => 40 te veel; 25 daarvan zijn ook te oud.
+  assert.equal(snoeiAantal(25, 100, 60), 40);
+  // Andersom: meer te oud dan er over het maximum zijn.
+  assert.equal(snoeiAantal(70, 100, 60), 70);
+  // Alleen te oud, niets over het maximum.
+  assert.equal(snoeiAantal(12, 30, 500), 12);
+  // Alleen over het maximum, niets te oud.
+  assert.equal(snoeiAantal(0, 100, 60), 40);
+  // Niets te doen.
+  assert.equal(snoeiAantal(0, 30, 500), 0);
+  // Geen maximum meegegeven blijft "niets opruimen" (de veilige kant uit DIR-100).
+  assert.equal(snoeiAantal(0, 5000, undefined), 0);
+  assert.equal(snoeiAantal(9, 5000, undefined), 9);
+});
+
+
+// ── DIR-104 · de volgorde in de route zelf ─────────────────────────────────
+// De losse functies zijn gedekt, maar de VOLGORDE niet: keuren, normaliseren, de
+// huidige instelling lezen, de poort, en pas dan schrijven. Verhuist die put later
+// een paar regels omhoog, of vervangt iemand cfg door de ruwe body in de
+// vergelijking, dan valt AC-3 om zonder dat er een test faalt. Daarom hier de route
+// zelf, met een neppe KV en Durable Object eromheen.
+
+function nepCredits(antwoord) {
+  return {
+    idFromName() { return "nep"; },
+    get() {
+      return {
+        async fetch() {
+          return new Response(JSON.stringify(antwoord), { headers: { "Content-Type": "application/json" } });
+        },
+      };
+    },
+  };
+}
+
+const START_CONFIG = { startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365 };
+
+async function adminOmgeving(aantal) {
+  const store = { "config:credits": JSON.stringify(START_CONFIG) };
+  const env = {
+    ADMIN_PASSWORD: "geheim-voor-de-test",
+    CLIENTS: nepKv(store),                    // dezelfde neppe KV als bij DIR-82
+    CREDITS: nepCredits({ aantal: aantal == null ? 7 : aantal }),
+  };
+  const ctx = { waitUntil() {} };
+  // Via de echte inlogroute, zodat we het cookie niet hoeven na te bouwen.
+  const resp = await worker.fetch(new Request("https://dd.test/api/admin/login", {
+    method: "POST", body: JSON.stringify({ password: "geheim-voor-de-test" }),
+  }), env, ctx);
+  const cookie = String(resp.headers.get("Set-Cookie") || "").split(";")[0];
+  const zetConfig = (body) => worker.fetch(new Request("https://dd.test/api/admin/credits/config", {
+    method: "POST", headers: { Cookie: cookie }, body: JSON.stringify(body),
+  }), env, ctx);
+  const opgeslagen = () => JSON.parse(store["config:credits"]);
+  return { env, zetConfig, opgeslagen };
+}
+
+test("route: een onbevestigde verlaging schrijft NIETS weg (AC-3)", async () => {
+  const { zetConfig, opgeslagen } = await adminOmgeving(7);
+  const resp = await zetConfig({ ...START_CONFIG, bewaardagen: 200 });
+  assert.equal(resp.status, 409);
+  const j = await resp.json();
+  assert.equal(j.bevestigingNodig, true);
+  assert.equal(j.aantal, 7, "het getal uit het grootboek hoort mee te komen");
+  // Dit is de kern: de opgeslagen instelling is niet aangeraakt.
+  assert.equal(opgeslagen().bewaardagen, 365);
+  assert.deepEqual(opgeslagen(), START_CONFIG);
+});
+
+test("route: met bevestiging gaat dezelfde verlaging wel door", async () => {
+  const { zetConfig, opgeslagen } = await adminOmgeving(7);
+  const resp = await zetConfig({ ...START_CONFIG, bewaardagen: 200, bevestigd: true });
+  assert.equal(resp.status, 200);
+  assert.equal(opgeslagen().bewaardagen, 200);
+});
+
+test("route: verhogen gaat direct door, zonder bevestiging (AC-1)", async () => {
+  const { zetConfig, opgeslagen } = await adminOmgeving(7);
+  const resp = await zetConfig({ ...START_CONFIG, bewaardagen: 400, maxRegels: 600 });
+  assert.equal(resp.status, 200);
+  assert.equal(opgeslagen().bewaardagen, 400);
+  assert.equal(opgeslagen().maxRegels, 600);
+});
+
+test("route: een weggelaten veld telt als verlaging, niet als 'ongewijzigd'", async () => {
+  // De vergelijking gaat over de genormaliseerde instelling, niet over de ruwe body.
+  // Staat er 400 opgeslagen en laat het verzoek bewaardagen weg, dan wordt het de
+  // standaard 365 - en dat is lager, dus dat hoort bevestigd te worden.
+  const { env, zetConfig, opgeslagen } = await adminOmgeving(3);
+  await env.CLIENTS.put("config:credits", JSON.stringify({ ...START_CONFIG, bewaardagen: 400 }));
+  const resp = await zetConfig({ startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500 });
+  assert.equal(resp.status, 409);
+  assert.equal(opgeslagen().bewaardagen, 400, "en er is nog steeds niets weggeschreven");
+});
+
+test("route: een te lage waarde komt niet eens tot de bevestiging (AC-4)", async () => {
+  const { zetConfig, opgeslagen } = await adminOmgeving(7);
+  const resp = await zetConfig({ ...START_CONFIG, bewaardagen: 1 });
+  assert.equal(resp.status, 400);
+  assert.match((await resp.json()).error, /30 dagen/);
+  assert.deepEqual(opgeslagen(), START_CONFIG);
+  // Ook niet met bevestigd erbij: keuren staat vóór de poort.
+  const tweede = await zetConfig({ ...START_CONFIG, bewaardagen: 1, bevestigd: true });
+  assert.equal(tweede.status, 400);
+  assert.deepEqual(opgeslagen(), START_CONFIG);
+});
+
+test("route: zonder admin-sessie verandert er niets", async () => {
+  const { env, opgeslagen } = await adminOmgeving(7);
+  const resp = await worker.fetch(new Request("https://dd.test/api/admin/credits/config", {
+    method: "POST", body: JSON.stringify({ ...START_CONFIG, bewaardagen: 200, bevestigd: true }),
+  }), env, { waitUntil() {} });
+  assert.equal(resp.status, 401);
+  assert.deepEqual(opgeslagen(), START_CONFIG);
 });
