@@ -43,6 +43,15 @@ import {
   schoonKlantRecord,
   normaliseerEmail,
   agentStandaard,
+  modelPrijs,
+  tokenKosten,
+  kostenNaarCredits,
+  nieuweMeter,
+  meetAanroep,
+  meterCredits,
+  magChattenMetSaldo,
+  schoneCreditsConfig,
+  boekSleutel,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -923,4 +932,103 @@ test("agentStandaard: elke data-agent heeft een korte opening, bewerkbaar (DIR-9
   const eigen = samenAgent(agentStandaard("gsc"), { opening: "Eventjes kijken hoor." });
   assert.equal(eigen.opening, "Eventjes kijken hoor.");
   assert.equal(eigen.aangepast.opening, true);
+});
+
+
+// ── DIR-92 · credits ────────────────────────────────────────────────────────
+// De prijzen staan in de code (AC-10); deze tests pinnen de REKENSOM vast, zodat een
+// gewijzigd tarief straks een bewuste aanpassing is en geen stille verschuiving.
+
+test("tokenKosten: Sonnet rekent $2 in en $10 uit per miljoen tokens", () => {
+  // 1.000.000 invoer + 1.000.000 uitvoer = $2 + $10.
+  const usd = tokenKosten("claude-sonnet-5", { input_tokens: 1000000, output_tokens: 1000000 });
+  assert.equal(usd, 12);
+  // Opus is duurder: $5 + $25.
+  assert.equal(tokenKosten("claude-opus-5", { input_tokens: 1000000, output_tokens: 1000000 }), 30);
+  assert.equal(tokenKosten("claude-opus-4-8", { input_tokens: 1000000, output_tokens: 1000000 }), 30);
+});
+
+test("tokenKosten: cache-tokens tellen goedkoper mee dan gewone invoer", () => {
+  const gewoon = tokenKosten("claude-sonnet-5", { input_tokens: 1000000 });
+  const gelezen = tokenKosten("claude-sonnet-5", { cache_read_input_tokens: 1000000 });
+  const geschreven = tokenKosten("claude-sonnet-5", { cache_creation_input_tokens: 1000000 });
+  assert.equal(gelezen, gewoon * 0.1);          // uit de cache lezen: 0,1x
+  assert.equal(geschreven, gewoon * 1.25);      // cache wegschrijven: 1,25x
+  assert.equal(gelezen < gewoon, true);
+});
+
+test("modelPrijs: een onbekend model kost het Opus-tarief, nooit niets", () => {
+  assert.deepEqual(modelPrijs("iets-nieuws"), { invoer: 5, uitvoer: 25 });
+  assert.deepEqual(modelPrijs(""), { invoer: 5, uitvoer: 25 });
+  assert.deepEqual(modelPrijs("claude-sonnet-5"), { invoer: 2, uitvoer: 10 });
+});
+
+test("kostenNaarCredits: koers en marge erbij, naar boven afgerond", () => {
+  // $12 * 0,92 * 2 * 100 = 2208 credits, precies.
+  assert.equal(kostenNaarCredits(12, 0.92, 2), 2208);
+  // Afronden gaat omhoog: $0,001 * 0,92 * 2 * 100 = 0,184 → 1 credit.
+  assert.equal(kostenNaarCredits(0.001, 0.92, 2), 1);
+  // En het minimum is 1, ook bij een verwaarloosbaar bedrag.
+  assert.equal(kostenNaarCredits(0.0000001, 0.92, 2), 1);
+  // Een andere koers of marge verandert de uitkomst, niet de vorm.
+  assert.equal(kostenNaarCredits(1, 1, 1), 100);
+  assert.equal(kostenNaarCredits(1, 0.5, 3), 150);
+});
+
+test("meter: alle aanroepen van EEN antwoord worden bij elkaar opgeteld (AC-3)", () => {
+  const meter = nieuweMeter();
+  // Zo verloopt een antwoord van Albert: eerst data ophalen, dan pas antwoorden.
+  meetAanroep(meter, "claude-sonnet-5", { input_tokens: 400000, output_tokens: 100000 });
+  meetAanroep(meter, "claude-sonnet-5", { input_tokens: 600000, output_tokens: 900000 });
+  assert.equal(meter.aanroepen, 2);
+  assert.equal(meter.invoer, 1000000);
+  assert.equal(meter.uitvoer, 1000000);
+  // Samen $12 — precies alsof het een aanroep was, dus geen dubbele afronding.
+  assert.equal(meter.kostenUSD, 12);
+  assert.equal(meterCredits(meter, 0.92, 2), 2208);
+  assert.equal(meterCredits(meter, 0.92, 2), kostenNaarCredits(12, 0.92, 2));
+});
+
+test("meter: twee kleine aanroepen kosten samen 1 credit, niet 2", () => {
+  const meter = nieuweMeter();
+  meetAanroep(meter, "claude-sonnet-5", { input_tokens: 10, output_tokens: 10 });
+  meetAanroep(meter, "claude-sonnet-5", { input_tokens: 10, output_tokens: 10 });
+  assert.equal(meterCredits(meter, 0.92, 2), 1);
+  // Zonder aanroepen valt er niets af te boeken.
+  assert.equal(meterCredits(nieuweMeter(), 0.92, 2), 0);
+});
+
+test("meter: een modelwissel halverwege wordt per aanroep afgerekend", () => {
+  const meter = nieuweMeter();
+  meetAanroep(meter, "claude-sonnet-5", { input_tokens: 1000000 });   // $2
+  meetAanroep(meter, "claude-opus-5", { input_tokens: 1000000 });     // $5
+  assert.equal(meter.kostenUSD, 7);
+});
+
+test("magChattenMetSaldo: op nul gaat de deur dicht (AC-6/AC-7)", () => {
+  assert.equal(magChattenMetSaldo(1), true);
+  assert.equal(magChattenMetSaldo(0), false);
+  assert.equal(magChattenMetSaldo(-25), false);      // doorgeschoten door het laatste antwoord
+  // Onbekend saldo (grootboek onbereikbaar) sluit niemand buiten.
+  assert.equal(magChattenMetSaldo(null), true);
+  assert.equal(magChattenMetSaldo(undefined), true);
+});
+
+test("schoneCreditsConfig: onzin uit het formulier wordt een bruikbare instelling", () => {
+  assert.deepEqual(schoneCreditsConfig({}), { startsaldo: 200, koers: 0.92, marge: 2 });
+  assert.deepEqual(schoneCreditsConfig({ startsaldo: 50, koers: 0.9, marge: 3 }),
+    { startsaldo: 50, koers: 0.9, marge: 3 });
+  // Geen halve credits, geen negatief startsaldo, geen marge onder 1 (dat zou
+  // betekenen dat Dirk onder de kostprijs verkoopt).
+  assert.equal(schoneCreditsConfig({ startsaldo: 12.7 }).startsaldo, 13);
+  assert.equal(schoneCreditsConfig({ startsaldo: -5 }).startsaldo, 0);
+  assert.equal(schoneCreditsConfig({ marge: 0 }).marge, 1);
+  assert.equal(schoneCreditsConfig({ koers: "geen getal" }).koers, 0.92);
+});
+
+test("boekSleutel: sorteert chronologisch, ook over cijferlengtes heen", () => {
+  const vroeg = boekSleutel(9, "a");
+  const laat = boekSleutel(1000, "b");
+  assert.equal(vroeg < laat, true);
+  assert.match(vroeg, /^b:0{13}9-a$/);
 });
