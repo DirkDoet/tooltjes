@@ -1189,15 +1189,35 @@ async function creditsConfig(env) {
   return Object.assign({}, CREDITS_STANDAARD);
 }
 
-// DIR-93 - wat de klant zelf mag kiezen, in gewone taal. Twee smaken is genoeg:
-// Opus 4.8 en Opus 5 kosten precies hetzelfde, dus een derde keuze zou de klant
-// alleen jargon voorschotelen zonder dat er iets te kiezen valt.
+// DIR-101 - wat de klant zelf mag kiezen, in gewone woorden. Drie treden, en de
+// namen zijn kort omdat ze ook in de Model-kolom van de verbruikstabel komen.
+//
+// LET OP: Beter en Super kosten allebei $5 in / $25 uit - precies hetzelfde. Dat is
+// geen vergissing maar een besluit van Dirk, met dat prijspunt er expliciet bij
+// genoemd. Niet stilletjes terugbrengen naar twee treden. Wat er wel bij hoort is
+// dat de uitleg bij allebei eerlijk zegt dat het ongeveer 2,5x zoveel kost.
+//
+// Geen technische modelnamen in wat de klant leest, en niet het woord tokens; de
+// jargon-test bewaakt dat. "AI-model" mag alleen in de kop hieronder, op verzoek
+// van Dirk.
 const KLANT_MODELLEN = [
-  { id: "claude-sonnet-5", label: "Snel en voordelig (standaard)",
-    uitleg: "Prima voor de meeste vragen. Dit staat standaard aan." },
-  { id: "claude-opus-5", label: "Grondiger",
-    uitleg: "Denkt langer door en kost ongeveer 2,5x zoveel credits per vraag." },
+  { id: "claude-sonnet-5", label: "Standaard",
+    uitleg: "Snel en scherp geprijsd. Voor de meeste vragen is dit genoeg." },
+  { id: "claude-opus-4-8", label: "Beter",
+    uitleg: "Denkt langer door op lastige vragen. Kost ongeveer 2,5x zoveel credits per vraag." },
+  { id: "claude-opus-5", label: "Super",
+    uitleg: "De zwaarste keuze, voor als je ergens echt in wilt duiken. Kost ook ongeveer 2,5x zoveel credits per vraag." },
 ];
+
+// De kop is een letterlijk citaat van Dirk; niet herformuleren.
+export function klantModelKop() {
+  return "Kies het AI-model als aansturing van jouw marketingteam";
+}
+export function klantModelInleiding() {
+  return "Je keuze bepaalt hoe grondig je collega's over je vraag nadenken. "
+    + "Een zwaardere keuze kost meer credits per vraag, en je kunt altijd wisselen.";
+}
+
 export function klantModelKeuzes() {
   return KLANT_MODELLEN.map((m) => Object.assign({}, m));
 }
@@ -3891,7 +3911,8 @@ const OFFICE_HTML = `<!doctype html>
         <button class="knop" id="dash-koop" type="button">Credits bijkopen</button>
         <span class="dash-melding" id="dash-koopmelding"></span>
       </div>
-      <h3>Hoe grondig mag het zijn?</h3>
+      <h3>${klantModelKop()}</h3>
+      <p class="dash-melding">${klantModelInleiding()}</p>
       <div id="dash-modellen"></div>
       <p class="dash-melding" id="dash-modelmelding"></p>
       <h3>Wat je verbruikt hebt</h3>

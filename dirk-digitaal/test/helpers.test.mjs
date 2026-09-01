@@ -57,6 +57,8 @@ import {
   modelVoorKlant,
   klantModelKeuzes,
   geldigKlantModel,
+  klantModelKop,
+  klantModelInleiding,
   nieuwSaldoRecord,
   klantRegel,
   boekIndexPrefix,
@@ -1119,26 +1121,62 @@ test("modelVoorKlant: een verzonnen model komt er nooit doorheen", () => {
   assert.equal(modelVoorKlant("gpt-4", "ook-verzonnen"), "claude-sonnet-5");
 });
 
-test("klantmodellen: twee keuzes in gewone taal, Sonnet als standaard (AC-5)", () => {
+test("klantmodellen: drie treden in gewone woorden, Standaard voorop (AC-1c/AC-4)", () => {
   const keuzes = klantModelKeuzes();
-  assert.equal(keuzes.length, 2);
+  assert.equal(keuzes.length, 3);
+  assert.deepEqual(keuzes.map((k) => k.label), ["Standaard", "Beter", "Super"]);
+  // Standaard staat vooraan en is het model waar iemand zonder keuze op draait.
   assert.equal(keuzes[0].id, "claude-sonnet-5");
-  assert.match(keuzes[0].label, /standaard/i);
-  // Geen modelnamen of jargon in wat de klant leest.
+  assert.equal(modelVoorKlant("", ""), keuzes[0].id);
+  // De namen zijn korte woorden, want ze vullen ook de Model-kolom (AC-5).
+  for (const k of keuzes) assert.equal(k.label.split(" ").length, 1, k.label + " is geen kort woord");
+});
+
+test("klantmodellen: geen jargon in wat de klant leest (AC-2)", () => {
+  // Aangepast, niet weggehaald: "AI-model" mag sinds DIR-101 in de kop, maar de
+  // modelnamen en het woord tokens blijven overal verboden waar de klant kijkt.
+  const keuzes = klantModelKeuzes();
   for (const k of keuzes) {
     assert.equal(k.label.length > 0, true);
     assert.equal(k.uitleg.length > 0, true);
     assert.doesNotMatch(k.label + " " + k.uitleg, /claude|sonnet|opus|token/i);
   }
-  // De duurdere keuze legt uit dat hij meer kost.
-  assert.match(keuzes[1].uitleg, /credits/i);
+  const kop = klantModelKop();
+  const inleiding = klantModelInleiding();
+  assert.doesNotMatch(kop + " " + inleiding, /claude|sonnet|opus|token/i);
+  // En dit is wat er nu wél mag staan.
+  assert.match(kop, /AI-model/);
+});
+
+test("klantmodellen: de kop is het citaat van Dirk, letterlijk (AC-1)", () => {
+  assert.equal(klantModelKop(), "Kies het AI-model als aansturing van jouw marketingteam");
+  assert.doesNotMatch(klantModelKop(), /grondig/i);          // de oude kop is weg
+});
+
+test("klantmodellen: de inleiding legt uit wat de keuze doet en kost (AC-1b)", () => {
+  const t = klantModelInleiding();
+  assert.match(t, /credits/i, "zegt dat een zwaardere keuze meer credits kost");
+  assert.match(t, /wisselen/i, "zegt dat je altijd kunt wisselen");
+  assert.match(t, /\bje\b/, "jij-vorm, geen u-vorm");
+  assert.doesNotMatch(t, /\bu\b|\buw\b/);
+});
+
+test("klantmodellen: Beter en Super zeggen allebei wat ze kosten (AC-3)", () => {
+  // Ze kosten hetzelfde - dat is een besluit van Dirk, geen vergissing. De uitleg
+  // hoort dat dan ook bij allebei eerlijk te noemen in plaats van bij een van de twee.
+  const [, beter, sup] = klantModelKeuzes();
+  assert.match(beter.uitleg, /2,5x zoveel credits/);
+  assert.match(sup.uitleg, /2,5x zoveel credits/);
+  assert.equal(modelPrijs(beter.id).invoer, modelPrijs(sup.id).invoer);
+  assert.equal(modelPrijs(beter.id).uitvoer, modelPrijs(sup.id).uitvoer);
 });
 
 test("geldigKlantModel: alleen wat de klant echt mag kiezen", () => {
   assert.equal(geldigKlantModel("claude-sonnet-5"), "claude-sonnet-5");
   assert.equal(geldigKlantModel("claude-opus-5"), "claude-opus-5");
-  // Niet aangeboden of verzonnen: geen keuze, dus valt hij terug op /admin.
-  assert.equal(geldigKlantModel("claude-opus-4-8"), "");
+  // DIR-101: Beter is er sinds deze wijziging bij gekomen.
+  assert.equal(geldigKlantModel("claude-opus-4-8"), "claude-opus-4-8");
+  // Verzonnen blijft verzonnen: geen keuze, dus valt hij terug op /admin.
   assert.equal(geldigKlantModel("gpt-4"), "");
   assert.equal(geldigKlantModel(""), "");
   assert.equal(geldigKlantModel(null), "");
@@ -1674,4 +1712,47 @@ test("route: zonder admin-sessie verandert er niets", async () => {
   }), env, { waitUntil() {} });
   assert.equal(resp.status, 401);
   assert.deepEqual(opgeslagen(), START_CONFIG);
+});
+
+
+// ── DIR-101 · niemand raakt zijn keuze kwijt ────────────────────────────────
+
+test("een keuze van vóór DIR-101 blijft gewoon geldig (AC-6)", () => {
+  // Wie Sonnet had gekozen heet nu Standaard, wie Opus 5 had gekozen heet Super.
+  // Er wordt niemand teruggezet: dezelfde opgeslagen waarde blijft werken.
+  assert.equal(geldigKlantModel("claude-sonnet-5"), "claude-sonnet-5");
+  assert.equal(geldigKlantModel("claude-opus-5"), "claude-opus-5");
+  assert.equal(modelVoorKlant("claude-sonnet-5", "claude-opus-5"), "claude-sonnet-5");
+  assert.equal(modelVoorKlant("claude-opus-5", "claude-sonnet-5"), "claude-opus-5");
+  // En ze horen bij de juiste trede in de nieuwe namen.
+  const opId = (id) => klantModelKeuzes().find((k) => k.id === id).label;
+  assert.equal(opId("claude-sonnet-5"), "Standaard");
+  assert.equal(opId("claude-opus-5"), "Super");
+});
+
+test("de Model-kolom toont het korte woord, niet de hele zin (AC-5)", () => {
+  // Het dashboard zoekt het label op bij de id van de grootboekregel; dat label is
+  // precies wat er in de kolom komt. Lange labels zouden de kolom laten uitlopen.
+  for (const k of klantModelKeuzes()) {
+    assert.equal(k.label.length <= 10, true, k.label + " is te lang voor de kolom");
+    assert.equal(k.label, k.label.trim());
+    assert.notEqual(k.label, k.uitleg);
+  }
+});
+
+test("Beter en Super rekenen allebei het Opus-tarief af (AC-8)", () => {
+  // De afboeking gebruikt het werkelijk gekozen model, dus een vraag op Beter kost
+  // net zoveel als op Super - en ongeveer 2,5x een vraag op Standaard.
+  const usage = { input_tokens: 100000, output_tokens: 20000 };
+  const kosten = (id) => {
+    const m = nieuweMeter();
+    meetAanroep(m, id, usage);
+    return meterCredits(m, 0.92, 2);
+  };
+  const standaard = kosten("claude-sonnet-5");
+  const beter = kosten("claude-opus-4-8");
+  const sup = kosten("claude-opus-5");
+  assert.equal(beter, sup);
+  assert.equal(beter > standaard, true);
+  assert.equal(Math.abs(beter / standaard - 2.5) < 0.05, true, standaard + " -> " + beter);
 });
