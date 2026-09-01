@@ -1,0 +1,31 @@
+# Draait de tests van beide Workers bij elke pull request en bij elke push naar main.
+# Zonder deze check kan de review-stap van Finn-loop nooit groen geven: een repo
+# zonder verplichte checks telt daar als "onbekend", niet als "goed".
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Zelfde grote versie als op de machine van Dirk (v24), zodat een test die
+      # daar slaagt hier niet alsnog omvalt op een taalverschil.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Beide Workers gebruiken de ingebouwde testrunner van Node en hebben geen
+      # dependencies, dus er valt niets te installeren.
+      - name: Tests dirk-digitaal
+        run: node --test
+        working-directory: dirk-digitaal
+
+      - name: Tests ai-ready-check-worker
+        run: node --test
+        working-directory: ai-ready-check-worker
