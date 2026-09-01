@@ -32,6 +32,12 @@ new_sqlite_classes = ["SessionDO"]
 tag = "v2"
 new_sqlite_classes = ["CreditsDO"]
 
+# DIR-103 - wekelijks de dollarkoers ophalen bij de ECB. Maandagochtend 06:00 UTC;
+# vaker hoeft niet, want de koers beweegt per week een paar tienden van een procent.
+# Cron-triggers werken op het gratis plan.
+[triggers]
+crons = ["0 6 * * 1"]
+
 # KV voor klant-config (DIR-30): sleutel -> { naam, adAccountId }. Alleen config, geen klantdata.
 [[kv_namespaces]]
 binding = "CLIENTS"

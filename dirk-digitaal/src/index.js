@@ -1056,7 +1056,10 @@ const PRIJS_ONBEKEND = { invoer: 5, uitvoer: 25 };
 const CREDITS_KV_SLEUTEL = "config:credits";
 // DIR-100: `maxRegels` en `bewaardagen` gelden PER KLANT. Een drukke klant kan de
 // historie van een rustige klant dus niet meer wegdrukken.
-const CREDITS_STANDAARD = { startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365 };
+const CREDITS_STANDAARD = {
+  startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365,
+  koersAuto: true,                    // DIR-103: wekelijks de koers ophalen
+};
 // DIR-104 - ondergrenzen die je niet per ongeluk typt. Een bewaartermijn van 1 dag is
 // twee toetsaanslagen van 100 verwijderd en gooit bij de eerstvolgende boeking bijna
 // alles weg. Wil Dirk echt lager, dan moet hij deze regel aanpassen: dat is precies
@@ -1142,6 +1145,97 @@ export function schoneCreditsConfig(ruw) {
     marge: binnenGrens(r.marge, 1, 100, CREDITS_STANDAARD.marge),
     maxRegels: Math.round(binnenGrens(r.maxRegels, CREDITS_MIN_REGELS, 100000, CREDITS_STANDAARD.maxRegels)),
     bewaardagen: Math.round(binnenGrens(r.bewaardagen, CREDITS_MIN_DAGEN, 3650, CREDITS_STANDAARD.bewaardagen)),
+    // DIR-103 - staat dit uit, dan laat de wekelijkse taak de koers met rust. Alleen
+    // een expliciete `false` zet hem uit; een ontbrekend veld betekent "zoals het was"
+    // en valt terug op de standaard, niet op uit.
+    koersAuto: r.koersAuto === undefined ? CREDITS_STANDAARD.koersAuto : r.koersAuto !== false,
+  };
+}
+
+// ============================================================================
+// DIR-103 - DE DOLLARKOERS AUTOMATISCH BIJHOUDEN
+// ============================================================================
+// Dit is een automatisering die zonder toezicht bepaalt wat klanten betalen. Een
+// storing bij de bron, een verkeerd veld of een omgekeerde koers zou de prijzen
+// stilletjes kunnen verdubbelen. Vandaar twee sloten, allebei dezelfde kant op:
+// bij twijfel verandert er niets en blijft de laatste goede koers staan.
+//
+// SLOT 1 - de richting kan niet omgedraaid raken.
+// De ECB publiceert met de euro als basis: EUR/USD is ongeveer 1,09. Wij hebben het
+// omgekeerde nodig, ongeveer 0,92 euro per dollar. In plaats van dat zelf om te
+// rekenen (en het ooit te vergeten) vragen we de bron meteen om die richting:
+// from=USD&to=EUR. Er is dus geen deelsom die iemand later per ongeluk weghaalt.
+//
+// SLOT 2 - de bandbreedte hieronder. Alles daarbuiten wordt genegeerd.
+// De canonieke URL. api.frankfurter.app stuurt met een 301 hierheen door; voor een
+// taak die de prijzen bepaalt leunen we liever niet op een permanente redirect.
+const KOERS_BRON_URL = "https://api.frankfurter.dev/v1/latest?from=USD&to=EUR";
+const KOERS_BRON_NAAM = "ECB";
+const KOERS_MIN = 0.80;
+const KOERS_MAX = 1.10;
+const KOERS_KV_SLEUTEL = "config:koersbron";
+
+// Het getal uit het antwoord van de bron: euro per dollar. Geeft null bij alles wat
+// er niet uitziet zoals verwacht - een ontbrekend veld, een tekst, een leeg antwoord.
+export function koersUitAntwoord(data) {
+  const r = data && data.rates;
+  if (!r || typeof r !== "object") return null;
+  // Alleen een echt getal telt. Number(null) en Number("") zijn allebei 0, dus met een
+  // losse Number()-controle zou een leeg veld hier als koers 0 naar buiten komen. Geeft
+  // de bron ooit tekst terug, dan is het antwoord "geen bruikbaar getal" - de koers
+  // blijft dan staan en /admin meldt het. Dat is de goede kant om op te falen.
+  const ruw = r.EUR;
+  if (typeof ruw !== "number" || !Number.isFinite(ruw)) return null;
+  return ruw;
+}
+
+// Mag deze waarde de prijzen bepalen? Alleen een echt getal binnen de bandbreedte.
+export function bruikbareKoers(waarde) {
+  const n = Number(waarde);
+  if (!Number.isFinite(n)) return null;
+  if (n < KOERS_MIN || n > KOERS_MAX) return null;
+  return n;
+}
+
+// Wat wordt de nieuwe stand? De huidige koers is het uitgangspunt: die blijft staan
+// tenzij er iets bruikbaars binnenkomt (AC-3/AC-4). De uitkomst is opzettelijk ook
+// een leesbare zin, want die komt zo in /admin te staan (AC-7).
+export function koersBesluit(huidigeKoers, ruweWaarde, nu) {
+  const goed = bruikbareKoers(ruweWaarde);
+  if (goed !== null) {
+    return { koers: goed, gelukt: true, fout: "", tijd: Number(nu) || 0 };
+  }
+  // Alleen een écht getal krijgt de melding "ligt buiten de bandbreedte". Number(null)
+  // en Number("") zijn allebei 0, dus met een losse Number()-controle zou een leeg
+  // antwoord melden dat de bron 0 teruggaf - en dat is een ander probleem dan niets
+  // terugkrijgen. Bij een storing wil je in /admin lezen wat er echt aan de hand was.
+  const n = typeof ruweWaarde === "number" && Number.isFinite(ruweWaarde) ? ruweWaarde : null;
+  const fout = n !== null
+    ? "De opgehaalde koers " + n + " ligt buiten " + KOERS_MIN + " en " + KOERS_MAX
+      + " en is genegeerd. Let op: een waarde rond de 1,09 betekent dat de bron de koers"
+      + " andersom teruggeeft (euro als basis)."
+    : "De bron gaf geen bruikbaar getal terug.";
+  return { koers: huidigeKoers, gelukt: false, fout, tijd: Number(nu) || 0 };
+}
+
+// AC-6 - staat de schakelaar uit, dan raakt de taak de koers niet aan.
+export function magKoersBijwerken(cfg) {
+  return !!(cfg && cfg.koersAuto);
+}
+
+// De stand die in /admin te zien is, bijgewerkt met wat deze poging opleverde.
+// Een geslaagde poging wist de oude foutmelding; een mislukte laat de datum van de
+// laatste geslaagde staan, want dat is precies wat je wilt weten (AC-7).
+export function nieuweKoersStand(oud, besluit) {
+  const o = oud || {};
+  if (besluit.gelukt) {
+    return { bijgewerkt: besluit.tijd, bron: KOERS_BRON_NAAM, fout: "", foutTijd: 0 };
+  }
+  return {
+    bijgewerkt: Number(o.bijgewerkt) || 0,
+    bron: o.bron || KOERS_BRON_NAAM,
+    fout: besluit.fout,
+    foutTijd: besluit.tijd,
   };
 }
 
@@ -1159,6 +1253,51 @@ export function keurCreditsConfig(ruw) {
     return "Het maximum moet minstens " + CREDITS_MIN_REGELS + " regels per klant zijn. Lager gooit grootboekregels weg die je niet terugkrijgt.";
   }
   return "";
+}
+
+// De wekelijkse taak. Haalt de koers op, laat hem langs beide sloten, en schrijft
+// alleen als er iets bruikbaars uitkwam. Boekt niets af en raakt het grootboek niet
+// aan (AC-9); een nieuwe koers geldt alleen voor wat er daarna wordt afgeboekt (AC-8),
+// want elke boeking leest de koers op dat moment.
+async function koersBijwerken(env, nu) {
+  const tijd = Number(nu) || Date.now();
+  if (!env.CLIENTS) return { overgeslagen: "geen KV" };
+  const cfg = await creditsConfig(env);
+  if (!magKoersBijwerken(cfg)) return { overgeslagen: "handmatig gezet" };
+
+  let ruw = null;
+  let netwerkfout = "";
+  try {
+    const resp = await fetch(KOERS_BRON_URL, { headers: { Accept: "application/json" } });
+    if (resp.ok) ruw = koersUitAntwoord(await resp.json());
+    else netwerkfout = "De bron antwoordde met status " + resp.status + ".";
+  } catch (e) {
+    netwerkfout = "De bron was niet te bereiken.";
+  }
+
+  const besluit = koersBesluit(cfg.koers, ruw, tijd);
+  if (netwerkfout && !besluit.gelukt) besluit.fout = netwerkfout;
+
+  let oudeStand = null;
+  try { oudeStand = JSON.parse(await env.CLIENTS.get(KOERS_KV_SLEUTEL)); } catch (e) { /* nog niets */ }
+  await env.CLIENTS.put(KOERS_KV_SLEUTEL, JSON.stringify(nieuweKoersStand(oudeStand, besluit)));
+
+  // Alleen schrijven als de koers echt verandert: een mislukte poging hoort de
+  // instellingen niet aan te raken.
+  if (besluit.gelukt && besluit.koers !== cfg.koers) {
+    await env.CLIENTS.put(CREDITS_KV_SLEUTEL, JSON.stringify(
+      schoneCreditsConfig(Object.assign({}, cfg, { koers: besluit.koers }))));
+  }
+  return besluit;
+}
+
+// De stand voor /admin, met lege waarden als er nog nooit een poging is geweest.
+async function koersStand(env) {
+  try {
+    const raw = env.CLIENTS ? await env.CLIENTS.get(KOERS_KV_SLEUTEL) : null;
+    if (raw) return JSON.parse(raw);
+  } catch (e) { /* geen stand is ook een stand */ }
+  return { bijgewerkt: 0, bron: KOERS_BRON_NAAM, fout: "", foutTijd: 0 };
 }
 
 // DIR-104 - verlaagt deze wijziging een van de twee snoei-instellingen? Alleen dan
@@ -5124,7 +5263,10 @@ const ADMIN_HTML = `<!doctype html>
       <p class="muted">Saldo per ingelogd Google-adres. 1 credit = &euro; 0,01. Verbruik wordt afgeboekt op de tokens die Anthropic zelf terugmeldt, maal de marge hieronder &mdash; nooit op een schatting. In het grootboek staat wat er is afgeschreven, nooit de inhoud van een gesprek.</p>
       <div class="balk">
         <div class="veld"><label for="cStart">Gratis startsaldo (credits)</label><input id="cStart" type="text"></div>
-        <div class="veld"><label for="cKoers">Dollarkoers (1 USD in euro)</label><input id="cKoers" type="text"></div>
+        <div class="veld"><label for="cKoers">Dollarkoers (1 USD in euro)</label><input id="cKoers" type="text">
+          <span class="hint" id="cKoersStand"></span></div>
+        <div class="veld"><label for="cKoersAuto"><input id="cKoersAuto" type="checkbox"> Koers wekelijks automatisch bijwerken</label>
+          <span class="hint">Elke maandagochtend wordt de koers bij de ECB opgehaald. Vul je hierboven zelf iets in, zet dit dan uit &mdash; anders wordt jouw waarde bij de volgende ronde overschreven. Een opgehaalde koers wordt alleen overgenomen als hij tussen 0,80 en 1,10 ligt; daarbuiten blijft de laatste goede koers staan.</span></div>
         <div class="veld"><label for="cMarge">Margefactor</label><input id="cMarge" type="text"></div>
         <div class="veld"><label for="cMax">Grootboekregels per klant</label><input id="cMax" type="text"><span class="hint">Elke klant houdt zijn eigen laatste regels; een drukke klant duwt die van een rustige niet weg.</span></div>
         <div class="veld"><label for="cDagen">Bewaartermijn (dagen)</label><input id="cDagen" type="text"><span class="hint">Oudere regels worden opgeruimd. Het saldo verandert daar nooit door.</span></div>
@@ -5523,12 +5665,37 @@ const ADMIN_HTML = `<!doctype html>
       var cfg=(res.j&&res.j.config)||{};
       document.getElementById('cStart').value=cfg.startsaldo;
       document.getElementById('cKoers').value=cfg.koers;
+      document.getElementById('cKoersAuto').checked = cfg.koersAuto !== false;
+      toonKoersStand(cfg, (res.j&&res.j.koers)||{});
       document.getElementById('cMarge').value=cfg.marge;
       document.getElementById('cMax').value=cfg.maxRegels;
       document.getElementById('cDagen').value=cfg.bewaardagen;
       renderSaldi((res.j&&res.j.saldi)||[]);
       renderBoekingen((res.j&&res.j.regels)||[]);
     });
+  }
+  // DIR-103 - wanneer de koers voor het laatst automatisch is bijgewerkt, uit welke
+  // bron, en wat er bij de laatste mislukte poging misging (AC-5/AC-7).
+  function koersDatum(ms){
+    try{
+      return new Date(ms).toLocaleDateString('nl-NL',
+        { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+    }catch(e){ return new Date(ms).toISOString().slice(0,10); }
+  }
+  function toonKoersStand(cfg, stand){
+    var doel=document.getElementById('cKoersStand');
+    var regels=[];
+    if(cfg.koersAuto === false){
+      regels.push('Automatisch bijwerken staat uit; deze waarde blijft staan zoals je hem hebt ingevuld.');
+    } else if(stand.bijgewerkt){
+      regels.push('Automatisch bijgewerkt op ' + koersDatum(stand.bijgewerkt) + ', bron ' + (stand.bron||'ECB') + '.');
+    } else {
+      regels.push('Nog niet automatisch bijgewerkt; dat gebeurt maandagochtend.');
+    }
+    if(stand.fout){
+      regels.push('Laatste poging mislukt' + (stand.foutTijd ? (' op ' + koersDatum(stand.foutTijd)) : '') + ': ' + stand.fout);
+    }
+    doel.textContent=regels.join(' ');
   }
   function renderSaldi(saldi){
     var doel=document.getElementById('cSaldi'); doel.textContent='';
@@ -5577,6 +5744,7 @@ const ADMIN_HTML = `<!doctype html>
     api('POST','/api/admin/credits/config',{
       startsaldo:Number(document.getElementById('cStart').value),
       koers:Number(document.getElementById('cKoers').value),
+      koersAuto:document.getElementById('cKoersAuto').checked,
       marge:Number(document.getElementById('cMarge').value),
       maxRegels:Number(document.getElementById('cMax').value),
       bewaardagen:Number(document.getElementById('cDagen').value),
@@ -6475,7 +6643,10 @@ export default {
       try {
         const r = await creditsStub(env).fetch("https://do/credits/overzicht");
         const j = await r.json();
-        return json({ config: await creditsConfig(env), saldi: j.saldi || [], regels: j.regels || [] });
+        return json({
+          config: await creditsConfig(env), koers: await koersStand(env),
+          saldi: j.saldi || [], regels: j.regels || [],
+        });
       } catch (e) {
         return json({ error: "Kon de credits niet laden." }, 502);
       }
@@ -6918,5 +7089,13 @@ export default {
     }
 
     return json({ error: "Onbekende route." }, 404);
+  },
+
+  // DIR-103 - de wekelijkse trigger uit wrangler.toml komt hier binnen. Verder doet
+  // deze ingang niets: geen afboekingen, geen grootboek, alleen de koers.
+  async scheduled(event, env, ctx) {
+    const werk = koersBijwerken(env).catch(() => null);
+    if (ctx && ctx.waitUntil) ctx.waitUntil(werk);
+    return werk;
   },
 };
