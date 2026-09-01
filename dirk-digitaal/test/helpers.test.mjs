@@ -76,6 +76,12 @@ import {
   keurCreditsConfig,
   snoeitVerderOp,
   snoeiAantal,
+  koersUitAntwoord,
+  bruikbareKoers,
+  koersBesluit,
+  magKoersBijwerken,
+  nieuweKoersStand,
+  koersBijwerken,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -1040,10 +1046,11 @@ test("magChattenMetSaldo: op nul gaat de deur dicht (AC-6/AC-7)", () => {
 
 test("schoneCreditsConfig: onzin uit het formulier wordt een bruikbare instelling", () => {
   // DIR-100 heeft hier maxRegels en bewaardagen bij gezet; de rest is ongewijzigd.
+  // DIR-103 heeft koersAuto erbij gezet; de rest is ongewijzigd.
   assert.deepEqual(schoneCreditsConfig({}),
-    { startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365 });
+    { startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365, koersAuto: true });
   assert.deepEqual(schoneCreditsConfig({ startsaldo: 50, koers: 0.9, marge: 3 }),
-    { startsaldo: 50, koers: 0.9, marge: 3, maxRegels: 500, bewaardagen: 365 });
+    { startsaldo: 50, koers: 0.9, marge: 3, maxRegels: 500, bewaardagen: 365, koersAuto: true });
   // Geen halve credits, geen negatief startsaldo, geen marge onder 1 (dat zou
   // betekenen dat Dirk onder de kostprijs verkoopt).
   assert.equal(schoneCreditsConfig({ startsaldo: 12.7 }).startsaldo, 13);
@@ -1755,4 +1762,240 @@ test("Beter en Super rekenen allebei het Opus-tarief af (AC-8)", () => {
   assert.equal(beter, sup);
   assert.equal(beter > standaard, true);
   assert.equal(Math.abs(beter / standaard - 2.5) < 0.05, true, standaard + " -> " + beter);
+});
+
+// ── DIR-103 · de dollarkoers automatisch bijhouden ──────────────────────────
+// Dit bepaalt zonder toezicht wat klanten betalen, dus de tests gaan vooral over
+// wat er NIET mag gebeuren: bij twijfel blijft de laatste goede koers staan.
+
+test("koersUitAntwoord: het getal komt uit rates.EUR, euro per dollar", () => {
+  // We vragen de bron om from=USD&to=EUR, dus wat er terugkomt is meteen de goede
+  // richting. Er is geen deelsom die iemand later kan vergeten om te draaien.
+  assert.equal(koersUitAntwoord({ amount: 1, base: "USD", date: "2026-09-01", rates: { EUR: 0.9187 } }), 0.9187);
+});
+
+test("koersUitAntwoord: alles wat er niet uitziet zoals verwacht geeft null", () => {
+  assert.equal(koersUitAntwoord(null), null);
+  assert.equal(koersUitAntwoord({}), null);
+  assert.equal(koersUitAntwoord({ rates: null }), null);
+  assert.equal(koersUitAntwoord({ rates: {} }), null);
+  assert.equal(koersUitAntwoord({ rates: { USD: 1.09 } }), null);      // verkeerde sleutel
+  assert.equal(koersUitAntwoord({ rates: { EUR: "geen getal" } }), null);
+  assert.equal(koersUitAntwoord({ rates: { EUR: null } }), null);
+  assert.equal(koersUitAntwoord("<html>storing</html>"), null);
+});
+
+test("bruikbareKoers: alleen binnen 0,80 en 1,10 (AC-3)", () => {
+  assert.equal(bruikbareKoers(0.9187), 0.9187);
+  assert.equal(bruikbareKoers(0.80), 0.80);          // de randen mogen
+  assert.equal(bruikbareKoers(1.10), 1.10);
+  assert.equal(bruikbareKoers(0.79), null);
+  assert.equal(bruikbareKoers(1.11), null);
+  assert.equal(bruikbareKoers(1.5), null);
+  assert.equal(bruikbareKoers(0), null);
+  assert.equal(bruikbareKoers(-0.92), null);
+  assert.equal(bruikbareKoers("geen getal"), null);
+  // typeof-strikt: een getal als tekst telt niet. Anders zou de garantie bij de band
+  // en bij de aanroeper liggen in plaats van in deze functie.
+  assert.equal(bruikbareKoers("0.95"), null);
+  assert.equal(bruikbareKoers("0,95"), null);
+  assert.equal(bruikbareKoers(true), null);
+  assert.equal(bruikbareKoers([0.95]), null);
+  assert.equal(bruikbareKoers(null), null);
+  assert.equal(bruikbareKoers(undefined), null);
+  assert.equal(bruikbareKoers(NaN), null);
+  assert.equal(bruikbareKoers(Infinity), null);
+});
+
+test("koersBesluit: een goede koers wordt overgenomen", () => {
+  const b = koersBesluit(0.92, 0.9187, 1000);
+  assert.equal(b.gelukt, true);
+  assert.equal(b.koers, 0.9187);
+  assert.equal(b.fout, "");
+  assert.equal(b.tijd, 1000);
+});
+
+test("koersBesluit: buiten de bandbreedte blijft de oude koers staan (AC-3)", () => {
+  const b = koersBesluit(0.92, 1.5, 1000);
+  assert.equal(b.gelukt, false);
+  assert.equal(b.koers, 0.92, "de bestaande koers hoort onaangeroerd te blijven");
+  assert.match(b.fout, /1\.5/);
+  assert.match(b.fout, /genegeerd/);
+});
+
+test("koersBesluit: een leeg of kapot antwoord raakt de koers niet (AC-4)", () => {
+  for (const rommel of [null, undefined, "", "geen getal", NaN]) {
+    const b = koersBesluit(0.92, rommel, 1000);
+    assert.equal(b.gelukt, false);
+    assert.equal(b.koers, 0.92);
+    assert.match(b.fout, /geen bruikbaar getal/);
+  }
+  // En de koers wordt daarmee nooit nul, leeg of onbepaald.
+  assert.equal(typeof koersBesluit(0.92, null, 1).koers, "number");
+  assert.equal(koersBesluit(0.92, null, 1).koers > 0, true);
+});
+
+test("koersBesluit: een omgekeerde koers wordt geweigerd zodra hij buiten de band valt", () => {
+  // Dit is het gevaar uit het issue: EUR/USD in plaats van USD/EUR. Bij een euro die
+  // sterker staat dan 1,10 dollar vangt de bandbreedte dat af.
+  const b = koersBesluit(0.92, 1.15, 1000);
+  assert.equal(b.gelukt, false);
+  assert.equal(b.koers, 0.92);
+  // De melding wijst de lezer op precies dit geval.
+  assert.match(b.fout, /andersom/);
+
+  // LET OP - bij de koers van vandaag doet de bandbreedte dat NIET: 1,09 ligt binnen
+  // 0,80 en 1,10 en zou dus geaccepteerd worden. Daarom leunt de implementatie er niet
+  // op: we vragen de bron meteen om from=USD&to=EUR, zodat er geen omrekening is die
+  // omgedraaid kan raken. Deze test legt vast dat dat gat bestaat, zodat niemand later
+  // denkt dat de band dit alleen al afvangt.
+  assert.equal(bruikbareKoers(1.09), 1.09, "1,09 valt binnen de band - de band alleen is dus niet genoeg");
+});
+
+test("magKoersBijwerken: een handmatig gezette koers wordt niet overschreven (AC-6)", () => {
+  assert.equal(magKoersBijwerken({ koersAuto: true }), true);
+  assert.equal(magKoersBijwerken({ koersAuto: false }), false);
+  assert.equal(magKoersBijwerken({}), false);
+  assert.equal(magKoersBijwerken(null), false);
+  // Via de instellingen: standaard staat automatisch bijwerken aan...
+  assert.equal(schoneCreditsConfig({}).koersAuto, true);
+  // ...en alleen een expliciete uitzetting zet hem uit.
+  assert.equal(schoneCreditsConfig({ koersAuto: false }).koersAuto, false);
+  assert.equal(magKoersBijwerken(schoneCreditsConfig({ koersAuto: false })), false);
+  assert.equal(magKoersBijwerken(schoneCreditsConfig({ koersAuto: true })), true);
+});
+
+test("nieuweKoersStand: een geslaagde poging wist de oude foutmelding (AC-5)", () => {
+  const oud = { bijgewerkt: 100, bron: "ECB", fout: "iets ging mis", foutTijd: 200 };
+  const stand = nieuweKoersStand(oud, koersBesluit(0.92, 0.9187, 300));
+  assert.deepEqual(stand, { bijgewerkt: 300, bron: "ECB", fout: "", foutTijd: 0 });
+});
+
+test("nieuweKoersStand: een mislukte poging bewaart de laatste geslaagde datum (AC-7)", () => {
+  const oud = { bijgewerkt: 100, bron: "ECB", fout: "", foutTijd: 0 };
+  const stand = nieuweKoersStand(oud, koersBesluit(0.92, 1.5, 300));
+  assert.equal(stand.bijgewerkt, 100, "de datum van de laatste geslaagde poging blijft staan");
+  assert.equal(stand.foutTijd, 300);
+  assert.match(stand.fout, /genegeerd/);
+  // Ook als er nog nooit iets geslaagd is.
+  const vers = nieuweKoersStand(null, koersBesluit(0.92, 1.5, 300));
+  assert.equal(vers.bijgewerkt, 0);
+  assert.equal(vers.foutTijd, 300);
+});
+
+test("een nieuwe koers raakt alleen toekomstige afboekingen (AC-8)", () => {
+  // De koers zit niet in de grootboekregel; elke boeking rekent met de koers van dat
+  // moment. Een oude regel kan dus niet met terugwerkende kracht veranderen.
+  const meter = nieuweMeter();
+  meetAanroep(meter, "claude-sonnet-5", { input_tokens: 1000000, output_tokens: 1000000 });
+  const oudeKoers = meterCredits(meter, 0.92, 2);
+  const nieuweKoers = meterCredits(meter, 0.95, 2);
+  assert.notEqual(oudeKoers, nieuweKoers);
+  // Wat er in het grootboek komt is het uitgerekende bedrag, geen koers.
+  const regel = klantRegel({ tijd: 1, soort: "verbruik", agent: "gsc", credits: oudeKoers, saldoNa: 5 });
+  assert.equal(regel.credits, oudeKoers);
+  assert.equal("koers" in regel, false);
+});
+
+
+// ── DIR-103 · de taak zelf, met een neppe bron en KV ────────────────────────
+// De losse functies waren gedekt, maar de VOLGORDE in koersBijwerken niet: lezen,
+// netwerk, opnieuw lezen, schrijven. Juist daar zit het venster waarin een
+// handmatige wijziging van Dirk overschreven kon worden.
+
+function nepBron(maker) {
+  const echt = globalThis.fetch;
+  globalThis.fetch = async (...args) => maker(...args);
+  return () => { globalThis.fetch = echt; };
+}
+
+const KOERS_CFG = {
+  startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365, koersAuto: true,
+};
+
+function koersOmgeving(begin) {
+  const store = { "config:credits": JSON.stringify(Object.assign({}, KOERS_CFG, begin || {})) };
+  return { env: { CLIENTS: nepKv(store) }, store, cfg: () => JSON.parse(store["config:credits"]) };
+}
+
+test("koersBijwerken: een goede koers wordt opgeslagen", async () => {
+  const { env, cfg, store } = koersOmgeving();
+  const terug = nepBron(async () => new Response(JSON.stringify({ rates: { EUR: 0.87 } })));
+  try {
+    const uit = await koersBijwerken(env, 1000);
+    assert.equal(uit.gelukt, true);
+    assert.equal(cfg().koers, 0.87);
+    assert.equal(JSON.parse(store["config:koersbron"]).bijgewerkt, 1000);
+  } finally { terug(); }
+});
+
+test("koersBijwerken: een wijziging tijdens het ophalen wint van de taak", async () => {
+  // Dit is het venster dat de reviewer aanwees: de taak leest de instellingen, doet
+  // er seconden over om de koers op te halen, en schreef daarna terug op basis van de
+  // OUDE instellingen. Sloeg Dirk in dat venster op, dan waren zijn koers én zijn
+  // koersAuto:false weg. De neppe bron doet hieronder precies dat: hij wijzigt de
+  // opslag terwijl het "netwerk" bezig is.
+  const { env, cfg, store } = koersOmgeving();
+  const terug = nepBron(async () => {
+    store["config:credits"] = JSON.stringify(
+      Object.assign({}, KOERS_CFG, { koers: 0.95, koersAuto: false }));
+    return new Response(JSON.stringify({ rates: { EUR: 0.87 } }));
+  });
+  try {
+    const uit = await koersBijwerken(env, 1000);
+    assert.equal(uit.gelukt, undefined, "de taak hoort af te breken, niet te slagen");
+    assert.match(uit.overgeslagen, /gewijzigd/);
+    assert.equal(cfg().koers, 0.95, "de handmatige koers van Dirk blijft staan");
+    assert.equal(cfg().koersAuto, false, "en zijn schakelaar ook");
+  } finally { terug(); }
+});
+
+test("koersBijwerken: staat de schakelaar al uit, dan gebeurt er niets", async () => {
+  const { env, cfg } = koersOmgeving({ koersAuto: false, koers: 0.95 });
+  let geroepen = false;
+  const terug = nepBron(async () => { geroepen = true; return new Response("{}"); });
+  try {
+    const uit = await koersBijwerken(env, 1000);
+    assert.match(uit.overgeslagen, /handmatig/);
+    assert.equal(geroepen, false, "er hoort niet eens een aanroep naar de bron te gaan");
+    assert.equal(cfg().koers, 0.95);
+  } finally { terug(); }
+});
+
+test("koersBijwerken: bereikbaar maar onleesbaar is iets anders dan onbereikbaar", async () => {
+  // Een 200 met HTML erin betekent niet dat de bron plat lag. Datzelfde onderscheid
+  // maakten we al tussen "gaf niets" en "gaf 0"; hier hoort het ook te staan.
+  const { env, cfg, store } = koersOmgeving();
+  const terug = nepBron(async () => new Response("<html>onderhoud</html>"));
+  try {
+    const uit = await koersBijwerken(env, 1000);
+    assert.equal(uit.gelukt, false);
+    assert.match(uit.fout, /bereikbaar maar/);
+    assert.doesNotMatch(uit.fout, /niet te bereiken/);
+    assert.equal(cfg().koers, 0.92, "de koers blijft staan");
+    assert.equal(JSON.parse(store["config:koersbron"]).bijgewerkt, 0);
+  } finally { terug(); }
+});
+
+test("koersBijwerken: een bron die plat ligt meldt dat ook zo", async () => {
+  const { env, cfg } = koersOmgeving();
+  const terug = nepBron(async () => { throw new Error("ECONNREFUSED"); });
+  try {
+    const uit = await koersBijwerken(env, 1000);
+    assert.equal(uit.gelukt, false);
+    assert.match(uit.fout, /niet te bereiken/);
+    assert.equal(cfg().koers, 0.92);
+  } finally { terug(); }
+});
+
+test("koersBijwerken: een waarde buiten de band laat de koers staan", async () => {
+  const { env, cfg, store } = koersOmgeving();
+  const terug = nepBron(async () => new Response(JSON.stringify({ rates: { EUR: 1.1676 } })));
+  try {
+    const uit = await koersBijwerken(env, 1000);
+    assert.equal(uit.gelukt, false);
+    assert.match(uit.fout, /genegeerd/);
+    assert.equal(cfg().koers, 0.92);
+    assert.equal(JSON.parse(store["config:koersbron"]).foutTijd, 1000);
+  } finally { terug(); }
 });
