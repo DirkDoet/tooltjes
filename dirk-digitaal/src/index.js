@@ -2103,7 +2103,10 @@ function verrekenKrediet(env, ctx, krediet, agent, meter) {
   const actie = verrekenActie(meter);
   const werk = (async () => {
     try {
-      const cfg = await creditsConfig(env);
+      // DIR-102: de poort heeft de instellingen al gelezen; die nog eens uit KV halen
+      // zou binnen het wachtbudget van SALDO_GEDULD_MS vallen en dus ten koste gaan
+      // van de kans dat het saldo dit antwoord nog haalt.
+      const cfg = krediet.cfg || await creditsConfig(env);
       if (actie === "vrijgeef") {
         await creditsStub(env).fetch("https://do/credits/vrijgeef", {
           method: "POST",
@@ -2166,6 +2169,7 @@ async function creditsReserveer(request, env) {
       krediet: {
         email: sessie.email, model: j.model || adminModel,
         reservering: j.reservering || "", verrekend: false,
+        cfg,                                  // scheelt een tweede KV-lezing bij het boeken
       },
     };
   } catch (e) {
@@ -2795,6 +2799,20 @@ const SALDO_GEDULD_MS = 1000;
 export function metGeduld(belofte, ms) {
   const wachten = new Promise((klaar) => setTimeout(() => klaar(null), Math.max(0, Number(ms) || 0)));
   return Promise.race([Promise.resolve(belofte).catch(() => null), wachten]);
+}
+
+// DIR-102 - hetzelfde saldo, maar dan voor een JSON-antwoord in plaats van de
+// SSE-stroom. Een antwoord dat op een fout eindigt kan best credits gekost hebben:
+// de meter telt de aanroepen die vóór de fout wél slaagden, en die worden geboekt.
+// Zonder dit veld daalt het saldo dan zonder dat de klant het ziet - precies de
+// klacht waar dit issue over gaat.
+//
+// Geen zeker bedrag, geen veld: dan laat de pagina staan wat er stond (AC-7).
+export function saldoVeld(na) {
+  if (!na || typeof na.saldo !== "number") return {};
+  const uit = { credits: na.saldo };
+  if (na.regel) uit.regel = na.regel;
+  return uit;
 }
 
 export function saldoEvent(na) {
@@ -4116,6 +4134,15 @@ const OFFICE_HTML = `<!doctype html>
     return html;
   }
 
+  // DIR-102 - één plek waar een saldo van de server in beeld komt, of het nu uit de
+  // stroom van een geslaagd antwoord komt of uit een foutantwoord. Zonder echt getal
+  // gebeurt er niets: dan blijft staan wat er stond (AC-7).
+  function ddSaldoUit(saldo, regel){
+    if(typeof saldo !== 'number') return;
+    if(window.ddMenuSaldo) window.ddMenuSaldo(saldo);
+    if(window.ddDashboardSaldo) window.ddDashboardSaldo(saldo, regel);
+  }
+
   async function streamChat(payload, dashboard){
     if(busy) return; busy=true; sendBtn.disabled=true;
     if(avatarEl) avatarEl.classList.add('aantypen');   // portret 'typt' terwijl antwoord binnenkomt (DIR-40)
@@ -4130,6 +4157,9 @@ const OFFICE_HTML = `<!doctype html>
         if(j&&j[cur.needKey]){ bubble.remove(); wisOpening(); renderPicker(j[cur.listKey]); busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen'); return; }
         wisOpening();                 // ook bij een fout: niet zeggen dat je kijkt terwijl het misging
         bubble.textContent=(j&&j.error)||'Er ging iets mis. Probeer het opnieuw.';
+        // DIR-102: ook een foutantwoord kan het nieuwe saldo dragen - er kan verbruikt
+        // zijn voordat het misging. Zelfde behandeling als bij een geslaagd antwoord.
+        if(j) ddSaldoUit(j.credits, j.regel);
         if(r.status===401){ setConnected(false); setActive(false); started=false; }
         busy=false; sendBtn.disabled=false; if(avatarEl) avatarEl.classList.remove('aantypen'); return;
       }
@@ -4144,10 +4174,8 @@ const OFFICE_HTML = `<!doctype html>
               got+=evt.delta.text; bubble.textContent=got; msgs.scrollTop=msgs.scrollHeight; }
             // DIR-102: het nieuwe saldo reist mee met dit antwoord, dus er hoeft
             // niets extra's opgehaald te worden en er wordt hier niets afgetrokken.
-            else if(evt.type==='dd_saldo'&&typeof evt.saldo==='number'){
-              if(window.ddMenuSaldo) window.ddMenuSaldo(evt.saldo);
-              if(window.ddDashboardSaldo) window.ddDashboardSaldo(evt.saldo, evt.regel);
-            } }catch(e){} } }
+            else if(evt.type==='dd_saldo'){ ddSaldoUit(evt.saldo, evt.regel); }
+          }catch(e){} } }
       if(!got){ wisOpening(); bubble.textContent='De agent gaf geen antwoord. Probeer het opnieuw.'; setActive(true); }
       else if(dashboard){ msgs.replaceChild(renderDashboard(got), bubble); msgs.scrollTop=msgs.scrollHeight; setActive(true); }
       else {
@@ -5596,8 +5624,9 @@ async function handleChat(request, env, ctx, krediet) {
   // er komt geen extra verzoek bij. Duurt het te lang of gaat het mis, dan gaat het
   // antwoord gewoon de deur uit zonder saldo-event.
   const naSaldo = await metGeduld(verrekenKrediet(env, ctx, krediet, "gsc", meter), SALDO_GEDULD_MS);
-  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
-  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+  // Ook als het misging gaat het saldo mee: er kan verbruikt zijn vóór de fout.
+  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
+  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
   ctx.waitUntil(
@@ -5721,8 +5750,9 @@ async function handleGa4Chat(request, env, ctx, krediet) {
   // er komt geen extra verzoek bij. Duurt het te lang of gaat het mis, dan gaat het
   // antwoord gewoon de deur uit zonder saldo-event.
   const naSaldo = await metGeduld(verrekenKrediet(env, ctx, krediet, "ga4", meter), SALDO_GEDULD_MS);
-  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
-  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+  // Ook als het misging gaat het saldo mee: er kan verbruikt zijn vóór de fout.
+  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
+  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
   ctx.waitUntil(
@@ -5887,8 +5917,9 @@ async function handleAdsChat(request, env, ctx, krediet) {
   // er komt geen extra verzoek bij. Duurt het te lang of gaat het mis, dan gaat het
   // antwoord gewoon de deur uit zonder saldo-event.
   const naSaldo = await metGeduld(verrekenKrediet(env, ctx, krediet, "ads", meter), SALDO_GEDULD_MS);
-  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
-  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+  // Ook als het misging gaat het saldo mee: er kan verbruikt zijn vóór de fout.
+  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
+  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
   ctx.waitUntil(
@@ -5955,8 +5986,9 @@ async function handleContentChat(request, env, ctx, krediet) {
   // er komt geen extra verzoek bij. Duurt het te lang of gaat het mis, dan gaat het
   // antwoord gewoon de deur uit zonder saldo-event.
   const naSaldo = await metGeduld(verrekenKrediet(env, ctx, krediet, "anton", meter), SALDO_GEDULD_MS);
-  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw." }, 502);
-  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw." }, 502);
+  // Ook als het misging gaat het saldo mee: er kan verbruikt zijn vóór de fout.
+  if (onbereikbaar) return json({ error: "Kon de AI-agent niet bereiken. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
+  if (finalText === null) return json({ error: "De AI-agent gaf een fout terug. Probeer het zo opnieuw.", ...saldoVeld(naSaldo) }, 502);
   if (!finalText) finalText = "Ik kon je vraag nu niet beantwoorden. Probeer het iets anders te formuleren.";
 
   ctx.waitUntil(

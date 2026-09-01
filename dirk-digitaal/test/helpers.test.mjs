@@ -69,6 +69,7 @@ import {
   verrekenActie,
   saldoEvent,
   metGeduld,
+  saldoVeld,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -1443,7 +1444,9 @@ test("metGeduld: duurt de boeking te lang, dan gaat het antwoord zonder saldo", 
   const begin = Date.now();
   const uit = await metGeduld(nooit, 20);
   assert.equal(uit, null, "geen saldo, dus straks ook geen saldo-event");
-  assert.equal(Date.now() - begin < 1000, true, "en er wordt niet op gewacht");
+  // Ruim boven de 20 ms van deze test, maar ver onder SALDO_GEDULD_MS: zet iemand de
+  // implementatie later op een vaste seconde, dan valt deze test om.
+  assert.equal(Date.now() - begin < 500, true, "en er wordt niet op gewacht");
   // saldoEvent maakt er dan niets van, dus de pagina laat het oude bedrag staan.
   assert.equal(saldoEvent(uit), "");
 });
@@ -1459,4 +1462,49 @@ test("metGeduld: een onzinnige wachttijd valt terug op meteen opgeven", async ()
   assert.equal(await metGeduld(new Promise(() => {}), 0), null);
   assert.equal(await metGeduld(new Promise(() => {}), -5), null);
   assert.equal(await metGeduld(new Promise(() => {}), "geen getal"), null);
+});
+
+
+// ── DIR-102 · ook een foutantwoord draagt het saldo ─────────────────────────
+// Een antwoord dat op een fout eindigt kan credits gekost hebben: de meter telt de
+// aanroepen die vóór de fout wél slaagden, en die worden geboekt. Zonder dit veld
+// daalt het saldo zonder dat de klant het ziet, en dat is precies de klacht.
+
+test("saldoVeld: het foutantwoord draagt het nieuwe saldo mee", () => {
+  assert.deepEqual(saldoVeld({ saldo: 88 }), { credits: 88 });
+  // Nul hoort er juist wél in: dat is het moment dat de klant moet zien.
+  assert.deepEqual(saldoVeld({ saldo: 0 }), { credits: 0 });
+  assert.deepEqual(saldoVeld({ saldo: -3 }), { credits: -3 });
+});
+
+test("saldoVeld: de geboekte regel gaat mee voor het dashboard", () => {
+  const uit = saldoVeld({ saldo: 12, regel: { tijd: 5, soort: "verbruik", agent: "ads", credits: 4 } });
+  assert.equal(uit.credits, 12);
+  assert.equal(uit.regel.agent, "ads");
+  // Zonder regel blijft het veld weg in plaats van leeg.
+  assert.equal("regel" in saldoVeld({ saldo: 12 }), false);
+});
+
+test("saldoVeld: zonder zeker bedrag komt er niets in het antwoord (AC-7)", () => {
+  // Een leeg object betekent dat er geen `credits` in het JSON-antwoord komt, dus de
+  // pagina laat staan wat er stond.
+  assert.deepEqual(saldoVeld(null), {});
+  assert.deepEqual(saldoVeld(undefined), {});
+  assert.deepEqual(saldoVeld({}), {});
+  assert.deepEqual(saldoVeld({ saldo: null }), {});
+  assert.deepEqual(saldoVeld({ saldo: "88" }), {});
+  assert.equal("credits" in saldoVeld({ regel: { agent: "gsc" } }), false);
+});
+
+test("saldoVeld en saldoEvent geven hetzelfde bedrag door", () => {
+  // Twee wegen naar hetzelfde beeld: de SSE-stroom bij een geslaagd antwoord en het
+  // JSON-antwoord bij een fout. Ze horen niet uit elkaar te lopen.
+  const na = { saldo: 137, regel: { tijd: 1, soort: "verbruik", agent: "gsc", credits: 9 } };
+  const uitEvent = JSON.parse(saldoEvent(na).slice(5).trim());
+  const uitVeld = saldoVeld(na);
+  assert.equal(uitEvent.saldo, uitVeld.credits);
+  assert.deepEqual(uitEvent.regel, uitVeld.regel);
+  // En allebei zwijgen ze bij een onzeker bedrag.
+  assert.equal(saldoEvent({ saldo: "x" }), "");
+  assert.deepEqual(saldoVeld({ saldo: "x" }), {});
 });
