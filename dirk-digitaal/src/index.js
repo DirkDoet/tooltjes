@@ -1057,6 +1057,12 @@ const CREDITS_KV_SLEUTEL = "config:credits";
 // DIR-100: `maxRegels` en `bewaardagen` gelden PER KLANT. Een drukke klant kan de
 // historie van een rustige klant dus niet meer wegdrukken.
 const CREDITS_STANDAARD = { startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365 };
+// DIR-104 - ondergrenzen die je niet per ongeluk typt. Een bewaartermijn van 1 dag is
+// twee toetsaanslagen van 100 verwijderd en gooit bij de eerstvolgende boeking bijna
+// alles weg. Wil Dirk echt lager, dan moet hij deze regel aanpassen: dat is precies
+// genoeg drempel.
+const CREDITS_MIN_DAGEN = 30;
+const CREDITS_MIN_REGELS = 50;
 
 export function modelPrijs(model) {
   return MODEL_PRIJZEN[String(model || "")] || PRIJS_ONBEKEND;
@@ -1134,9 +1140,43 @@ export function schoneCreditsConfig(ruw) {
     startsaldo: Math.round(binnenGrens(r.startsaldo, 0, 100000, CREDITS_STANDAARD.startsaldo)),
     koers: binnenGrens(r.koers, 0.01, 10, CREDITS_STANDAARD.koers),
     marge: binnenGrens(r.marge, 1, 100, CREDITS_STANDAARD.marge),
-    maxRegels: Math.round(binnenGrens(r.maxRegels, 10, 100000, CREDITS_STANDAARD.maxRegels)),
-    bewaardagen: Math.round(binnenGrens(r.bewaardagen, 1, 3650, CREDITS_STANDAARD.bewaardagen)),
+    maxRegels: Math.round(binnenGrens(r.maxRegels, CREDITS_MIN_REGELS, 100000, CREDITS_STANDAARD.maxRegels)),
+    bewaardagen: Math.round(binnenGrens(r.bewaardagen, CREDITS_MIN_DAGEN, 3650, CREDITS_STANDAARD.bewaardagen)),
   };
+}
+
+// DIR-104 - wat de admin instuurt wordt eerst gekeurd en pas daarna genormaliseerd.
+// schoneCreditsConfig knijpt een te lage waarde stil recht; voor een formulier is dat
+// verkeerd, want dan typt Dirk 1 en krijgt hij 30 zonder het te merken. Hier wordt
+// het geweigerd met uitleg.
+export function keurCreditsConfig(ruw) {
+  const r = ruw || {};
+  const getal = (v) => Number(v);
+  if (r.bewaardagen !== undefined && !(getal(r.bewaardagen) >= CREDITS_MIN_DAGEN)) {
+    return "De bewaartermijn moet minstens " + CREDITS_MIN_DAGEN + " dagen zijn. Korter bewaren gooit grootboekregels weg die je niet terugkrijgt.";
+  }
+  if (r.maxRegels !== undefined && !(getal(r.maxRegels) >= CREDITS_MIN_REGELS)) {
+    return "Het maximum moet minstens " + CREDITS_MIN_REGELS + " regels per klant zijn. Lager gooit grootboekregels weg die je niet terugkrijgt.";
+  }
+  return "";
+}
+
+// DIR-104 - verlaagt deze wijziging een van de twee snoei-instellingen? Alleen dan
+// hoort er een bevestiging aan te pas te komen; hoger of gelijk is niet destructief.
+export function snoeitVerderOp(oud, nieuw) {
+  const o = oud || {};
+  const n = nieuw || {};
+  return (Number(n.bewaardagen) < Number(o.bewaardagen)) || (Number(n.maxRegels) < Number(o.maxRegels));
+}
+
+// DIR-104 - hoeveel regels van EEN klant zou de nieuwe instelling nu opruimen?
+//
+// De twee snoeiregels raken allebei de oudste regels: "alles ouder dan X" en "de
+// oudste zoveel over het maximum" zijn allebei een beginstuk van dezelfde
+// oudste-eerst-volgorde. De ene verzameling zit dus in de andere, en het totaal is
+// simpelweg de grootste van de twee - niet de som, want dan zou je dubbel tellen.
+export function snoeiAantal(teOud, aantal, maxRegels) {
+  return Math.max(Math.max(0, Math.floor(Number(teOud) || 0)), overschot(aantal, maxRegels));
 }
 
 async function creditsConfig(env) {
@@ -1943,6 +1983,21 @@ export class CreditsDO {
     // saldo-en-modelrecord wordt opgehaald - het model gaat mee terug.
     if (url.pathname === "/credits/reserveer") {
       if (!email) return json({ error: "geen adres" }, 400);
+
+      // LET OP - tussen het lezen van het saldo hieronder en het wegschrijven van de
+      // reservering verderop mag GEEN await staan die niet naar de opslag van deze
+      // Durable Object gaat. Geen fetch, geen KV, geen timer.
+      //
+      // Dat is namelijk de hele garantie dat twee gelijktijdige vragen niet allebei op
+      // hetzelfde saldo slagen. Een DO houdt zijn input gate dicht zolang er alleen
+      // storage-aanroepen lopen: er wordt dan geen ander verzoek tussendoor verwerkt.
+      // Bij een await naar buiten gaat die poort open, komt het volgende verzoek
+      // binnen, leest hetzelfde saldo, en glippen ze er alsnog allebei doorheen.
+      //
+      // Het vervelende is dat daar geen test op omvalt: het blijft werken zolang je
+      // het niet tegelijk probeert. Vandaar deze regels in plaats van alleen een test.
+      // Alles wat van buiten nodig is (startsaldo, koers, marge, adminModel) wordt
+      // daarom door de Worker meegegeven in het verzoek, niet hier opgehaald.
       const bestaand = await this.saldoVan(email);
       const rec = nieuwSaldoRecord(bestaand, inv.startsaldo, now);
       if (!bestaand) await this.state.storage.put("s:" + email, rec);
@@ -1960,7 +2015,26 @@ export class CreditsDO {
         bedrag: reserveringSchatting(model, inv.koers, inv.marge),
         tijd: now,
       });
+      // Tot hier liep alles via de opslag; vanaf hier mag er weer naar buiten.
       return json({ toegestaan: true, saldo: rec.saldo, model, reservering: id });
+    }
+
+    // DIR-104 - hoeveel grootboekregels zou deze instelling nu opruimen? Alleen
+    // tellen, nooit verwijderen: dit voedt de bevestiging in /admin.
+    if (url.pathname === "/credits/snoeitest") {
+      const maxRegels = inv.maxRegels;
+      const bewaardagen = inv.bewaardagen;
+      let aantal = 0;
+      for (const [sleutel] of await this.state.storage.list({ prefix: "s:" })) {
+        const adres = sleutel.slice(2);
+        const teOud = (await this.state.storage.list({
+          prefix: boekIndexPrefix(adres),
+          end: snoeiGrensSleutel(adres, now, bewaardagen),
+        })).size;
+        const heeft = Number(await this.state.storage.get("n:" + adres)) || 0;
+        aantal += snoeiAantal(teOud, heeft, maxRegels);
+      }
+      return json({ aantal });
     }
 
     // AC-6 - er is niets verbruikt: de reservering valt vrij en de klant houdt zijn
@@ -5035,6 +5109,7 @@ const ADMIN_HTML = `<!doctype html>
         <div class="veld"><label for="cDagen">Bewaartermijn (dagen)</label><input id="cDagen" type="text"><span class="hint">Oudere regels worden opgeruimd. Het saldo verandert daar nooit door.</span></div>
         <div class="knoppen"><button id="cBewaar">Instellingen bewaren</button><span class="melding" id="cMelding"></span></div>
         <p class="muted">Geldt vanaf nu: het startsaldo voor wie hierna voor het eerst inlogt, koers en marge voor wat hierna wordt afgeboekt.</p>
+        <p class="muted"><b>Let op met de onderste twee.</b> Verlaag je de bewaartermijn of het maximum, dan worden grootboekregels die daarbuiten vallen bij de eerstvolgende boeking opgeruimd, en die komen niet terug. Verlagen vraagt daarom eerst om bevestiging, met het aantal regels erbij dat het nu zou kosten. Verhogen kan altijd zonder gevolgen.</p>
       </div>
       <div class="balk">
         <div class="veld"><label for="cEmail">Handmatig boeken &mdash; e-mailadres</label><input id="cEmail" type="text" placeholder="naam@bedrijf.nl"></div>
@@ -5066,7 +5141,9 @@ const ADMIN_HTML = `<!doctype html>
   function api(method, path, data){
     var opt={ method:method, headers:{'Content-Type':'application/json'} };
     if(data) opt.body=JSON.stringify(data);
-    return fetch(path, opt).then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); });
+    // DIR-104: de statuscode gaat mee, zodat een 409 (bevestiging nodig) te
+    // onderscheiden is van een gewone fout. Zelfde vorm als de api() in het kantoor.
+    return fetch(path, opt).then(function(r){ return r.json().then(function(j){ return {ok:r.ok, status:r.status, j:j}; }); });
   }
   // DIR-78 · velddefinities: één plek voor label, uitleg en voorbeeld per veld.
   // groep = kopje in het detailpaneel, zodat het paneel leesbaar blijft.
@@ -5471,19 +5548,36 @@ const ADMIN_HTML = `<!doctype html>
       rij.appendChild(sp); doel.appendChild(rij);
     });
   }
-  document.getElementById('cBewaar').addEventListener('click',function(){
+  // DIR-104 - verlagen van de bewaartermijn of het maximum ruimt regels op die niet
+  // terugkomen. De server weigert zo'n wijziging tot er bevestigd is en stuurt het
+  // aantal mee, zodat er een getal in de vraag staat en geen algemene waarschuwing.
+  function bewaarCredits(bevestigd){
     document.getElementById('cMelding').textContent='';
     api('POST','/api/admin/credits/config',{
       startsaldo:Number(document.getElementById('cStart').value),
       koers:Number(document.getElementById('cKoers').value),
       marge:Number(document.getElementById('cMarge').value),
       maxRegels:Number(document.getElementById('cMax').value),
-      bewaardagen:Number(document.getElementById('cDagen').value)
+      bewaardagen:Number(document.getElementById('cDagen').value),
+      bevestigd: !!bevestigd
     }).then(function(res){
+      if(res.status===409 && res.j && res.j.bevestigingNodig){
+        var n=res.j.aantal;
+        var wat = (typeof n === 'number')
+          ? ('Dit ruimt nu ' + n + ' grootboekregel' + (n===1?'':'s') + ' op.')
+          : 'Dit ruimt grootboekregels op (aantal onbekend: het grootboek was even niet te lezen).';
+        if(confirm(wat + ' Die komen niet terug. Doorgaan?')){ bewaarCredits(true); }
+        else {
+          // AC-3: niets veranderd. Terug naar wat er echt is opgeslagen.
+          meld(''); document.getElementById('cMelding').textContent='Niets gewijzigd.'; laadCredits();
+        }
+        return;
+      }
       if(!res.ok){ meld((res.j&&res.j.error)||'Opslaan mislukt.'); return; }
       meld(''); document.getElementById('cMelding').textContent='Bewaard.'; laadCredits();
     });
-  });
+  }
+  document.getElementById('cBewaar').addEventListener('click',function(){ bewaarCredits(false); });
   document.getElementById('cBoek').addEventListener('click',function(){
     api('POST','/api/admin/credits/correctie',{
       email:document.getElementById('cEmail').value,
@@ -6366,7 +6460,27 @@ export default {
       if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
       if (!env.CLIENTS) return json({ error: "KV (CLIENTS) is nog niet geconfigureerd." }, 500);
       let b = {}; try { b = await request.json(); } catch (e) { /* leeg */ }
+      // AC-4: een te lage waarde wordt geweigerd met uitleg, niet stil rechtgeknepen.
+      const bezwaar = keurCreditsConfig(b);
+      if (bezwaar) return json({ error: bezwaar }, 400);
       const cfg = schoneCreditsConfig(b);
+      // AC-1/AC-2/AC-3: verlagen ruimt regels op die niet terugkomen, dus dat gaat niet
+      // door zonder bevestiging. De controle staat hier en niet alleen in het scherm:
+      // een bevestiging die je kunt overslaan door het verzoek zelf te sturen is geen
+      // bevestiging. Het aantal komt uit het grootboek zelf, zodat er een getal in de
+      // vraag staat en geen algemene waarschuwing.
+      const huidig = await creditsConfig(env);
+      if (snoeitVerderOp(huidig, cfg) && b.bevestigd !== true) {
+        let aantal = null;
+        try {
+          const r = await creditsStub(env).fetch("https://do/credits/snoeitest", {
+            method: "POST",
+            body: JSON.stringify({ maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen }),
+          });
+          aantal = (await r.json()).aantal;
+        } catch (e) { /* zonder telling vragen we het alsnog, maar zonder getal */ }
+        return json({ bevestigingNodig: true, aantal, config: cfg }, 409);
+      }
       await env.CLIENTS.put(CREDITS_KV_SLEUTEL, JSON.stringify(cfg));
       return json({ ok: true, config: cfg });
     }
