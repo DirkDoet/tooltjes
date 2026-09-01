@@ -67,6 +67,7 @@ import {
   beschikbaarSaldo,
   reserveringVerlopen,
   verrekenActie,
+  saldoEvent,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -1374,4 +1375,50 @@ test("credits-instellingen: maximum per klant en bewaartermijn zijn begrensd (AC
   assert.equal(standaard.startsaldo, 200);
   assert.equal(standaard.koers, 0.92);
   assert.equal(standaard.marge, 2);
+});
+
+
+// ── DIR-102 · saldo reist mee met het antwoord ──────────────────────────────
+
+test("saldoEvent: het chat-antwoord stuurt het nieuwe saldo mee (AC-3/AC-4)", () => {
+  const regel = saldoEvent({ saldo: 137 });
+  assert.match(regel, /^data: /);
+  assert.match(regel, /\n\n$/);
+  const evt = JSON.parse(regel.slice(5).trim());
+  assert.equal(evt.type, "dd_saldo");
+  assert.equal(evt.saldo, 137);
+  // Nul is een geldig saldo en moet juist wél verstuurd worden (AC-5).
+  assert.equal(JSON.parse(saldoEvent({ saldo: 0 }).slice(5).trim()).saldo, 0);
+  assert.equal(JSON.parse(saldoEvent({ saldo: -12 }).slice(5).trim()).saldo, -12);
+});
+
+test("saldoEvent: de nieuwe grootboekregel gaat mee voor het dashboard (AC-2)", () => {
+  const evt = JSON.parse(saldoEvent({ saldo: 50, regel: { tijd: 9, soort: "verbruik", agent: "gsc", credits: 7 } }).slice(5).trim());
+  assert.equal(evt.regel.agent, "gsc");
+  assert.equal(evt.regel.credits, 7);
+  // Zonder regel blijft het event gewoon een saldo, zonder leeg veld.
+  assert.equal("regel" in JSON.parse(saldoEvent({ saldo: 50 }).slice(5).trim()), false);
+});
+
+test("saldoEvent: zonder zeker bedrag gaat er niets mee (AC-7)", () => {
+  // Een mislukte of overgeslagen boeking mag geen bedrag in beeld zetten. Dan liever
+  // niets sturen, zodat de pagina laat staan wat er stond.
+  assert.equal(saldoEvent(null), "");
+  assert.equal(saldoEvent(undefined), "");
+  assert.equal(saldoEvent({}), "");
+  assert.equal(saldoEvent({ saldo: null }), "");
+  assert.equal(saldoEvent({ saldo: "137" }), "");
+  assert.equal(saldoEvent({ regel: { agent: "gsc" } }), "");
+});
+
+test("saldoEvent: de bestaande SSE-lezer struikelt niet over het extra event", () => {
+  // De tekstlezer kijkt alleen naar content_block_delta, dus een dd_saldo-event
+  // ertussen verandert niets aan wat er in de bubbel komt.
+  const sse = [
+    'data: ' + JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "Hallo " } }),
+    'data: ' + JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "wereld" } }),
+    saldoEvent({ saldo: 12 }).trim(),
+    'data: [DONE]',
+  ].join("\n");
+  assert.equal(extractTextFromSSE(sse), "Hallo wereld");
 });
