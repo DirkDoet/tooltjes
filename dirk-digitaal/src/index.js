@@ -1361,13 +1361,37 @@ async function creditsConfig(env) {
 // Geen technische modelnamen in wat de klant leest, en niet het woord tokens; de
 // jargon-test bewaakt dat. "AI-model" mag alleen in de kop hieronder, op verzoek
 // van Dirk.
+// DIR-105 - hoeveel keer zo duur is dit model als Standaard? Uit dezelfde prijstabel
+// als de afboeking, zodat de zin op het scherm niet uit de pas kan lopen met wat er
+// werkelijk betaald wordt (AC-6). Verandert een tarief, dan verandert deze zin mee.
+//
+// In de huidige tabel schalen invoer en uitvoer allebei met dezelfde factor, dus één
+// getal dekt de hele vraag. Zou dat ooit uiteenlopen, dan klopt "ongeveer 2,5x" niet
+// meer ongeacht wat je invult; een test bewaakt precies dat.
+export function keerZoDuurAlsStandaard(model) {
+  const duur = modelPrijs(model);
+  const standaard = modelPrijs(KLANT_STANDAARD_MODEL);
+  return duur.uitvoer / standaard.uitvoer;
+}
+
+// Als tekst, in het Nederlands: 2.5 wordt "2,5".
+export function keerTekst(getal) {
+  return String(Math.round((Number(getal) || 0) * 10) / 10).replace(".", ",");
+}
+
+// Wie zelf niets kiest krijgt dit. Dirk heeft op 1 september 2026 besloten dat de
+// instelling in /admin het tarief van een klant niet mag verzetten.
+const KLANT_STANDAARD_MODEL = "claude-sonnet-5";
+
 const KLANT_MODELLEN = [
-  { id: "claude-sonnet-5", label: "Standaard",
+  { id: KLANT_STANDAARD_MODEL, label: "Standaard",
     uitleg: "Snel en scherp geprijsd. Voor de meeste vragen is dit genoeg." },
   { id: "claude-opus-4-8", label: "Beter",
-    uitleg: "Denkt langer door op lastige vragen. Kost ongeveer 2,5x zoveel credits per vraag." },
+    uitleg: "Denkt langer door op lastige vragen. Kost ongeveer "
+      + keerTekst(keerZoDuurAlsStandaard("claude-opus-4-8")) + "x zoveel credits per vraag." },
   { id: "claude-opus-5", label: "Super",
-    uitleg: "De zwaarste keuze, voor als je ergens echt in wilt duiken. Kost ook ongeveer 2,5x zoveel credits per vraag." },
+    uitleg: "De zwaarste keuze, voor als je ergens echt in wilt duiken. Kost ook ongeveer "
+      + keerTekst(keerZoDuurAlsStandaard("claude-opus-5")) + "x zoveel credits per vraag." },
 ];
 
 // De kop is een letterlijk citaat van Dirk; niet herformuleren.
@@ -1390,10 +1414,18 @@ export function geldigKlantModel(id) {
 // AC-6/AC-7 - de klant wint van de instelling in /admin, maar alleen met een model
 // dat we kennen. Zo kan een oude of geknoeide waarde nooit naar de API lekken, en
 // rekent DIR-92 af op precies het model dat is gebruikt.
-export function modelVoorKlant(klantModel, adminModel) {
-  const k = String(klantModel || "");
-  if (MODEL_KEUZES.some((m) => m.id === k)) return k;
-  return kiesModel(adminModel);
+export function modelVoorKlant(klantModel) {
+  // DIR-105 - wie zelf niets koos krijgt Standaard, niet het model uit /admin.
+  //
+  // Dat was hiervoor andersom, en dat is een valstrik: zet Dirk /admin op Opus, dan
+  // betaalt zo iemand ineens ongeveer 2,5x zoveel per vraag zonder er ooit op geklikt
+  // te hebben. De instelling in /admin blijft bestaan en blijft gelden waar er geen
+  // klant is (Dirks eigen sessie, testen), maar hij verzet het tarief van een klant
+  // niet meer.
+  //
+  // Een opgeslagen keuze die we niet kennen telt als "niets gekozen", dus ook dan
+  // Standaard. Zo kan er nooit een onbekende waarde naar de API lekken.
+  return geldigKlantModel(klantModel) || KLANT_STANDAARD_MODEL;
 }
 
 // AC-9 - hoort deze grootboekregel bij deze gebruiker? Het adres komt altijd uit de
@@ -2177,12 +2209,12 @@ export class CreditsDO {
       //
       // Het vervelende is dat daar geen test op omvalt: het blijft werken zolang je
       // het niet tegelijk probeert. Vandaar deze regels in plaats van alleen een test.
-      // Alles wat van buiten nodig is (startsaldo, koers, marge, adminModel) wordt
-      // daarom door de Worker meegegeven in het verzoek, niet hier opgehaald.
+      // Alles wat van buiten nodig is (startsaldo, koers, marge) wordt daarom door de
+      // Worker meegegeven in het verzoek, niet hier opgehaald.
       const bestaand = await this.saldoVan(email);
       const rec = nieuwSaldoRecord(bestaand, inv.startsaldo, now);
       if (!bestaand) await this.state.storage.put("s:" + email, rec);
-      const model = modelVoorKlant(rec.model, inv.adminModel);
+      const model = modelVoorKlant(rec.model);
       const { prefix, open } = await this.reserveringenVan(email, now);
       // De grens blijft die van DIR-92: op nul of lager gaat de deur dicht. De
       // reservering is geen minimumbedrag - hij neemt alleen ruimte in zolang een
@@ -2409,7 +2441,7 @@ async function creditsReserveer(request, env) {
       method: "POST",
       body: JSON.stringify({
         email: sessie.email, startsaldo: cfg.startsaldo,
-        koers: cfg.koers, marge: cfg.marge, adminModel,
+        koers: cfg.koers, marge: cfg.marge,
       }),
     });
     const j = await resp.json();
@@ -2422,7 +2454,9 @@ async function creditsReserveer(request, env) {
     return {
       weigering: null,
       krediet: {
-        email: sessie.email, model: j.model || adminModel,
+        // Ook hier geen terugval op het adminmodel: dat zou AC-1 langs een achterdeur
+        // weer ongedaan maken. Kent de Durable Object geen keuze, dan is het Standaard.
+        email: sessie.email, model: modelVoorKlant(j.model),
         reservering: j.reservering || "", verrekend: false,
         cfg,                                  // scheelt een tweede KV-lezing bij het boeken
       },
@@ -3902,6 +3936,7 @@ const OFFICE_HTML = `<!doctype html>
     <label class="zm-label" for="zm-model">Kies AI-model</label>
     <select class="zm-invoer" id="zm-model"></select>
     <p class="zm-actief">Actief: <b id="zm-actief">…</b></p>
+    <p class="zm-tekst zm-klein">Alleen voor je eigen sessie en voor bezoekers zonder klant-login. Klanten volgen dit niet: wie zelf niets kiest krijgt altijd Standaard.</p>
     <p class="zm-fout verborgen" id="zm-model-fout" role="alert"></p>
     <a class="zm-knop zm-sub" href="/admin">Klantbeheer</a>
     <button class="zm-knop zm-sub" id="zm-uitlog" type="button">Uitloggen</button>
@@ -5252,7 +5287,7 @@ const ADMIN_HTML = `<!doctype html>
         <select id="model"></select>
         <span class="melding" id="modelMelding"></span>
       </div>
-      <p class="muted">Geldt voor iedere agent en iedere bezoeker. Opus is fors duurder dan Sonnet.</p>
+      <p class="muted">Geldt voor jouw eigen sessie en voor bezoekers zonder klant-login &mdash; handig om te testen. <b>Klanten volgen dit niet:</b> wie zelf niets kiest krijgt altijd Standaard, en wie wel kiest houdt zijn eigen keuze. Deze instelling verzet dus nooit wat een klant betaalt.</p>
     </div>
     <div class="tabs">
       <button id="tabKlanten" class="tab actief">Klantbeheer</button>
@@ -6623,7 +6658,7 @@ export default {
           email: sessie.email,
           naam: (klant && klant.naam) || "",
           saldo: typeof j.saldo === "number" ? j.saldo : await saldoStart(env, sessie.email),
-          model: modelVoorKlant(j.model, await actiefModel(env)),
+          model: modelVoorKlant(j.model),
           keuzes: klantModelKeuzes(),
           regels: j.regels || [],
           cursor: j.cursor || "",
