@@ -4130,7 +4130,7 @@ const OFFICE_HTML = `<!doctype html>
        staan hier, dus vóór de klik — niet in een tussenscherm en niet pas in de chat. -->
   <div class="zm-blok" id="zm-gast">
     <p class="zm-tekst">Log in met het Google-account waarin je Search Console, Analytics of Ads staan. Je ziet daarna je eigen cijfers &mdash; niemand anders komt erbij.</p>
-    <p class="zm-tekst zm-klein">Wat we bewaren: je e-mailadres en welke collega je opent, 90 dagen. Je gesprekken bewaren we niet.</p>
+    <p class="zm-tekst zm-klein">Wat we bewaren: je e-mailadres en welke collega je opent, 90 dagen. Je gesprekken bewaren we niet na afloop van je sessie.</p>
     <a class="zm-knop" id="zm-google" href="/oauth/start">Inloggen met Google</a>
     <p class="zm-fout verborgen" id="zm-klant-fout" role="alert"></p>
     <button class="zm-knop zm-sub" id="zm-open-inlog" type="button">Beheer</button>
@@ -4301,7 +4301,7 @@ const OFFICE_HTML = `<!doctype html>
   <div class="poortbox">
     <h2 id="poort-kop">Log eerst even in</h2>
     <p>Rondkijken mag altijd. Wil je met <b id="poort-naam">een collega</b> praten? Log dan eerst in, dan schuift die meteen bij je aan.</p>
-    <p class="poort-klein">Je logt in met Google. Wat we bewaren: je e-mailadres en welke collega je opent, 90 dagen. Je gesprekken bewaren we niet.</p>
+    <p class="poort-klein">Je logt in met Google. Wat we bewaren: je e-mailadres en welke collega je opent, 90 dagen. Je gesprekken bewaren we niet na afloop van je sessie.</p>
     <div class="poort-knoppen">
       <button class="knop" id="poort-inlog">Inloggen met Google</button>
       <button class="knop rood" id="poort-sluit">Nog even rondkijken</button>
@@ -6811,7 +6811,7 @@ function juridischHtml(titel, inhoud) {
 }
 
 const PRIVACY_HTML = juridischHtml("Privacyverklaring", `
-<p class="datum">Laatst bijgewerkt: 31 augustus 2026</p>
+<p class="datum">Laatst bijgewerkt: 2 september 2026</p>
 <p>Met Dirk Digitaal praat je met AI-collega's over je eigen marketingcijfers. Hieronder lees je welke
 gegevens daarbij langskomen, wat we wel en niet bewaren, en hoe je het weer weghaalt.</p>
 
@@ -6832,9 +6832,11 @@ wachtwoord aan en zien het jouwe nooit: het inloggen gebeurt volledig bij Google
   <li>Google Ads - je campagnecijfers</li>
 </ul>
 <p>We kunnen in die accounts niets aanpassen, aanmaken of verwijderen. De toegangssleutel die Google
-afgeeft leeft alleen in je sessie: hij staat in het werkgeheugen, gaat niet naar een database, en
-verdwijnt als je weggaat of na dertig minuten stilte. We vragen geen langlopende toegang aan, dus
-zodra je sessie voorbij is heeft de tool geen toegang meer tot je gegevens.</p>
+afgeeft hoort bij je sessie en bij niets anders: hij staat versleuteld in de afgeschermde opslag van
+die ene sessie, komt niet in onze klantadministratie terecht en wordt nergens gelogd. Log je uit, dan
+wissen we hem en trekken we hem ook bij Google in. Doe je dertig minuten niets, dan wist de sessie
+zichzelf. We vragen geen langlopende toegang aan (geen refresh token), dus zodra je sessie voorbij is
+heeft de tool geen toegang meer tot je gegevens en moet je opnieuw inloggen.</p>
 
 <h2>Wat we wel bewaren</h2>
 <ul>
@@ -6842,6 +6844,12 @@ zodra je sessie voorbij is heeft de tool geen toegang meer tot je gegevens.</p>
       dagen, daarna gaat het automatisch weg. Zo zien we hoe de tool gebruikt wordt.</li>
   <li><b>Klantgegevens die wij zelf invoeren</b> - ben je klant bij ons, dan staan je naam en de
       gekoppelde account-id's in ons beheer.</li>
+  <li><b>Je verbruik van credits</b> - per antwoord leggen we vast wanneer het was, welke collega je
+      sprak, hoeveel er is afgeschreven en wat je saldo daarna was. Nooit de inhoud van het gesprek.
+      Je ziet die regels zelf terug in je dashboard.</li>
+  <li><b>Wat we voor de facturatie nodig hebben</b> - koop je credits, dan leggen we je bedrijfsnaam,
+      adres, e-mailadres en de bedragen vast. Die gegevens houden we zeven jaar, omdat de
+      belastingdienst dat van ons vraagt. Ze staan los van je gesprekken.</li>
 </ul>
 
 <h2>Wat we niet bewaren</h2>
@@ -6853,8 +6861,36 @@ zodra je sessie voorbij is heeft de tool geen toegang meer tot je gegevens.</p>
 <h2>Wie je gegevens nog meer verwerkt</h2>
 <p>Om een antwoord te maken sturen we je vraag en de opgehaalde cijfers naar het AI-model van
 <b>Anthropic</b> (Claude). Anthropic verwerkt dat om het antwoord te genereren en gebruikt het niet om
-modellen mee te trainen. De tool draait op <b>Cloudflare</b>. Verder verkopen of delen we niets, en we
-gebruiken je gegevens niet voor advertenties.</p>
+modellen mee te trainen. De tool draait op <b>Cloudflare</b>. Koop je credits, dan handelt
+<b>Mollie</b> de betaling af; die ziet je betaalgegevens en wij niet. Verder verkopen of delen we
+niets, en we gebruiken je gegevens niet voor advertenties.</p>
+
+<h2>Hoe we je gegevens beschermen</h2>
+<p>Hieronder staat wat we werkelijk doen om je gegevens te beschermen. Geen voornemens: dit zit zo in
+de tool.</p>
+<ul>
+  <li><b>Alles gaat versleuteld over de lijn.</b> Het verkeer tussen jou en de tool loopt over
+      HTTPS/TLS, en dat geldt ook voor het verkeer tussen de tool en Google, Anthropic, Cloudflare en
+      Mollie. Er gaat niets onversleuteld het internet over.</li>
+  <li><b>Je Google-sleutel leeft kort en apart.</b> Hij hoort bij één sessie, staat versleuteld in de
+      afgeschermde opslag van die sessie, en is met een willekeurig sessienummer afgeschermd dat
+      alleen jouw browser heeft. Bij uitloggen wissen we hem en trekken we hem in bij Google; na
+      dertig minuten stilte wist de sessie zichzelf. We vragen geen langlopende toegang aan.</li>
+  <li><b>Onze eigen sleutels staan niet in de code.</b> Wachtwoorden en API-sleutels van de tool zijn
+      als versleutelde secrets bij Cloudflare opgeslagen. De broncode van de tool is openbaar en
+      bevat geen enkele sleutel.</li>
+  <li><b>Wie wat mag zien, bepaalt de server.</b> Welke gegevens je krijgt hangt af van het
+      e-mailadres dat Google heeft bevestigd en dat in je ondertekende sessie staat. Wat er verder in
+      een verzoek wordt meegestuurd - een adres, een nummer, wat dan ook - vertrouwen we niet. Je kunt
+      de gegevens van iemand anders dus niet opvragen, ook niet door een adres in de URL te zetten.</li>
+  <li><b>Wat we wel bewaren, staat versleuteld opgeslagen</b> bij Cloudflare. Het beheerscherm waarin
+      die gegevens te zien zijn zit achter een apart wachtwoord dat alleen Dirk heeft.</li>
+  <li><b>Gegevens verdwijnen ook weer.</b> Het inloglog gaat na negentig dagen automatisch weg, je
+      sessie na dertig minuten stilte, en wil je eerder iets laten verwijderen dan mail je
+      <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.</li>
+</ul>
+<p>Volledige veiligheid bestaat niet, en dat beloven we dus ook niet. Merk je iets wat niet klopt, mail
+dan <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>; we pakken het op.</p>
 
 <h2>Beperkt gebruik van Google-gegevens</h2>
 <p>Het gebruik en de doorgifte van gegevens die Dirk Digitaal via Google API's ontvangt, volgt het
@@ -6874,7 +6910,7 @@ Services User Data Policy</a>, inclusief de eisen voor beperkt gebruik.</p>
 `);
 
 const VOORWAARDEN_HTML = juridischHtml("Gebruiksvoorwaarden", `
-<p class="datum">Laatst bijgewerkt: 31 augustus 2026</p>
+<p class="datum">Laatst bijgewerkt: 2 september 2026</p>
 
 <h2>Waar je mee akkoord gaat</h2>
 <p>Dirk Digitaal is een tool van Dirk Doet waarmee je je eigen marketinggegevens laat analyseren door
@@ -6896,6 +6932,36 @@ beleid op baseert. We geven geen garantie dat de tool onafgebroken beschikbaar i
   <li>Geautomatiseerd grote hoeveelheden verzoeken sturen.</li>
 </ul>
 
+<h2>Voor wie de tool is</h2>
+<p>Dirk Digitaal is een zakelijke dienst, bedoeld voor ondernemers en marketeers die met hun eigen
+bedrijfsgegevens werken. We richten ons niet op consumenten. Koop je als particulier toch credits, dan
+geldt het herroepingsrecht van veertien dagen niet voor tegoed dat je al hebt gebruikt.</p>
+
+<h2>Credits en betalen</h2>
+<p>Praten met een collega kost credits. Die koop je vooruit; het is dus tegoed dat je later opmaakt.</p>
+<ul>
+  <li><b>Eén credit is &euro; 0,01.</b> Je saldo is altijd een heel aantal credits.</li>
+  <li><b>Wat een vraag kost, verschilt.</b> Het hangt af van de lengte van de vraag en het antwoord,
+      van de hoeveelheid cijfers die de collega erbij haalt, en van het model dat je in je dashboard
+      hebt gekozen. Een grondiger model kost per vraag ongeveer 2,5 keer zoveel als de standaard.</li>
+  <li><b>Je ziet het terug.</b> In je dashboard staat je saldo, en per antwoord wanneer het was, welke
+      collega je sprak en hoeveel het kostte.</li>
+  <li><b>Is je saldo op, dan stopt het gesprek.</b> Rondkijken en inloggen blijft gewoon werken.</li>
+</ul>
+<p>Prijzen zijn exclusief btw; er komt 21% btw bij. Bij elke aankoop komt er een factuur beschikbaar in
+je dashboard.</p>
+<p>Betalen gaat via <b>Mollie</b>, met iDEAL of creditcard. Dirk Doet ziet en bewaart je
+kaartgegevens niet; die gaan rechtstreeks naar Mollie.</p>
+
+<h2>Geldigheid en terugbetaling</h2>
+<ul>
+  <li><b>Credits vervallen twaalf maanden na aankoop.</b></li>
+  <li><b>Ongebruikt tegoed betalen we niet terug.</b> Gaat er iets mis aan onze kant - een storing, een
+      fout van ons, of de tool doet niet wat we hebben toegezegd - dan lossen we het op, en waar dat
+      niet lukt betalen we het betreffende bedrag terug.</li>
+  <li><b>Stoppen we met de tool, dan krijg je je resterende tegoed terug.</b></li>
+</ul>
+
 <h2>Stoppen</h2>
 <p>Je stopt wanneer je wilt: trek de koppeling in bij Google, of mail ons. Wij kunnen toegang
 be&euml;indigen als deze voorwaarden worden overtreden.</p>
@@ -6906,6 +6972,15 @@ schade door het gebruik van de tool of door beslissingen op basis van de antwoor
 
 <h2>Vragen</h2>
 <p>Mail <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.</p>
+
+<h2>Wie wij zijn</h2>
+<ul>
+  <li>Dirk Doet</li>
+  <li>Wichard van Pontlaan 86, 5302 XC Zaltbommel</li>
+  <li>KVK 60667729</li>
+  <li>Btw-nummer NL854007210B01</li>
+  <li><a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a></li>
+</ul>
 `);
 
 
