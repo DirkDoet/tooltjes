@@ -6831,8 +6831,14 @@ wachtwoord aan en zien het jouwe nooit: het inloggen gebeurt volledig bij Google
   <li>Google Analytics 4 - je bezoekcijfers</li>
   <li>Google Ads - je campagnecijfers</li>
 </ul>
-<p>We kunnen in die accounts niets aanpassen, aanmaken of verwijderen. De toegangssleutel die Google
-afgeeft hoort bij je sessie en bij niets anders: hij staat versleuteld in de afgeschermde opslag van
+<p>Hoe streng die toegang is, verschilt per bron. Voor Search Console en Analytics vragen we een
+sleutel die <b>alleen kan lezen</b>: aanpassen is daarmee technisch onmogelijk. Voor Google Ads
+bestaat zo'n alleen-lezen sleutel niet - Google levert daar &eacute;&eacute;n sleutel, en die zou ook
+kunnen schrijven. Wij gebruiken hem uitsluitend om te lezen: de tool vraagt alleen rapportages op, en
+er staat nergens in de code een opdracht die iets aanmaakt, wijzigt of verwijdert. Aan je campagnes,
+je budgetten of je advertenties verandert dus nooit iets. De broncode is openbaar, dus dat is na te
+kijken.</p>
+<p>De toegangssleutel die Google afgeeft hoort bij je sessie en bij niets anders: hij staat versleuteld in de afgeschermde opslag van
 die ene sessie, komt niet in onze klantadministratie terecht en wordt nergens gelogd. Log je uit, dan
 wissen we hem en trekken we hem ook bij Google in. Doe je dertig minuten niets, dan wist de sessie
 zichzelf. We vragen geen langlopende toegang aan (geen refresh token), dus zodra je sessie voorbij is
@@ -6870,8 +6876,9 @@ niets, en we gebruiken je gegevens niet voor advertenties.</p>
 de tool.</p>
 <ul>
   <li><b>Alles gaat versleuteld over de lijn.</b> Het verkeer tussen jou en de tool loopt over
-      HTTPS/TLS, en dat geldt ook voor het verkeer tussen de tool en Google, Anthropic, Cloudflare en
-      Mollie. Er gaat niets onversleuteld het internet over.</li>
+      HTTPS/TLS, en dat geldt ook voor het verkeer tussen de tool en Google, Anthropic en Cloudflare -
+      en straks, zodra je credits kunt kopen, ook naar Mollie. Er gaat niets onversleuteld het
+      internet over.</li>
   <li><b>Je Google-sleutel leeft kort en apart.</b> Hij hoort bij één sessie, staat versleuteld in de
       afgeschermde opslag van die sessie, en is met een willekeurig sessienummer afgeschermd dat
       alleen jouw browser heeft. Bij uitloggen wissen we hem en trekken we hem in bij Google; na
