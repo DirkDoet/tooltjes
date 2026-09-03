@@ -2722,8 +2722,15 @@ export class CreditsDO {
 
     // DIR-107 AC-8 - eigen kosten van Dirk (het omzetten van een PDF). Die horen in
     // het grootboek zodat hij ze ziet, maar ze mogen NOOIT op een klantsaldo landen:
-    // een klant heeft niet om die conversie gevraagd. Deze route schrijft daarom
-    // alleen een regel en raakt geen enkel saldo aan.
+    // een klant heeft niet om die conversie gevraagd.
+    //
+    // Eén garantie draagt dat, en die is structureel: deze route schrijft geen saldo.
+    // Elke saldomutatie in deze klasse is een put op "s:" + email, en die staan allemaal
+    // in andere routes. Wat hieronder staat - een leeg e-mailadres en saldoNa null - is
+    // daar het gevolg van, geen tweede vangnet: er is geen adres om op te boeken, dus
+    // hoortBijGebruiker laat de regel bij niemand zien. Een test drijft deze route en
+    // controleert dat er geen enkele "s:"-sleutel geschreven wordt; verhuist er ooit een
+    // saldoschrijving hierheen, dan valt die om.
     if (url.pathname === "/credits/kosten") {
       const regel = {
         tijd: now, soort: "kosten", email: "",
@@ -7521,14 +7528,21 @@ export default {
         return json({ error: "Alleen Word (.docx) en PDF kunnen worden omgezet. Voor platte tekst kun je .txt of .md gebruiken." }, 400);
       }
 
+      const teGroot = (bytes) => json({
+        error: "Dit bestand is " + Math.round(bytes / (1024 * 1024)) + " MB en het maximum is "
+          + Math.round(BRON_BESTAND_MAX_BYTES / (1024 * 1024)) + " MB.",
+      }, 400);
+
+      // AC-9 - eerst kijken wat de browser zegt te sturen, en pas daarna inlezen.
+      // Anders staat een te groot bestand al volledig in het geheugen op het moment dat
+      // we het weigeren, en bij een PDF komt de base64-kopie daar nog bij.
+      const gemeld = Number(request.headers.get("content-length") || 0);
+      if (gemeld > BRON_BESTAND_MAX_BYTES) return teGroot(gemeld);
+
+      // De kop kan ontbreken of niet kloppen, dus na het inlezen nog een keer meten.
       const ruw = new Uint8Array(await request.arrayBuffer());
       if (!ruw.length) return json({ error: "Er kwam geen bestand mee." }, 400);
-      if (ruw.length > BRON_BESTAND_MAX_BYTES) {
-        return json({
-          error: "Dit bestand is " + Math.round(ruw.length / (1024 * 1024)) + " MB en het maximum is "
-            + Math.round(BRON_BESTAND_MAX_BYTES / (1024 * 1024)) + " MB.",
-        }, 400);
-      }
+      if (ruw.length > BRON_BESTAND_MAX_BYTES) return teGroot(ruw.length);
 
       let uit;
       const meter = nieuweMeter();

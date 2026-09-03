@@ -89,6 +89,7 @@ import {
   bronnenMeter,
   geldigeBronUrl,
   schoneBron,
+  CreditsDO,
   tekstUitHtml,
   bronnenSysteemTekst,
   bouwSysteem,
@@ -2391,17 +2392,100 @@ test("de tekenlimiet van DIR-99 geldt ook voor een omgezet document (AC-7)", () 
   assert.equal(bronPast([{ id: "a", tekst: "y".repeat(30000) }], "x".repeat(20001)), false);
 });
 
-test("conversiekosten landen niet op een klantsaldo (AC-8)", () => {
-  // De kostenregel draagt geen adres, en hoortBijGebruiker geeft bij een leeg adres
-  // nooit een treffer. Geen enkele klant ziet deze regel dus in zijn dashboard, en er
-  // is ook geen saldo waar hij vanaf zou kunnen.
-  const kosten = { soort: "kosten", email: "", agent: "conversie", credits: 12, saldoNa: null };
-  assert.equal(hoortBijGebruiker(kosten, "ik@voorbeeld.nl"), false);
-  assert.equal(hoortBijGebruiker(kosten, ""), false);
-  // Ook niet als iemand toevallig geen adres in zijn sessie heeft.
-  assert.equal(hoortBijGebruiker(kosten, null), false);
-  // En de regel zelf zegt met zoveel woorden dat er geen saldo bij hoort.
-  assert.equal(kosten.saldoNa, null);
+// Een opslag die onthoudt wat erin geschreven is, zodat een test kan zien WELKE
+// sleutels een route aanraakt. list() geeft een Map terug, net als de echte.
+function nepDoOpslag(begin) {
+  const data = new Map(Object.entries(begin || {}));
+  const geschreven = [];
+  return {
+    geschreven, data,
+    async get(k) { return data.has(k) ? data.get(k) : undefined; },
+    async put(k, v) { geschreven.push(k); data.set(k, v); },
+    async delete(k) { data.delete(k); },
+    // prefix, end en limit doen er allemaal toe: het snoeien in CreditsDO begrenst
+    // zijn list() met `end` en `limit`, en een nabootsing die dat negeert wist regels
+    // die de echte opslag laat staan.
+    async list(opties) {
+      const o = opties || {};
+      const prefix = o.prefix || "";
+      const uit = new Map();
+      for (const k of [...data.keys()].sort()) {
+        if (!k.startsWith(prefix)) continue;
+        if (o.start && k < o.start) continue;
+        if (o.end && k >= o.end) continue;            // `end` is exclusief
+        uit.set(k, data.get(k));
+        if (o.limit && uit.size >= o.limit) break;
+      }
+      return uit;
+    },
+  };
+}
+
+const KOSTEN_BODY = {
+  agent: "conversie", model: "claude-sonnet-5", invoer: 4200, uitvoer: 180,
+  cacheLees: 0, cacheSchrijf: 0, credits: 12, reden: "omzetten van werkwijze.pdf",
+  maxRegels: 500, bewaardagen: 365,
+};
+
+test("route /credits/kosten schrijft geen enkel saldo (DIR-107 AC-8)", async () => {
+  // Dit is het punt waar het echt op staat. Niet: "een object dat ik zelf maak heeft
+  // saldoNa null", maar: de route zelf raakt geen saldo aan. Verhuist er ooit een
+  // saldoschrijving hierheen, dan valt deze test om.
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 100, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  const resp = await doo.fetch(new Request("https://do/credits/kosten", {
+    method: "POST", body: JSON.stringify(KOSTEN_BODY),
+  }));
+  assert.equal(resp.status, 200);
+
+  const saldoSleutels = opslag.geschreven.filter((k) => k.startsWith("s:"));
+  assert.deepEqual(saldoSleutels, [], "de kostenroute schreef een saldosleutel: " + saldoSleutels.join(", "));
+  assert.deepEqual(opslag.data.get("s:klant@voorbeeld.nl"), { saldo: 100, gemaakt: 1 });
+
+  // En de regel die er wél komt, hoort bij niemand.
+  const regels = [...opslag.data.values()].filter((v) => v && v.soort === "kosten");
+  assert.equal(regels.length, 1);
+  assert.equal(regels[0].email, "");
+  assert.equal(regels[0].saldoNa, null);
+  assert.equal(regels[0].agent, "conversie");
+  assert.equal(hoortBijGebruiker(regels[0], "klant@voorbeeld.nl"), false);
+});
+
+test("controle op die test: /credits/boek schrijft wél een saldo", async () => {
+  // Zonder deze test bewijst de vorige niets: als de nep-opslag geen schrijfacties
+  // zou zien, zou "geen saldosleutel geschreven" altijd slagen.
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 100, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  const resp = await doo.fetch(new Request("https://do/credits/boek", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "klant@voorbeeld.nl", agent: "gsc", model: "claude-sonnet-5",
+      invoer: 100, uitvoer: 10, credits: 7, maxRegels: 500, bewaardagen: 365,
+    }),
+  }));
+  assert.equal(resp.status, 200);
+  assert.ok(opslag.geschreven.some((k) => k.startsWith("s:")), "verwacht juist wél een saldoschrijving");
+  assert.equal(opslag.data.get("s:klant@voorbeeld.nl").saldo, 93);
+});
+
+test("route omzetten: te groot wordt geweigerd op de kop, vóór het inlezen (DIR-107 AC-9)", async () => {
+  const store = {};
+  const env = { ADMIN_PASSWORD: "geheim-voor-de-test", CLIENTS: nepKv(store) };
+  const ctx = { waitUntil() {} };
+  const login = await worker.fetch(new Request("https://dd.test/api/admin/login", {
+    method: "POST", body: JSON.stringify({ password: "geheim-voor-de-test" }),
+  }), env, ctx);
+  const cookie = String(login.headers.get("Set-Cookie") || "").split(";")[0];
+
+  // De body is vier bytes; de kop zegt 95 MB. Wordt er eerst ingelezen, dan is het
+  // antwoord "Er kwam geen bestand mee" of gewoon goed. Alleen als de kop vóór het
+  // inlezen wordt gelezen, kan hier 95 MB in de melding staan.
+  const resp = await worker.fetch(new Request("https://dd.test/api/admin/bronnen/omzetten?key=anton&naam=groot.pdf", {
+    method: "POST", headers: { Cookie: cookie, "content-length": "99999999" }, body: "kort",
+  }), env, ctx);
+  assert.equal(resp.status, 400);
+  const j = await resp.json();
+  assert.match(j.error, /Dit bestand is 95 MB en het maximum is 10 MB\./);
 });
 
 test("schoneBron: de herkomst van een omgezet bestand blijft staan (DIR-107 AC-4)", () => {
