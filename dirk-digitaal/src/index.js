@@ -10353,7 +10353,12 @@ export default {
       let doel = "/";
       try {
         doel = onboardingDoel(await onboardingStand(env, email));
-      } catch (e) { /* naar het kantoor, zoals voorheen */ }
+      } catch (e) {
+        // Terugval naar het kantoor, zoals voorheen - maar niet stil: een nieuwe
+        // klant mist dan zijn uitleg, en zonder deze regel weet niemand waarom.
+        // Zelfde vorm als de Ads-foutregel; terug te vinden met wrangler tail.
+        console.log("DIR-97: onboarding-stand niet op te halen, terugval naar het kantoor", String(e));
+      }
 
       // Sessie-cookies zetten, state- en PKCE-cookie wissen, terug naar de scène.
       // De sessie draagt het geverifieerde adres; de klantsleutel gaat mee als Dirk
