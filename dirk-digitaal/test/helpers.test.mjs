@@ -2403,3 +2403,15 @@ test("conversiekosten landen niet op een klantsaldo (AC-8)", () => {
   // En de regel zelf zegt met zoveel woorden dat er geen saldo bij hoort.
   assert.equal(kosten.saldoNa, null);
 });
+
+test("schoneBron: de herkomst van een omgezet bestand blijft staan (DIR-107 AC-4)", () => {
+  const b = schoneBron({ id: "1", titel: "Werkwijze", soort: "tekst", tekst: "iets", herkomst: " werkwijze.pdf " });
+  assert.equal(b.herkomst, "werkwijze.pdf");
+  // Zonder herkomst blijft het veld leeg; dat is een geplakte tekst.
+  assert.equal(schoneBron({ id: "1", titel: "t", soort: "tekst", tekst: "x" }).herkomst, "");
+  // Bij een URL zegt het adres al waar het vandaan komt; een meegegeven bestandsnaam
+  // zou daar een verzinsel zijn.
+  assert.equal(schoneBron({ id: "1", titel: "t", soort: "url", url: "https://a.nl", herkomst: "verzonnen.pdf" }).herkomst, "");
+  // Net als de titel wordt hij begrensd, zodat een lange naam de opslag niet oprekt.
+  assert.equal(schoneBron({ id: "1", titel: "t", soort: "tekst", tekst: "x", herkomst: "a".repeat(300) }).herkomst.length, 120);
+});
