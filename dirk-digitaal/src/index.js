@@ -1346,6 +1346,120 @@ const CACHE_SCHRIJF_FACTOR = 1.25;
 // dan kost een vergeten regel Dirk stilletjes echt geld.
 const PRIJS_ONBEKEND = { invoer: 5, uitvoer: 25 };
 
+// ============================================================================
+// DIR-94 - CREDITS KOPEN
+// ============================================================================
+// De verkoopprijs ligt vast: 1 credit is EUR 0,01. Dat is met opzet losgekoppeld van
+// de dollarkoers uit DIR-103 - die bepaalt wat een ANTWOORD Dirk kost, niet wat een
+// credit de klant kost. Zou de verkoopprijs met de koers meebewegen, dan verandert
+// het tarief van een klant terwijl hij niets doet.
+//
+// Omdat een credit precies een cent is, is het aantal credits gelijk aan het bedrag
+// exclusief btw in centen. Dat is geen toeval maar de hele reden dat het zo gekozen
+// is: er valt niets af te ronden en dus niets zoek te raken.
+const BTW_PERCENT = 21;
+const KOOP_MIN_STANDAARD = 10;                  // onder EUR 10 eten de transactiekosten de marge op
+const KOOP_MAX_STANDAARD = 500;
+const MOLLIE_PAYMENTS = "https://api.mollie.com/v2/payments";
+
+// Wat krijgt de klant voor dit bedrag, en wat betaalt hij? Geeft { fout } of de hele
+// berekening. Streng in wat er binnenkomt: een leeg veld, een komma-getal of iets wat
+// geen getal is wordt geweigerd in plaats van stilzwijgend 0 te worden (AC-2).
+export function koopBedrag(euroRuw, min, max) {
+  const ondergrens = Math.round(Number(min) > 0 ? Number(min) : KOOP_MIN_STANDAARD);
+  const bovengrens = Math.round(Number(max) > 0 ? Number(max) : KOOP_MAX_STANDAARD);
+  const tekst = String(euroRuw == null ? "" : euroRuw).trim();
+  if (!/^[0-9]+$/.test(tekst)) {
+    return { fout: "Vul een bedrag in hele euro's in, bijvoorbeeld 25." };
+  }
+  const euro = Number(tekst);
+  if (euro < ondergrens) {
+    return { fout: "Het laagste bedrag is \u20ac " + ondergrens + ",-. Daaronder gaat bijna alles op aan transactiekosten." };
+  }
+  if (euro > bovengrens) {
+    return { fout: "Het hoogste bedrag is \u20ac " + bovengrens + ",-. Wil je meer, mail Dirk dan even." };
+  }
+  const exclCent = euro * 100;
+  const btwCent = Math.round(exclCent * BTW_PERCENT / 100);
+  // credits === exclCent: een credit is een cent. Btw is geen tegoed.
+  return { euro, credits: exclCent, exclCent, btwCent, totaalCent: exclCent + btwCent };
+}
+
+// De andere kant op: Mollie bevestigt een betaald bedrag INCLUSIEF btw, en daar hoort
+// dit aantal credits bij (AC-5). Nooit rekenen met wat de klant in het formulier
+// invulde - alleen met wat er werkelijk binnenkwam.
+export function creditsUitBetaling(totaalCent) {
+  const c = Number(totaalCent);
+  if (!Number.isFinite(c) || c <= 0) return 0;
+  return Math.round(c * 100 / (100 + BTW_PERCENT));
+}
+
+// Mollie geeft bedragen als { currency: "EUR", value: "12.10" } - een string, met
+// opzet, om afrondingsgedoe te vermijden. Alles wat daar niet exact op lijkt geeft
+// null terug en niet 0: een ontbrekend bedrag mag nooit als "nul euro betaald"
+// doorgaan, want dan zou een halve betaling stilzwijgend nul credits opleveren.
+export function mollieBedragCent(bedrag) {
+  const b = bedrag || {};
+  if (b.currency !== "EUR") return null;
+  if (typeof b.value !== "string" || !/^[0-9]+\.[0-9]{2}$/.test(b.value)) return null;
+  return Math.round(Number(b.value) * 100);
+}
+
+// Een betaling aanmaken. Geeft { id, url } of { fout }. De bedragen gaan als string
+// naar Mollie, zo wil hun API het: "12.10", nooit een kommagetal.
+async function mollieMaakBetaling(env, gegevens) {
+  const body = {
+    amount: { currency: "EUR", value: (gegevens.totaalCent / 100).toFixed(2) },
+    description: "Dirk Digitaal - " + gegevens.credits + " credits",
+    redirectUrl: gegevens.terug,
+    webhookUrl: gegevens.webhook,
+    metadata: { email: gegevens.email, ref: gegevens.ref, credits: gegevens.credits },
+  };
+  let resp;
+  try {
+    resp = await fetch(MOLLIE_PAYMENTS, {
+      method: "POST",
+      headers: { Authorization: "Bearer " + env.MOLLIE_API_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) { return { fout: "We konden de betaling niet starten. Probeer het zo opnieuw." }; }
+  if (!resp.ok) return { fout: "We konden de betaling niet starten. Probeer het zo opnieuw." };
+  let j = null; try { j = await resp.json(); } catch (e) { j = null; }
+  const id = j && typeof j.id === "string" ? j.id : "";
+  const url = j && j._links && j._links.checkout && j._links.checkout.href;
+  if (!id || typeof url !== "string") return { fout: "We konden de betaling niet starten. Probeer het zo opnieuw." };
+  return { id, url };
+}
+
+// AC-5 - de webhook van Mollie draagt alleen een id, geen bedrag en geen status. Wat
+// er werkelijk betaald is halen we hier zelf op, met onze eigen sleutel. Een nagemaakt
+// webhook-verzoek kan daardoor nooit credits opleveren.
+async function mollieHaalBetaling(env, betaalId) {
+  try {
+    const resp = await fetch(MOLLIE_PAYMENTS + "/" + encodeURIComponent(betaalId), {
+      headers: { Authorization: "Bearer " + env.MOLLIE_API_KEY },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (e) { return null; }
+}
+
+// Wat we van een opgehaalde betaling overhouden. Streng: een ontbrekende status leest
+// nooit als betaald, en een ontbrekend bedrag nooit als nul euro.
+export function leesMollieBetaling(betaling) {
+  const b = betaling || {};
+  const bedragCent = mollieBedragCent(b.amount);
+  return {
+    betaalId: typeof b.id === "string" ? b.id : "",
+    status: typeof b.status === "string" ? b.status : "",
+    methode: typeof b.method === "string" ? b.method : "",
+    bedragCent,
+    email: String((b.metadata && b.metadata.email) || ""),
+    ref: String((b.metadata && b.metadata.ref) || ""),
+    bruikbaar: Boolean(typeof b.id === "string" && b.id && typeof b.status === "string" && b.status),
+  };
+}
+
 // AC-9 — startsaldo, koers en marge zijn instelbaar in /admin, zonder deploy.
 // Zelfde patroon als de model-kiezer: de waarde staat in KV en wordt server-side
 // tegen grenzen gecontroleerd. De koers staat los van de marge, zodat de marge niet
@@ -1356,6 +1470,7 @@ const CREDITS_KV_SLEUTEL = "config:credits";
 const CREDITS_STANDAARD = {
   startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365,
   koersAuto: true,                    // DIR-103: wekelijks de koers ophalen
+  koopMin: KOOP_MIN_STANDAARD, koopMax: KOOP_MAX_STANDAARD,   // DIR-94 AC-11
 };
 // DIR-104 - ondergrenzen die je niet per ongeluk typt. Een bewaartermijn van 1 dag is
 // twee toetsaanslagen van 100 verwijderd en gooit bij de eerstvolgende boeking bijna
@@ -1484,6 +1599,10 @@ export function schoneCreditsConfig(ruw) {
     // een expliciete `false` zet hem uit; een ontbrekend veld betekent "zoals het was"
     // en valt terug op de standaard, niet op uit.
     koersAuto: r.koersAuto === undefined ? CREDITS_STANDAARD.koersAuto : r.koersAuto !== false,
+    // DIR-94 AC-11 - wat een klant per keer mag kopen. De ondergrens is 1 euro: lager
+    // heeft geen zin, en 0 zou een betaling van niets toestaan.
+    koopMin: Math.round(binnenGrens(r.koopMin, 1, 100000, CREDITS_STANDAARD.koopMin)),
+    koopMax: Math.round(binnenGrens(r.koopMax, 1, 100000, CREDITS_STANDAARD.koopMax)),
   };
 }
 
@@ -1588,6 +1707,12 @@ export function keurCreditsConfig(ruw) {
   }
   if (r.maxRegels !== undefined && !(getal(r.maxRegels) >= CREDITS_MIN_REGELS)) {
     return "Het maximum moet minstens " + CREDITS_MIN_REGELS + " regels per klant zijn. Lager gooit grootboekregels weg die je niet terugkrijgt.";
+  }
+  // DIR-94 - een minimum boven het maximum maakt kopen onmogelijk zonder dat er
+  // ergens een foutmelding staat; dan is het scherm stuk en zie je het niet.
+  if (r.koopMin !== undefined && r.koopMax !== undefined
+      && getal(r.koopMin) > getal(r.koopMax)) {
+    return "Het laagste koopbedrag kan niet hoger zijn dan het hoogste.";
   }
   return "";
 }
@@ -1791,7 +1916,9 @@ export function klantRegel(regel) {
   const getal = (v) => Math.round(Number(v) || 0);
   return {
     tijd: getal(r.tijd),
-    soort: r.soort === "correctie" ? "correctie" : "verbruik",
+    // DIR-94 - een aankoop is geen verbruik en geen correctie; zou hij als "verbruik"
+    // doorgaan, dan stond er in de tabel van de klant een agent bij een bijboeking.
+    soort: (r.soort === "correctie" || r.soort === "aankoop") ? r.soort : "verbruik",
     agent: String(r.agent || ""),
     model: String(r.model || ""),
     invoer: getal(r.invoer),
@@ -2790,6 +2917,85 @@ export class CreditsDO {
       };
       await this.schrijfRegel(regel, { maxRegels: inv.maxRegels, bewaardagen: inv.bewaardagen });
       return json({ ok: true });
+    }
+
+    // DIR-94 - een betaling vastleggen, en credits bijboeken zodra Mollie zegt dat er
+    // betaald is. Deze route doet allebei, en dat is met opzet: het bijboeken en het
+    // vastleggen dat het gebeurd is moeten samen lukken of samen niet.
+    //
+    // Alles hieronder wacht uitsluitend op `this.state.storage`. Zolang dat zo blijft
+    // houdt de DO zijn input gate dicht en kan er tussen het lezen en het schrijven van
+    // het saldo niets tussen komen (DIR-100/DIR-104). Daarom staat de controle bij
+    // Mollie NIET hier maar in de Worker: die haalt de betaling op en geeft het
+    // resultaat als parameter mee.
+    if (url.pathname === "/credits/betaling") {
+      if (!email) return json({ error: "geen adres" }, 400);
+      const betaalId = String(inv.betaalId || "");
+      if (!betaalId) return json({ error: "geen betaal-id" }, 400);
+      const status = String(inv.status || "");
+      const sleutel = "p:" + betaalId;
+      const bestaand = (await this.state.storage.get(sleutel)) || null;
+
+      // AC-6 - de sleutel voor "al gedaan" is de boeking zelf, niet het bestaan van de
+      // regel: een betaling die eerst 'open' was en later 'paid' wordt moet nog wel
+      // geboekt worden, en een tweede melding daarna niet meer.
+      const alGeboekt = !!(bestaand && bestaand.geboekt);
+      const credits = Math.max(0, Math.round(Number(inv.credits) || 0));
+      let saldo = bestaand && typeof bestaand.saldoNa === "number" ? bestaand.saldoNa : null;
+      let nuGeboekt = false;
+
+      if (status === "paid" && !alGeboekt && credits > 0) {
+        const rec = (await this.saldoVan(email)) || { saldo: 0, gemaakt: now };
+        rec.saldo += credits;
+        await this.state.storage.put("s:" + email, rec);
+        saldo = rec.saldo;
+        nuGeboekt = true;
+        // AC-7 - in het grootboek, met alles erbij wat je later nodig hebt om een
+        // bedrag terug te vinden bij Mollie. Net als bij een correctie staat het
+        // AFgeschreven bedrag in `credits`, dus met een minteken bij een bijboeking.
+        await this.schrijfRegel({
+          tijd: now, soort: "aankoop", email, agent: "", model: "",
+          invoer: 0, uitvoer: 0, cacheLees: 0, cacheSchrijf: 0,
+          credits: -credits, saldoNa: rec.saldo,
+          bedragCent: Math.max(0, Math.round(Number(inv.bedragCent) || 0)),
+          btwCent: Math.max(0, Math.round(Number(inv.btwCent) || 0)),
+          methode: String(inv.methode || ""), betaalId,
+          reden: "credits gekocht",
+        }, { maxRegels: inv.maxRegels, bewaardagen: inv.bewaardagen });
+      }
+
+      const regel = {
+        betaalId, email, status,
+        ref: String(inv.ref || (bestaand && bestaand.ref) || ""),
+        bedragCent: Math.max(0, Math.round(Number(inv.bedragCent) || 0)),
+        btwCent: Math.max(0, Math.round(Number(inv.btwCent) || 0)),
+        credits: nuGeboekt ? credits : ((bestaand && bestaand.credits) || 0),
+        methode: String(inv.methode || (bestaand && bestaand.methode) || ""),
+        geboekt: alGeboekt || nuGeboekt,
+        saldoNa: saldo,
+        tijd: (bestaand && bestaand.tijd) || now,
+        bijgewerkt: now,
+      };
+      await this.state.storage.put(sleutel, regel);
+      if (regel.ref) await this.state.storage.put("q:" + regel.ref, betaalId);
+      return json({ saldo, geboekt: regel.geboekt, nuGeboekt, betaling: regel });
+    }
+
+    // De lijst voor /admin (AC-10). Betalingen worden niet gesnoeid zoals grootboek-
+    // regels: dit is de administratie van ontvangen geld.
+    if (url.pathname === "/credits/betalingen") {
+      const lijst = [];
+      for (const [, waarde] of await this.state.storage.list({ prefix: "p:" })) lijst.push(waarde);
+      lijst.sort((a, b) => (b.bijgewerkt || 0) - (a.bijgewerkt || 0));
+      return json({ betalingen: lijst.slice(0, 200) });
+    }
+
+    // Van onze eigen verwijzing naar het betaal-id van Mollie. De klant krijgt die
+    // verwijzing mee terug van Mollie; het betaal-id kennen we pas na het aanmaken.
+    if (url.pathname === "/credits/betaling-zoek") {
+      const betaalId = await this.state.storage.get("q:" + String(inv.ref || ""));
+      if (!betaalId) return json({ betaling: null });
+      return json({ betaling: (await this.state.storage.get("p:" + betaalId)) || null });
     }
 
     // AC-8 - handmatige correctie door Dirk, met reden. `credits` is hier het
@@ -4380,6 +4586,12 @@ const OFFICE_HTML = `<!doctype html>
     padding:.55rem .75rem; font-size:.98rem; line-height:1.45; }
   .dash-knoppen{ display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-top:.8rem; }
   .dash-melding{ margin:.45rem 0 0; font-size:.9rem; color:#45505b; }
+  /* DIR-94 - het koopblok. Bewust smal: een bedrag in hele euro's is drie tekens. */
+  .dash-koop{ display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; margin-top:.5rem; }
+  .dash-koop label{ font-size:.95rem; }
+  .dash-koop input{ width:6rem; border:2px solid var(--ink); background:#fff; color:var(--ink);
+    font-family:var(--leesfont); font-size:1rem; padding:.4rem .5rem; }
+  .dash-koopfout{ color:#b3402f; font-weight:700; }
   .dash-keuze{ display:block; width:100%; text-align:left; border:2px solid var(--ink);
     background:#fff; color:var(--ink); font-family:var(--leesfont); font-size:1rem;
     padding:.5rem .7rem; margin:.35rem 0; cursor:pointer; }
@@ -4618,10 +4830,14 @@ const OFFICE_HTML = `<!doctype html>
         <span class="dash-klein" id="dash-credits">0 credits</span>
       </div>
       <p class="dash-melding" id="dash-wie"></p>
-      <div class="dash-knoppen">
-        <button class="knop" id="dash-koop" type="button">Credits bijkopen</button>
-        <span class="dash-melding" id="dash-koopmelding"></span>
+      <h3>Credits bijkopen</h3>
+      <div class="dash-koop">
+        <label for="dash-euro">Bedrag in hele euro's</label>
+        <input id="dash-euro" type="text" inputmode="numeric" autocomplete="off">
+        <button class="knop" id="dash-koop" type="button">Betalen</button>
       </div>
+      <p class="dash-melding" id="dash-koopsom"></p>
+      <p class="dash-melding" id="dash-koopmelding"></p>
       <h3>${klantModelKop()}</h3>
       <p class="dash-melding">${klantModelInleiding()}</p>
       <div id="dash-modellen"></div>
@@ -5185,7 +5401,47 @@ const OFFICE_HTML = `<!doctype html>
     dashSaldoBedrag(Number(j.saldo||0));
     document.getElementById('dash-wie').textContent='Ingelogd als '+(j.naam?(j.naam+' ('+j.email+')'):j.email);
   }
+  // DIR-94 - wat er te kopen valt, en of het uberhaupt kan (AC-9).
+  var dashKopen={ kan:false, min:10, max:500, btw:21 };
+  function dashKopenTonen(j){
+    dashKopen=j.kopen||dashKopen;
+    var knop=document.getElementById('dash-koop');
+    var veld=document.getElementById('dash-euro');
+    var melding=document.getElementById('dash-koopmelding');
+    if(!dashKopen.kan){
+      knop.disabled=true; veld.disabled=true;
+      melding.textContent='Bijkopen kan nu even niet. Mail Dirk, dan zet hij je credits erbij.';
+      document.getElementById('dash-koopsom').textContent='';
+      return;
+    }
+    knop.disabled=false; veld.disabled=false;
+    if(!veld.value) veld.value=String(dashKopen.min);
+    dashKoopsom();
+  }
+  // AC-1 - direct zichtbaar wat je krijgt en wat er wordt afgeschreven. Dezelfde som
+  // als op de server; die beslist, dit rekent alleen mee.
+  function dashKoopsom(){
+    var veld=document.getElementById('dash-euro');
+    var doel=document.getElementById('dash-koopsom');
+    var tekst=String(veld.value||'').trim();
+    if(!/^[0-9]+$/.test(tekst)){
+      doel.textContent="Vul een bedrag in hele euro's in, bijvoorbeeld 25.";
+      doel.className='dash-melding dash-koopfout'; return;
+    }
+    var euro=Number(tekst);
+    if(euro<dashKopen.min || euro>dashKopen.max){
+      doel.textContent='Kies een bedrag tussen \u20ac '+dashKopen.min+' en \u20ac '+dashKopen.max+'.';
+      doel.className='dash-melding dash-koopfout'; return;
+    }
+    var exclCent=euro*100;
+    var btwCent=Math.round(exclCent*dashKopen.btw/100);
+    doel.textContent='Je krijgt '+exclCent+' credits. Daar komt '+dashEuro(btwCent)+' btw bij, '
+      + 'dus er wordt '+dashEuro(exclCent+btwCent)+' afgeschreven.';
+    doel.className='dash-melding';
+  }
+
   function dashModellenTonen(j){
+    dashKopenTonen(j);
     dashKeuzes=j.keuzes||[]; dashModel=j.model||'';
     var doel=document.getElementById('dash-modellen'); doel.textContent='';
     dashKeuzes.forEach(function(k){
@@ -5245,7 +5501,12 @@ const OFFICE_HTML = `<!doctype html>
     // onverklaarbaar maken: dan verschijnt er geld zonder regel. Hij staat er dus
     // wel in, maar zonder de notitie die Dirk erbij schreef - die is voor /admin
     // en komt niet eens mee in het antwoord.
-    if(r.soort==='correctie'){
+    if(r.soort==='aankoop'){
+      // DIR-94 - een aankoop hoort geen agent en geen model te tonen; er is niets
+      // verbruikt. Zonder deze tak stond er een lege collega bij een bijboeking.
+      cel('Credits gekocht');
+      cel('\u2014');
+    } else if(r.soort==='correctie'){
       cel('Handmatige correctie');
       cel('\u2014');
     } else {
@@ -5296,18 +5557,78 @@ const OFFICE_HTML = `<!doctype html>
   }
   document.getElementById('dash-sluit').addEventListener('click',dashDicht);
   document.getElementById('dash-meer').addEventListener('click',function(){ dashLaad(true); });
+  document.getElementById('dash-euro').addEventListener('input',dashKoopsom);
   document.getElementById('dash-koop').addEventListener('click',function(){
-    // NG-1: bijkopen komt in het volgende issue; hier alleen een eerlijke melding.
-    document.getElementById('dash-koopmelding').textContent=
-      'Bijkopen kan hier binnenkort zelf. Tot die tijd: mail Dirk, dan zet hij je credits erbij.';
+    var knop=this;
+    var melding=document.getElementById('dash-koopmelding');
+    melding.className='dash-melding'; melding.textContent='Bezig...';
+    knop.disabled=true;
+    fetch('/api/klant/koop',{ method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ euro:document.getElementById('dash-euro').value }) })
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+      .then(function(res){
+        if(!res.ok || !res.j.url){
+          knop.disabled=false;
+          melding.className='dash-melding dash-koopfout';
+          melding.textContent=(res.j&&res.j.error)||'Kon de betaling niet starten.';
+          return;
+        }
+        // AC-3 - vanaf hier neemt Mollie het over; terugkomen doet hij zelf.
+        window.location.href=res.j.url;
+      })
+      .catch(function(){
+        knop.disabled=false;
+        melding.className='dash-melding dash-koopfout';
+        melding.textContent='Kon de betaling niet starten. Probeer het zo opnieuw.';
+      });
   });
+
+  // AC-8 - terug van Mollie. De webhook doet het bijboeken; hier vertellen we alleen
+  // hoe het is afgelopen, en dat het even kan duren als de melding nog onderweg is.
+  function dashBetalingStand(ref, pogingen){
+    var melding=document.getElementById('dash-koopmelding');
+    fetch('/api/klant/betaling?ref='+encodeURIComponent(ref))
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(j.status==='paid' && j.geboekt){
+          melding.className='dash-melding';
+          melding.textContent='Betaald \u2014 er zijn '+(j.credits||0)+' credits bijgeschreven.';
+          dashLaad(false);
+          return;
+        }
+        if(j.status==='canceled' || j.status==='expired' || j.status==='failed'){
+          melding.className='dash-melding dash-koopfout';
+          melding.textContent='De betaling is niet doorgegaan. Er is niets afgeschreven; je kunt het gewoon opnieuw proberen.';
+          return;
+        }
+        // Nog onderweg: de melding van Mollie kan een paar tellen later komen. Blijft
+        // hij weg, dan zeggen we dat ook, in plaats van eindeloos "nog even" te tonen.
+        melding.className='dash-melding';
+        if(pogingen>0){
+          melding.textContent='We wachten nog op de bevestiging van je betaling. Dit duurt meestal een paar tellen.';
+          setTimeout(function(){ dashBetalingStand(ref, pogingen-1); }, 3000);
+        } else {
+          melding.textContent='We hebben nog geen bevestiging van je betaling. Is er wel afgeschreven, '
+            + 'ververs dan zo even deze pagina; blijft het saldo staan, mail Dirk dan met het tijdstip erbij.';
+        }
+      })
+      .catch(function(){
+        melding.className='dash-melding';
+        melding.textContent='We konden de betaling even niet opzoeken. Ververs de pagina zo nog eens.';
+      });
+  }
   dashOverlay.addEventListener('click',function(e){ if(e.target===dashOverlay) dashDicht(); });
   var dashKnop=document.getElementById('zm-dashboard');
   if(dashKnop) dashKnop.addEventListener('click',dashOpen);
   // Rechtstreeks naar /dashboard: dan schuift het paneel meteen open. Wie niet is
   // ingelogd ziet gewoon het kantoor; de gegevens zitten achter de sessie.
   window.ddDashboardAutoOpen=function(){
-    if(location.pathname==='/dashboard') dashOpen();
+    if(location.pathname!=='/dashboard') return;
+    dashOpen();
+    // DIR-94 AC-8 - terug van Mollie. De verwijzing in de URL zegt welke betaling het
+    // was; de status komt van de server, niet uit de URL.
+    var ref=new URLSearchParams(location.search).get('betaling');
+    if(ref) dashBetalingStand(ref, 10);
   };
   // DIR-102 - staat het paneel open terwijl er een antwoord binnenkomt, dan werkt het
   // saldo daar meteen bij en komt de nieuwe regel er bovenaan bij (AC-2). Is het
@@ -5855,6 +6176,8 @@ const ADMIN_HTML = `<!doctype html>
         <div class="veld"><label for="cMarge">Margefactor</label><input id="cMarge" type="text"></div>
         <div class="veld"><label for="cMax">Grootboekregels per klant</label><input id="cMax" type="text"><span class="hint">Elke klant houdt zijn eigen laatste regels; een drukke klant duwt die van een rustige niet weg.</span></div>
         <div class="veld"><label for="cDagen">Bewaartermijn (dagen)</label><input id="cDagen" type="text"><span class="hint">Oudere regels worden opgeruimd. Het saldo verandert daar nooit door.</span></div>
+        <div class="veld"><label for="cKoopMin">Laagste bedrag dat een klant kan kopen (euro)</label><input id="cKoopMin" type="text"></div>
+        <div class="veld"><label for="cKoopMax">Hoogste bedrag dat een klant kan kopen (euro)</label><input id="cKoopMax" type="text"><span class="hint">Bedragen zijn exclusief btw; de klant betaalt 21% meer en krijgt 100 credits per euro.</span></div>
         <div class="knoppen"><button id="cBewaar">Instellingen bewaren</button><span class="melding" id="cMelding"></span></div>
         <p class="muted">Geldt vanaf nu: het startsaldo voor wie hierna voor het eerst inlogt, koers en marge voor wat hierna wordt afgeboekt.</p>
         <p class="muted"><b>Let op met de onderste twee.</b> Verlaag je de bewaartermijn of het maximum, dan worden grootboekregels die daarbuiten vallen opgeruimd zodra er voor die klant weer geboekt wordt, en die komen niet terug. Verlagen vraagt daarom eerst om bevestiging, met het aantal regels erbij dat het uiteindelijk kost. Verhogen kan altijd zonder gevolgen.</p>
@@ -5867,6 +6190,8 @@ const ADMIN_HTML = `<!doctype html>
       </div>
       <h2>Saldo per klant</h2>
       <div id="cSaldi"></div>
+      <h2>Betalingen</h2>
+      <div id="cBetalingen"></div>
       <h2>Grootboek</h2>
       <p class="modelmelding" id="cModelMelding"></p>
       <div id="cBoekingen"></div>
@@ -6497,10 +6822,50 @@ const ADMIN_HTML = `<!doctype html>
       document.getElementById('cMarge').value=cfg.marge;
       document.getElementById('cMax').value=cfg.maxRegels;
       document.getElementById('cDagen').value=cfg.bewaardagen;
+      document.getElementById('cKoopMin').value=cfg.koopMin;
+      document.getElementById('cKoopMax').value=cfg.koopMax;
       renderSaldi((res.j&&res.j.saldi)||[]);
       renderBoekingen((res.j&&res.j.regels)||[]);
     });
+    laadBetalingen();
   }
+  // DIR-94 AC-10 - wie, wanneer, hoeveel, welke methode, welke status.
+  function laadBetalingen(){
+    api('GET','/api/admin/betalingen').then(function(res){
+      var doel=document.getElementById('cBetalingen'); if(!doel) return;
+      doel.textContent='';
+      var lijst=(res.ok && res.j && res.j.betalingen) || [];
+      if(!lijst.length){
+        var p=document.createElement('p'); p.className='leeg';
+        p.textContent=res.ok ? 'Nog geen betalingen.' : 'Kon de betalingen niet laden.';
+        doel.appendChild(p); return;
+      }
+      lijst.forEach(function(b){
+        var rij=document.createElement('div'); rij.className='rij';
+        var kop=document.createElement('b');
+        kop.textContent=euroTekst(b.bedragCent||0)+' \u2014 '+(b.email||'')+' \u2014 '+betaalStatus(b.status);
+        rij.appendChild(kop);
+        var sp=document.createElement('span'); sp.className='muted';
+        sp.textContent=tijdTekst(b.bijgewerkt||b.tijd)
+          + ' \u2014 ' + (b.methode||'nog geen methode gekozen')
+          + ' \u2014 ' + (b.geboekt ? ((b.credits||0)+' credits bijgeboekt') : 'niets bijgeboekt')
+          + ' \u2014 ' + (b.betaalId||'');
+        rij.appendChild(sp);
+        // Betaald maar niets bijgeboekt is geld binnen zonder tegoed eruit. Dat mag
+        // niet neutraal in een lijst staan; dan valt het pas op als iemand belt.
+        if(b.status==='paid' && !b.geboekt){
+          var let_=document.createElement('span'); let_.className='modelmelding aan';
+          let_.textContent='LET OP: betaald maar niets bijgeboekt. Zoek deze betaling op bij Mollie.';
+          rij.appendChild(let_);
+        }
+        doel.appendChild(rij);
+      });
+    });
+  }
+  // De statusnamen van Mollie in gewone woorden.
+  var BETAALSTATUS={ open:'nog niet betaald', pending:'wordt verwerkt', authorized:'goedgekeurd',
+    paid:'betaald', canceled:'geannuleerd', expired:'verlopen', failed:'mislukt' };
+  function betaalStatus(status){ return BETAALSTATUS[status] || (status||'onbekend'); }
   // DIR-103 - wanneer de koers voor het laatst automatisch is bijgewerkt, uit welke
   // bron, en wat er bij de laatste mislukte poging misging (AC-5/AC-7).
   function koersDatum(ms){
@@ -6558,6 +6923,11 @@ const ADMIN_HTML = `<!doctype html>
         // geen klantsaldo aangeraakt.
         wat='eigen kosten \u2014 '+(r.reden||'')+' \u2014 '+(r.model||'')
           +' \u2014 '+(r.invoer||0)+' in / '+(r.uitvoer||0)+' uit';
+      } else if(r.soort==='aankoop'){
+        // AC-7 - alles wat je nodig hebt om dit bedrag bij Mollie terug te vinden.
+        wat='credits gekocht \u2014 '+euroTekst(r.bedragCent||0)+' incl. '
+          +euroTekst(r.btwCent||0)+' btw \u2014 '+(r.methode||'onbekende methode')
+          +' \u2014 '+(r.betaalId||'');
       } else if(r.soort==='correctie'){
         wat='handmatige correctie \u2014 '+(r.reden||'');
       } else {
@@ -6622,6 +6992,11 @@ const ADMIN_HTML = `<!doctype html>
       marge:Number(document.getElementById('cMarge').value),
       maxRegels:Number(document.getElementById('cMax').value),
       bewaardagen:Number(document.getElementById('cDagen').value),
+      // Deze twee moeten mee, ook als je ze niet aanraakt: een ontbrekend veld valt
+      // terug op de standaard, en dan zou het bewaren van de koers stilletjes de
+      // koopgrenzen terugzetten.
+      koopMin:Number(document.getElementById('cKoopMin').value),
+      koopMax:Number(document.getElementById('cKoopMax').value),
       bevestigd: !!bevestigd
     }).then(function(res){
       if(res.status===409 && res.j && res.j.bevestigingNodig){
@@ -7702,6 +8077,8 @@ export default {
           cursor: j.cursor || "",
           meer: !!j.meer,
           startsaldo: cfg.startsaldo,
+          // DIR-94 - wat de koopknop nodig heeft. Zonder sleutel staat hij uit (AC-9).
+          kopen: { kan: !!env.MOLLIE_API_KEY, min: cfg.koopMin, max: cfg.koopMax, btw: BTW_PERCENT },
         });
       } catch (e) {
         return json({ error: "Kon je gegevens niet laden. Probeer het zo opnieuw." }, 502);
@@ -7728,6 +8105,118 @@ export default {
         return json({ ok: true, model: j.model });
       } catch (e) {
         return json({ error: "Kon je keuze niet bewaren. Probeer het zo opnieuw." }, 502);
+      }
+    }
+
+    // DIR-94 - credits bijkopen. Het bedrag komt uit het formulier, maar het adres
+    // komt uit de ondertekende sessie; een klant kan dus nooit voor een ander kopen.
+    if (path === "/api/klant/koop" && request.method === "POST") {
+      const sessie = await huidigeSessie(request, env);
+      if (!sessie || !sessie.email) return geenSessie();
+      // AC-9 - zonder sleutel kan er niet gekocht worden, en zegt de tool dat gewoon.
+      if (!env.MOLLIE_API_KEY) {
+        return json({ error: "Bijkopen kan nu even niet. Mail Dirk, dan zet hij je credits erbij." }, 503);
+      }
+      let b = {}; try { b = await request.json(); } catch (e) { /* leeg */ }
+      const cfg = await creditsConfig(env);
+      // AC-2 - eerst rekenen en weigeren, en pas daarna een betaling aanmaken.
+      const koop = koopBedrag(b && b.euro, cfg.koopMin, cfg.koopMax);
+      if (koop.fout) return json({ error: koop.fout }, 400);
+
+      const ref = crypto.randomUUID();
+      const gemaakt = await mollieMaakBetaling(env, {
+        totaalCent: koop.totaalCent, credits: koop.credits, email: sessie.email, ref,
+        terug: origin + "/dashboard?betaling=" + encodeURIComponent(ref),
+        webhook: origin + "/api/mollie/webhook",
+      });
+      if (gemaakt.fout) return json({ error: gemaakt.fout }, 502);
+
+      // Meteen vastleggen dat deze poging bestaat (AC-10), nog zonder boeking: dan
+      // staat een afgebroken betaling ook in de lijst en niet alleen een geslaagde.
+      try {
+        await creditsStub(env).fetch("https://do/credits/betaling", {
+          method: "POST",
+          body: JSON.stringify({
+            email: sessie.email, betaalId: gemaakt.id, status: "open", ref,
+            bedragCent: koop.totaalCent, btwCent: koop.btwCent, credits: 0, methode: "",
+            maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen,
+          }),
+        });
+      } catch (e) { /* de webhook legt hem alsnog vast; niet de betaling ophouden */ }
+      return json({ url: gemaakt.url, ref });
+    }
+
+    // AC-4/AC-5 - de webhook van Mollie. Publiek, want Mollie heeft geen sessie, en
+    // dat kan omdat het verzoek zelf niets bewijst: er staat alleen een id in, en wat
+    // die betaling waard is halen we met onze eigen sleutel op.
+    if (path === "/api/mollie/webhook" && request.method === "POST") {
+      if (!env.MOLLIE_API_KEY) return new Response("ok", { status: 200 });
+      let betaalId = "";
+      try {
+        const tekst = await request.text();
+        betaalId = new URLSearchParams(tekst).get("id") || "";
+      } catch (e) { betaalId = ""; }
+      if (!betaalId) return new Response("ok", { status: 200 });
+
+      const rauw = await mollieHaalBetaling(env, betaalId);
+      const bet = leesMollieBetaling(rauw);
+      // Kunnen we het niet ophalen, dan geven we GEEN 200 terug: Mollie probeert het
+      // dan later opnieuw. Stilzwijgend ok zeggen zou de melding voorgoed weggooien.
+      if (!bet.bruikbaar || bet.betaalId !== betaalId) return new Response("later", { status: 503 });
+      if (!bet.email) return new Response("ok", { status: 200 });
+
+      // AC-5 - het aantal credits volgt uit wat Mollie zegt te hebben ontvangen, niet
+      // uit wat de klant in het formulier koos en niet uit de metadata.
+      const credits = bet.status === "paid" ? creditsUitBetaling(bet.bedragCent) : 0;
+      const btwCent = bet.bedragCent === null ? 0 : bet.bedragCent - creditsUitBetaling(bet.bedragCent);
+      try {
+        const cfg = await creditsConfig(env);
+        await creditsStub(env).fetch("https://do/credits/betaling", {
+          method: "POST",
+          body: JSON.stringify({
+            email: bet.email, betaalId: bet.betaalId, status: bet.status, ref: bet.ref,
+            bedragCent: bet.bedragCent || 0, btwCent, credits, methode: bet.methode,
+            maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen,
+          }),
+        });
+      } catch (e) { return new Response("later", { status: 503 }); }
+      return new Response("ok", { status: 200 });
+    }
+
+    // AC-8 - de terugkeerpagina vraagt hoe het is afgelopen. Boekt zelf niets; dat
+    // doet de webhook. Is die er nog niet, dan zegt dit dat eerlijk.
+    if (path === "/api/klant/betaling" && request.method === "GET") {
+      const sessie = await huidigeSessie(request, env);
+      if (!sessie || !sessie.email) return geenSessie();
+      const ref = String(url.searchParams.get("ref") || "").slice(0, 80);
+      if (!ref) return json({ error: "Geen betaling opgegeven." }, 400);
+      try {
+        const resp = await creditsStub(env).fetch("https://do/credits/betaling-zoek", {
+          method: "POST", body: JSON.stringify({ ref }),
+        });
+        const j = await resp.json();
+        const bet = j.betaling;
+        // Het adres uit de sessie beslist, niet de verwijzing uit de URL.
+        if (!bet || normaliseerEmail(bet.email) !== normaliseerEmail(sessie.email)) {
+          return json({ status: "onbekend" });
+        }
+        return json({ status: bet.status, geboekt: !!bet.geboekt, credits: bet.credits || 0 });
+      } catch (e) {
+        return json({ error: "Kon de betaling niet opzoeken." }, 502);
+      }
+    }
+
+    // AC-10 - de betalingen in /admin.
+    if (path === "/api/admin/betalingen" && request.method === "GET") {
+      if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
+      try {
+        const resp = await creditsStub(env).fetch("https://do/credits/betalingen", {
+          method: "POST", body: JSON.stringify({}),
+        });
+        const j = await resp.json();
+        return json({ betalingen: j.betalingen || [] });
+      } catch (e) {
+        return json({ error: "Kon de betalingen niet laden." }, 502);
       }
     }
 

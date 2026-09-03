@@ -92,6 +92,10 @@ import {
   CreditsDO,
   modelPrijsBekend,
   meterWijktAf,
+  koopBedrag,
+  creditsUitBetaling,
+  mollieBedragCent,
+  leesMollieBetaling,
   tekstUitHtml,
   bronnenSysteemTekst,
   bouwSysteem,
@@ -1063,11 +1067,15 @@ test("magChattenMetSaldo: op nul gaat de deur dicht (AC-6/AC-7)", () => {
 
 test("schoneCreditsConfig: onzin uit het formulier wordt een bruikbare instelling", () => {
   // DIR-100 heeft hier maxRegels en bewaardagen bij gezet; de rest is ongewijzigd.
-  // DIR-103 heeft koersAuto erbij gezet; de rest is ongewijzigd.
+  // DIR-103 heeft koersAuto erbij gezet; DIR-94 de twee koopgrenzen. Deze test
+  // vergelijkt met opzet de HELE instelling: komt er een veld bij, dan moet dat hier
+  // bewust worden opgeschreven en niet ongemerkt meeliften.
   assert.deepEqual(schoneCreditsConfig({}),
-    { startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365, koersAuto: true });
+    { startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365, koersAuto: true,
+      koopMin: 10, koopMax: 500 });
   assert.deepEqual(schoneCreditsConfig({ startsaldo: 50, koers: 0.9, marge: 3 }),
-    { startsaldo: 50, koers: 0.9, marge: 3, maxRegels: 500, bewaardagen: 365, koersAuto: true });
+    { startsaldo: 50, koers: 0.9, marge: 3, maxRegels: 500, bewaardagen: 365, koersAuto: true,
+      koopMin: 10, koopMax: 500 });
   // Geen halve credits, geen negatief startsaldo, geen marge onder 1 (dat zou
   // betekenen dat Dirk onder de kostprijs verkoopt).
   assert.equal(schoneCreditsConfig({ startsaldo: 12.7 }).startsaldo, 13);
@@ -2638,4 +2646,165 @@ test("route /credits/boek legt de teruggemelde naam en het vangnet vast (AC-2/AC
   const oud = [...opslag2.data.values()].find((v) => v && v.soort === "verbruik");
   assert.equal(oud.gemeldModel, "");
   assert.equal(oud.tariefOnbekend, false);
+});
+
+
+// -- DIR-94 - credits kopen via Mollie ---------------------------------------
+
+test("btw zit in wat je betaalt en niet in wat je krijgt (AC-1)", () => {
+  const k = koopBedrag(10, 10, 500);
+  assert.equal(k.credits, 1000);
+  assert.equal(k.exclCent, 1000);
+  assert.equal(k.btwCent, 210);
+  assert.equal(k.totaalCent, 1210);
+  // Het hele punt: btw is geen tegoed. Je betaalt EUR 12,10 en krijgt EUR 10 aan credits.
+  assert.notEqual(k.credits, k.totaalCent);
+  assert.equal(k.credits + k.btwCent, k.totaalCent);
+
+  const groot = koopBedrag(500, 10, 500);
+  assert.equal(groot.credits, 50000);
+  assert.equal(groot.totaalCent, 60500);
+});
+
+test("een bedrag buiten de grenzen komt niet eens tot een betaling (AC-2)", () => {
+  assert.match(koopBedrag(9, 10, 500).fout, /laagste bedrag/);
+  assert.match(koopBedrag(501, 10, 500).fout, /hoogste bedrag/);
+  // De grenzen komen uit de instellingen, dus met andere grenzen mag het wel.
+  assert.equal(koopBedrag(9, 5, 500).credits, 900);
+  // En alles wat geen heel getal is wordt geweigerd in plaats van 0 te worden.
+  for (const onzin of ["", " ", "abc", "12,50", "12.50", "-10", "1e3", null, undefined, {}, []]) {
+    assert.ok(koopBedrag(onzin, 10, 500).fout, "had geweigerd moeten worden: " + JSON.stringify(onzin));
+  }
+});
+
+test("credits volgen uit wat Mollie ontving, niet uit het formulier (AC-5)", () => {
+  // EUR 12,10 betaald = EUR 10 exclusief btw = 1000 credits. Precies de weg terug.
+  assert.equal(creditsUitBetaling(1210), 1000);
+  assert.equal(creditsUitBetaling(60500), 50000);
+  assert.equal(creditsUitBetaling(koopBedrag(37, 10, 500).totaalCent), koopBedrag(37, 10, 500).credits);
+  // Een ontbrekend of onmogelijk bedrag levert 0 credits op, nooit iets willekeurigs.
+  for (const onzin of [0, -1, null, undefined, "", "abc", NaN]) {
+    assert.equal(creditsUitBetaling(onzin), 0, "onverwacht getal bij " + JSON.stringify(onzin));
+  }
+});
+
+test("een bedrag van Mollie dat niet klopt wordt null, niet nul (AC-5)", () => {
+  assert.equal(mollieBedragCent({ currency: "EUR", value: "12.10" }), 1210);
+  // Dit is het faalpatroon van dit project: een ontbrekende waarde die stilzwijgend
+  // een getal wordt. Nul euro betaald is iets heel anders dan geen bedrag.
+  for (const onzin of [null, undefined, {}, { currency: "EUR" }, { currency: "EUR", value: null },
+    { currency: "EUR", value: 12.1 }, { currency: "EUR", value: "12.1" },
+    { currency: "EUR", value: "12" }, { currency: "USD", value: "12.10" }]) {
+    assert.equal(mollieBedragCent(onzin), null, "had null moeten zijn: " + JSON.stringify(onzin));
+  }
+});
+
+test("een betaling zonder status leest nooit als betaald (AC-5)", () => {
+  const goed = leesMollieBetaling({
+    id: "tr_1", status: "paid", method: "ideal",
+    amount: { currency: "EUR", value: "12.10" }, metadata: { email: "k@v.nl", ref: "r1" },
+  });
+  assert.equal(goed.bruikbaar, true);
+  assert.equal(goed.status, "paid");
+  assert.equal(goed.bedragCent, 1210);
+  assert.equal(goed.email, "k@v.nl");
+
+  // Ontbrekende velden maken hem onbruikbaar; dan doet de webhook niets en probeert
+  // Mollie het later opnieuw.
+  assert.equal(leesMollieBetaling({ id: "tr_1", amount: { currency: "EUR", value: "12.10" } }).bruikbaar, false);
+  assert.equal(leesMollieBetaling({ status: "paid" }).bruikbaar, false);
+  assert.equal(leesMollieBetaling(null).bruikbaar, false);
+  assert.equal(leesMollieBetaling({ id: "tr_1", status: "paid" }).bedragCent, null);
+  // En "status" is nooit iets anders dan wat er staat.
+  assert.equal(leesMollieBetaling({ id: "tr_1", status: "canceled" }).status, "canceled");
+});
+
+async function betaal(doo, inv) {
+  const resp = await doo.fetch(new Request("https://do/credits/betaling", {
+    method: "POST", body: JSON.stringify(inv),
+  }));
+  return resp.json();
+}
+const BETAALD = {
+  email: "klant@voorbeeld.nl", betaalId: "tr_abc", status: "paid", ref: "r1",
+  bedragCent: 1210, btwCent: 210, credits: 1000, methode: "ideal",
+  maxRegels: 500, bewaardagen: 365,
+};
+
+test("dezelfde betaling twee keer melden geeft maar een keer credits (AC-6)", async () => {
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 100, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+
+  const eerste = await betaal(doo, BETAALD);
+  assert.equal(eerste.nuGeboekt, true);
+  assert.equal(eerste.saldo, 1100);
+
+  const tweede = await betaal(doo, BETAALD);
+  assert.equal(tweede.nuGeboekt, false, "de tweede melding boekte opnieuw");
+  assert.equal(opslag.data.get("s:klant@voorbeeld.nl").saldo, 1100, "het saldo is twee keer opgehoogd");
+
+  // En er staat maar een aankoopregel in het grootboek.
+  const aankopen = [...opslag.data.values()].filter((v) => v && v.soort === "aankoop");
+  assert.equal(aankopen.length, 1);
+  assert.equal(aankopen[0].credits, -1000, "een bijboeking staat als negatief bedrag in het grootboek");
+  assert.equal(aankopen[0].betaalId, "tr_abc");
+  assert.equal(aankopen[0].bedragCent, 1210);
+  assert.equal(aankopen[0].btwCent, 210);
+  assert.equal(aankopen[0].methode, "ideal");
+});
+
+test("een betaling die eerst open was en later betaald, wordt alsnog geboekt (AC-4)", async () => {
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 0, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+
+  const open = await betaal(doo, { ...BETAALD, status: "open", credits: 0 });
+  assert.equal(open.geboekt, false);
+  assert.equal(opslag.data.get("s:klant@voorbeeld.nl").saldo, 0);
+
+  const paid = await betaal(doo, BETAALD);
+  assert.equal(paid.nuGeboekt, true);
+  assert.equal(opslag.data.get("s:klant@voorbeeld.nl").saldo, 1000);
+
+  // Zonder deze regel zou "al gezien" hetzelfde betekenen als "al geboekt", en dan
+  // kreeg niemand ooit credits.
+  const nogmaals = await betaal(doo, BETAALD);
+  assert.equal(nogmaals.nuGeboekt, false);
+  assert.equal(opslag.data.get("s:klant@voorbeeld.nl").saldo, 1000);
+});
+
+test("een mislukte of geannuleerde betaling boekt niets (AC-8)", async () => {
+  for (const status of ["canceled", "expired", "failed", "open", "pending", ""]) {
+    const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 250, gemaakt: 1 } });
+    const doo = new CreditsDO({ storage: opslag });
+    const uit = await betaal(doo, { ...BETAALD, status });
+    assert.equal(uit.nuGeboekt, false, "boekte bij status " + JSON.stringify(status));
+    assert.equal(opslag.data.get("s:klant@voorbeeld.nl").saldo, 250);
+    assert.equal([...opslag.data.values()].filter((v) => v && v.soort === "aankoop").length, 0);
+    // Maar de poging staat er wel, want /admin moet hem kunnen laten zien (AC-10).
+    assert.equal(opslag.data.get("p:tr_abc").status, status);
+  }
+});
+
+test("de klant ziet een aankoop als aankoop, niet als verbruik", () => {
+  const uit = klantRegel({
+    tijd: 1, soort: "aankoop", email: "k@v.nl", agent: "", model: "",
+    credits: -1000, saldoNa: 1100, betaalId: "tr_abc", bedragCent: 1210,
+  });
+  assert.equal(uit.soort, "aankoop");
+  // Het betaal-id en het bedrag zijn voor /admin; de klant heeft er niets aan.
+  assert.equal(uit.betaalId, undefined);
+  assert.equal(uit.bedragCent, undefined);
+});
+
+test("de koopgrenzen zijn instelbaar en blijven bruikbaar (AC-11)", () => {
+  assert.equal(schoneCreditsConfig({ koopMin: 25, koopMax: 1000 }).koopMin, 25);
+  assert.equal(schoneCreditsConfig({ koopMin: 25, koopMax: 1000 }).koopMax, 1000);
+  // Nul of negatief zou een betaling van niets toestaan.
+  assert.equal(schoneCreditsConfig({ koopMin: 0 }).koopMin, 1);
+  assert.equal(schoneCreditsConfig({ koopMin: -5 }).koopMin, 1);
+  assert.equal(schoneCreditsConfig({ koopMin: "geen getal" }).koopMin, 10);
+  // Een minimum boven het maximum maakt kopen onmogelijk; dat wordt geweigerd met
+  // uitleg in plaats van stil rechtgeknepen.
+  assert.match(keurCreditsConfig({ koopMin: 100, koopMax: 50 }), /niet hoger zijn dan/);
+  assert.equal(keurCreditsConfig({ koopMin: 10, koopMax: 500 }), "");
 });
