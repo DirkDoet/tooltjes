@@ -692,6 +692,77 @@ export function telOnbekendVandaag(regels, nu, tijdzone) {
   return (regels || []).filter((r) => r.wat === "onbekend" && dagSleutel(r.tijd, tijdzone) === vandaag).length;
 }
 
+// DIR-98 - de gebruikstabel: sorteren en de CSV gebeuren HIER, aan de serverkant, en
+// /admin vraagt er alleen om. Zo is de functie die getest wordt ook de functie die
+// draait (de les van DIR-110), en bestaat er geen tweede sortering in de client die
+// er stilletjes van weg kan lopen. De client krijgt de leesbare gebeurtenis als veld
+// `gedaan` mee, zodat ook die tekst maar op een plek gemaakt wordt.
+
+// Dezelfde namen als AGENTNAAM in de client van /admin (Credits-tabblad): de CSV die
+// Dirk aan een klant laat zien moet lezen zoals het scherm.
+const GEBRUIK_AGENTNAAM = {
+  gsc: "Albert (GSC)", ga4: "Gertjan (GA4)", ads: "Ilona (Ads)",
+  anton: "Anton (content)", conversie: "Document omzetten",
+};
+
+export function gebeurtenisTekst(r) {
+  const x = r || {};
+  if (x.wat === "login") return "ingelogd";
+  if (x.wat === "agent") return "opende " + (GEBRUIK_AGENTNAAM[x.agent] || x.agent || "een collega");
+  return "inlogpoging geweigerd";
+}
+
+const GEBRUIK_KOLOMMEN = ["tijd", "naam", "email", "wat"];
+
+export function sorteerGebruik(regels, kolom, richting) {
+  const k = GEBRUIK_KOLOMMEN.indexOf(kolom) >= 0 ? kolom : "tijd";
+  const op = richting === "op" ? 1 : -1;                // standaard nieuwste bovenaan
+  const lijst = (regels || []).slice();
+  lijst.sort((a, b) => {
+    let uit;
+    if (k === "tijd") uit = (Number(a.tijd) || 0) - (Number(b.tijd) || 0);
+    // Op "wat" sorteert de LEESBARE tekst, want dat is wat er in de kolom staat;
+    // sorteren op de interne code zou "opende" en "ingelogd" door elkaar zetten.
+    else if (k === "wat") uit = gebeurtenisTekst(a).localeCompare(gebeurtenisTekst(b), "nl");
+    else uit = String(a[k] || "").localeCompare(String(b[k] || ""), "nl");
+    // Gelijke waarden: nieuwste eerst, zodat de volgorde voorspelbaar blijft.
+    return uit !== 0 ? uit * op : (Number(b.tijd) || 0) - (Number(a.tijd) || 0);
+  });
+  return lijst;
+}
+
+// De datum-tijd in de CSV, in de tijdzone van de zaak (net als het factuurnummer,
+// DIR-95): "03-09-2026 15:30". Als tekst bedoeld, niet als getal.
+export function gebruikTijdTekst(ms, tijdzone) {
+  try {
+    return new Intl.DateTimeFormat("nl-NL", {
+      timeZone: tijdzone || DAG_TIJDZONE, hour12: false,
+      day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
+    }).format(new Date(Number(ms) || 0)).replace(",", "");
+  } catch (e) {
+    return new Date(Number(ms) || 0).toISOString().slice(0, 16).replace("T", " ");  // UTC-terugval
+  }
+}
+
+// AC-6 - een veld met een puntkomma, aanhalingsteken of regeleinde erin gaat tussen
+// aanhalingstekens, met de aanhalingstekens erin verdubbeld (RFC 4180).
+export function csvVeld(w) {
+  const t = String(w == null ? "" : w);
+  return /[;"\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+}
+
+export function gebruikCsvTekst(regels) {
+  const koppen = ["Datum en tijd", "Naam", "E-mailadres", "Gedaan"];
+  const rijen = (regels || []).map((r) => [
+    gebruikTijdTekst(r.tijd), String(r.naam || ""), String(r.email || ""), gebeurtenisTekst(r),
+  ]);
+  // De BOM vooraan is voor Excel: zonder leest de Nederlandse Excel het bestand als
+  // ANSI en gaan accenten stuk. Puntkomma om dezelfde reden: een komma-CSV komt daar
+  // als een kolom binnen (AC-6).
+  return "\uFEFF" + [koppen].concat(rijen)
+    .map((rij) => rij.map(csvVeld).join(";")).join("\r\n") + "\r\n";
+}
+
 // ---- DIR-86 · identiteit uit Google -----------------------------------------
 // Het e-mailadres bepaalt bij welk klantrecord iemand hoort. Wie die koppeling kan
 // sturen, ÍS die klant — dus het adres mag uitsluitend uit een geverifieerde bron
@@ -5397,6 +5468,10 @@ const OFFICE_HTML = `<!doctype html>
     <p class="zm-tekst zm-klein" id="zm-klant-credits"></p>
     <button class="zm-knop" id="zm-dashboard" type="button">Mijn dashboard</button>
     <button class="zm-knop zm-sub" id="zm-klant-uitlog" type="button">Uitloggen</button>
+    <!-- DIR-112 should-fix (meegenomen in DIR-98): de Beheer-ingang stond alleen in
+         het gastblok, en dat verdwijnt zodra er een klantsessie is. Wie eerst als
+         klant inlogde kon dus niet meer bij het beheer-inlogscherm komen. -->
+    <button class="zm-knop zm-sub verborgen" id="zm-open-inlog-klant" type="button">Beheer</button>
   </div>
   <form class="zm-blok verborgen" id="zm-inlog" autocomplete="on">
     <h2 class="zm-kop">Beheer</h2>
@@ -6778,6 +6853,10 @@ const OFFICE_HTML = `<!doctype html>
     toon(form, false);
     toon(klantBlok, isKlant);
     toon(admin, isAdmin);
+    // De Beheer-ingang in het klantblok: alleen zolang er geen beheersessie is.
+    // Wie al beheerder is heeft het adminblok en hoeft nergens meer heen.
+    var beheerKlant=document.getElementById('zm-open-inlog-klant');
+    if(beheerKlant) toon(beheerKlant, isKlant && !isAdmin);
     melding(fout,''); melding(klantFout,'');
   }
   function toonGast(){ toonStand(false,false); }
@@ -6847,10 +6926,15 @@ const OFFICE_HTML = `<!doctype html>
     function na(){ haalStatus(); if(window.ddToegangVernieuwen) window.ddToegangVernieuwen(); }
     api('POST','/api/klant/logout').then(na).catch(na);
   });
-  document.getElementById('zm-open-inlog').addEventListener('click',function(){
+  function openBeheerInlog(){
     toon(gast,false); toon(form,true); melding(fout,''); pw.focus();
-  });
-  document.getElementById('zm-annuleer').addEventListener('click',function(){ pw.value=''; toonGast(); });
+  }
+  document.getElementById('zm-open-inlog').addEventListener('click',openBeheerInlog);
+  var beheerKlantKnop=document.getElementById('zm-open-inlog-klant');
+  if(beheerKlantKnop) beheerKlantKnop.addEventListener('click',openBeheerInlog);
+  // Annuleren vraagt opnieuw wie er is: een klant die het beheerformulier dichtdoet
+  // hoort zijn klantblok terug te krijgen, niet het gastblok.
+  document.getElementById('zm-annuleer').addEventListener('click',function(){ pw.value=''; haalStatus(); });
   form.addEventListener('submit',function(e){
     e.preventDefault(); melding(fout,'');
     api('POST','/api/admin/login',{ password: pw.value }).then(function(res){
@@ -6943,6 +7027,15 @@ const ADMIN_HTML = `<!doctype html>
   .klant.actief{ border-color:#015092; box-shadow:0 0 0 2px rgba(1,80,146,.15); }
   .klant b{ display:block; margin-bottom:.25rem; }
   .leeg{ color:#666; }
+  /* DIR-98 - de gebruikstabel. De wrapper schuift zelf op een smal scherm; de
+     pagina vervormt niet (AC-4). */
+  .tabelwrap{ overflow-x:auto; background:#fff; border:1px solid #ccc; border-radius:4px; }
+  .gtabel{ width:100%; border-collapse:collapse; font-size:.92rem; }
+  .gtabel th{ text-align:left; padding:.5rem .6rem; border-bottom:2px solid #ccc;
+    cursor:pointer; white-space:nowrap; user-select:none; }
+  .gtabel th:hover{ color:#015092; }
+  .gtabel td{ padding:.45rem .6rem; border-bottom:1px solid #e3e7ea; white-space:nowrap; }
+  .gtabel tbody tr:nth-child(even){ background:#f3f5f6; }
   @media (max-width:760px){ .dash{ grid-template-columns:1fr; } }
   /* DIR-80 · secties + agent-velden */
   .tabs{ display:flex; gap:.4rem; margin:1.2rem 0 .2rem; border-bottom:1px solid #ccc; }
@@ -7012,11 +7105,18 @@ const ADMIN_HTML = `<!doctype html>
     <div id="sectieGebruik" class="verborgen">
       <p class="muted">Wie heeft de tool gebruikt, en wanneer. Alleen wie/wanneer/welke collega &mdash; nooit de inhoud van gesprekken. Regels ouder dan 90 dagen worden automatisch opgeruimd; hetzelfde bezoek aan dezelfde collega telt eens per half uur.</p>
       <div class="balk">
-        <label class="balk-label" for="gebruikFilter">Filter op klant</label>
-        <select id="gebruikFilter"></select>
         <p class="muted" id="gebruikSamenvatting"></p>
+        <div class="knoppen"><button id="gebruikCsv" type="button">Download als CSV</button></div>
       </div>
-      <div id="gebruikLijst"></div>
+      <div class="tabelwrap"><table class="gtabel">
+        <thead><tr id="gebruikKoppen">
+          <th scope="col" data-kolom="tijd">Datum en tijd</th>
+          <th scope="col" data-kolom="naam">Naam</th>
+          <th scope="col" data-kolom="email">E-mailadres</th>
+          <th scope="col" data-kolom="wat">Gedaan</th>
+        </tr></thead>
+        <tbody id="gebruikRijen"></tbody>
+      </table></div>
     </div>
     <div id="sectieCredits" class="verborgen">
       <p class="muted">Saldo per ingelogd Google-adres. 1 credit = &euro; 0,01. Verbruik wordt afgeboekt op de tokens die Anthropic zelf terugmeldt, maal de marge hieronder &mdash; nooit op een schatting. In het grootboek staat wat er is afgeschreven, nooit de inhoud van een gesprek.</p>
@@ -7714,56 +7814,64 @@ const ADMIN_HTML = `<!doctype html>
     function tw(n){ return (n<10?'0':'')+n; }
     return tw(d.getDate())+'-'+tw(d.getMonth()+1)+'-'+d.getFullYear()+' '+tw(d.getHours())+':'+tw(d.getMinutes());
   }
+  // DIR-98 - de volgorde komt van de server: een kopklik vraagt de lijst opnieuw op
+  // met kolom en richting, en de CSV-knop stuurt DEZELFDE twee parameters mee. Zo
+  // bestaat er maar een sortering, en die is unit-getest (de les van DIR-110).
+  var gebruikKolom='tijd', gebruikRichting='neer';
   function laadGebruik(){
-    api('GET','/api/admin/gebruik').then(function(res){
+    api('GET','/api/admin/gebruik?kolom='+gebruikKolom+'&richting='+gebruikRichting).then(function(res){
       if(!res.ok){ meld((res.j&&res.j.error)||'Kon het gebruik niet laden.'); return; }
       gebruikRegels = (res.j&&res.j.regels)||[];
       onbekendVandaag = (res.j&&res.j.onbekendVandaag)||0;
-      vulFilter(); renderGebruik();
+      renderGebruik();
     });
   }
-  function vulFilter(){
-    var sel=document.getElementById('gebruikFilter');
-    var gekozen=sel.value||'';
-    var namen=[];
-    gebruikRegels.forEach(function(r){ if(r.naam && namen.indexOf(r.naam)<0) namen.push(r.naam); });
-    namen.sort();
-    sel.innerHTML='';
-    var o=document.createElement('option'); o.value=''; o.textContent='Alle klanten'; sel.appendChild(o);
-    namen.forEach(function(n){ var x=document.createElement('option'); x.value=n; x.textContent=n; sel.appendChild(x); });
-    sel.value = namen.indexOf(gekozen)>=0 ? gekozen : '';
-  }
   function renderGebruik(){
-    var doel=document.getElementById('gebruikLijst'); doel.textContent='';
-    var filter=document.getElementById('gebruikFilter').value||'';
-    var regels=gebruikRegels.filter(function(r){ return !filter || r.naam===filter; });
     var sam=document.getElementById('gebruikSamenvatting');
-    // De teller van onbekende pogingen gaat over ALLE regels; die hoort dus niet in
-    // dezelfde zin als een gefilterd aantal.
-    var tekst = filter
-      ? regels.length + ' gebeurtenis' + (regels.length===1?'':'sen') + ' voor ' + filter
-        + ' (van ' + gebruikRegels.length + ' in totaal)'
-      : regels.length + ' gebeurtenis' + (regels.length===1?'':'sen')
-        + (onbekendVandaag ? ' — ' + onbekendVandaag + ' onbekende inlogpoging' + (onbekendVandaag===1?'':'en') + ' vandaag (zonder adres bewaard)' : '');
-    sam.textContent = tekst;
-    if(!regels.length){
-      var p=document.createElement('p'); p.className='leeg';
-      p.textContent='Nog geen gebruik geregistreerd.'; doel.appendChild(p); return;
+    // AC-8 - de teller van onbekende inlogpogingen blijft zoals hij was.
+    sam.textContent = gebruikRegels.length + ' gebeurtenis' + (gebruikRegels.length===1?'':'sen')
+      + (onbekendVandaag ? ' — ' + onbekendVandaag + ' onbekende inlogpoging' + (onbekendVandaag===1?'':'en') + ' vandaag (zonder adres bewaard)' : '');
+    // Pijltje bij de kolom waarop gesorteerd is.
+    var koppen=document.getElementById('gebruikKoppen').children;
+    for(var i=0;i<koppen.length;i++){
+      var kop=koppen[i], basis=kop.getAttribute('data-tekst');
+      if(!basis){ basis=kop.textContent; kop.setAttribute('data-tekst',basis); }
+      var pijl = kop.getAttribute('data-kolom')===gebruikKolom
+        ? (gebruikRichting==='op' ? ' ▲' : ' ▼') : '';
+      kop.textContent = basis + pijl;
     }
-    regels.forEach(function(r){
-      var rij=document.createElement('div'); rij.className='rij';
-      var b=document.createElement('b');
-      b.textContent = r.wat==='onbekend' ? 'Onbekend Google-account' : (r.naam || r.email || 'Onbekend');
-      rij.appendChild(b);
-      var sp=document.createElement('span'); sp.className='muted';
-      var wat = r.wat==='login' ? 'ingelogd'
-        : (r.wat==='agent' ? ('opende ' + (AGENTNAAM[r.agent]||r.agent)) : 'inlogpoging geweigerd');
-      sp.textContent = tijdTekst(r.tijd) + ' — ' + wat + (r.email && r.wat!=='onbekend' ? ' — ' + r.email : '');
-      rij.appendChild(sp);
+    var doel=document.getElementById('gebruikRijen'); doel.textContent='';
+    if(!gebruikRegels.length){
+      var leegRij=document.createElement('tr'), leegCel=document.createElement('td');
+      leegCel.colSpan=4; leegCel.className='leeg'; leegCel.textContent='Nog geen gebruik geregistreerd.';
+      leegRij.appendChild(leegCel); doel.appendChild(leegRij); return;
+    }
+    gebruikRegels.forEach(function(r){
+      var rij=document.createElement('tr');
+      // Het veld gedaan komt van de server, uit dezelfde functie als de CSV-kolom;
+      // wordt alleen nog afgedrukt. Een leeg veld toont een streepje, maar in de
+      // CSV blijft het leeg: een streepje in Excel is een waarde die er niet is.
+      [tijdTekst(r.tijd), r.naam||'—', r.email||'—', r.gedaan||''].forEach(function(t){
+        var cel=document.createElement('td'); cel.textContent=t; rij.appendChild(cel);
+      });
       doel.appendChild(rij);
     });
   }
-  document.getElementById('gebruikFilter').addEventListener('change',renderGebruik);
+  // AC-3 - klikken sorteert; nog eens klikken draait om. Een nieuwe kolom begint
+  // oplopend; alleen de datum begint aflopend, want nieuwste bovenaan is de standaard.
+  document.getElementById('gebruikKoppen').addEventListener('click',function(e){
+    var kop = e.target && e.target.closest ? e.target.closest('th') : null;
+    if(!kop || !kop.getAttribute('data-kolom')) return;
+    var kolom=kop.getAttribute('data-kolom');
+    if(kolom===gebruikKolom){ gebruikRichting = gebruikRichting==='op' ? 'neer' : 'op'; }
+    else { gebruikKolom=kolom; gebruikRichting = kolom==='tijd' ? 'neer' : 'op'; }
+    laadGebruik();
+  });
+  // AC-5/AC-7 - de download gaat met dezelfde kolom en richting als de tabel; de
+  // server sorteert beide met dezelfde functie, dus het bestand IS wat je ziet.
+  document.getElementById('gebruikCsv').addEventListener('click',function(){
+    window.location='/api/admin/gebruik.csv?kolom='+gebruikKolom+'&richting='+gebruikRichting;
+  });
 
   // -- DIR-92 . Credits-sectie ----------------------------------------------
   function euroTekst(credits){ return '\u20ac ' + (Number(credits||0)/100).toFixed(2).replace('.',','); }
@@ -9133,9 +9241,37 @@ export default {
       try {
         const r = await gebruikStub(env).fetch("https://do/gebruik/lijst");
         const j = await r.json();
-        return json({ regels: j.regels || [], onbekendVandaag: j.onbekendVandaag || 0 });
+        // DIR-98 - de sortering gebeurt hier, met dezelfde functie als de CSV-route.
+        // De client toont de regels in de volgorde waarin ze binnenkomen (AC-3) en
+        // drukt `gedaan` af zoals het hier gemaakt is.
+        const regels = sorteerGebruik(j.regels || [],
+          url.searchParams.get("kolom") || "", url.searchParams.get("richting") || "")
+          .map((x) => Object.assign({}, x, { gedaan: gebeurtenisTekst(x) }));
+        return json({ regels, onbekendVandaag: j.onbekendVandaag || 0 });
       } catch (e) {
         return json({ error: "Kon het gebruiksoverzicht niet laden." }, 502);
+      }
+    }
+    // DIR-98 AC-5/AC-6/AC-7 - dezelfde regels, dezelfde sortering, maar dan als
+    // bestand. De volgorde op het scherm en die in het bestand komen uit een en
+    // dezelfde functie, dus ze KUNNEN niet verschillen zolang de client dezelfde
+    // kolom en richting meestuurt als waarmee hij de tabel laadde.
+    if (path === "/api/admin/gebruik.csv" && request.method === "GET") {
+      if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
+      try {
+        const r = await gebruikStub(env).fetch("https://do/gebruik/lijst");
+        const j = await r.json();
+        const regels = sorteerGebruik(j.regels || [],
+          url.searchParams.get("kolom") || "", url.searchParams.get("richting") || "");
+        return new Response(gebruikCsvTekst(regels), {
+          headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Content-Disposition": 'attachment; filename="dirk-digitaal-gebruik-' + dagSleutel(Date.now()) + '.csv"',
+            "Cache-Control": "no-store",
+          },
+        });
+      } catch (e) {
+        return json({ error: "Kon de CSV niet maken." }, 502);
       }
     }
     // DIR-93 - het klantdashboard. Het adres komt UITSLUITEND uit de ondertekende
