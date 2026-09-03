@@ -105,6 +105,7 @@ import {
   factuurDatumTekst,
   factuurPdf,
   pdfTekst,
+  betaalmethodeNaam,
   geldigeBronUrl,
   schoneBron,
   CreditsDO,
@@ -3212,6 +3213,25 @@ test("het factuurnummer loopt door en heeft een vaste vorm (AC-5)", () => {
   assert.equal(factuurNummerTekst(2026, null), "2026-0001");
 });
 
+test("ook de DATUM op de factuur volgt de Nederlandse tijd (AC-6)", () => {
+  // Dit hoort bij de vorige test en niet los ervan: het jaartal in het nummer en de
+  // datum op het document moeten uit dezelfde klok komen. Staat het nummer in het
+  // nieuwe jaar en de datum in het oude, dan spreekt de factuur zichzelf tegen en dat
+  // is lastiger uit te leggen dan een reeks die netjes in UTC liep.
+  const oudejaar = Date.UTC(2026, 11, 31, 23, 30);      // 1 januari 00:30 in Nederland
+  assert.equal(factuurDatumTekst(oudejaar), "1 januari 2027");
+  assert.equal(dagSleutel(oudejaar).slice(0, 4), "2027", "nummer en datum uit dezelfde klok");
+
+  // En het gaat niet alleen om oudejaarsnacht: tussen middernacht en twee uur staat de
+  // Nederlandse datum het hele jaar door een dag voor op UTC.
+  const zomernacht = Date.UTC(2026, 6, 15, 0, 30);      // 15 juli 02:30 in Nederland
+  assert.equal(new Date(zomernacht).getUTCDate(), 15);
+  assert.equal(factuurDatumTekst(zomernacht), "15 juli 2026");
+  const winternacht = Date.UTC(2026, 0, 14, 23, 30);    // 15 januari 00:30 in Nederland
+  assert.equal(new Date(winternacht).getUTCDate(), 14);
+  assert.equal(factuurDatumTekst(winternacht), "15 januari 2026");
+});
+
 test("het jaar in het nummer volgt de Nederlandse tijd, niet UTC (AC-5)", () => {
   // 31 december 23:30 UTC is in Nederland al 1 januari. Zou het jaar uit UTC komen,
   // dan kreeg de eerste factuur van het jaar het vorige jaartal - en dan loopt de
@@ -3430,4 +3450,25 @@ test("de factuurgegevens van de klant worden bewaard en teruggegeven (AC-3)", as
   assert.deepEqual(klantFactuurOntbreekt(na.gegevens), []);
   // En het saldo is er niet door veranderd.
   assert.equal(opslag.data.get("s:klant@voorbeeld.nl").saldo, 200);
+});
+
+
+test("de betaalmethode staat op de factuur zoals mensen hem kennen", () => {
+  // Mollie geeft codes terug; "Voldaan via ideal" leest als een tikfout op een
+  // document dat de belastingdienst onder ogen krijgt.
+  assert.equal(betaalmethodeNaam("ideal"), "iDEAL");
+  assert.equal(betaalmethodeNaam("IDEAL"), "iDEAL");
+  assert.equal(betaalmethodeNaam("paypal"), "PayPal");
+  assert.equal(betaalmethodeNaam("banktransfer"), "bankoverschrijving");
+  // Een methode die we niet kennen blijft staan zoals hij is; een lege regel op een
+  // factuur is erger dan een code.
+  assert.equal(betaalmethodeNaam("iets_nieuws"), "iets_nieuws");
+  assert.equal(betaalmethodeNaam(""), "");
+  assert.equal(betaalmethodeNaam(null), "");
+
+  const f = maakFactuurGegevens({ nummer: "2026-0001", datum: 1, bedragCent: 1210,
+    btwCent: 210, credits: 1000, methode: "ideal", klant: KOPER });
+  const tekst = Buffer.from(factuurPdf(f)).toString("latin1");
+  assert.match(tekst, /via iDEAL/);
+  assert.doesNotMatch(tekst, /via ideal/);
 });

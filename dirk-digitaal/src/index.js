@@ -1507,6 +1507,18 @@ export function maakFactuurGegevens(inv) {
   };
 }
 
+// Mollie geeft de betaalmethode als code terug: "ideal", "creditcard". Op een factuur
+// hoort de naam zoals mensen hem kennen. Een methode die we niet kennen laten we staan
+// zoals hij is - beter een code op de factuur dan een lege regel.
+const BETAALMETHODE_NAAM = {
+  ideal: "iDEAL", creditcard: "creditcard", paypal: "PayPal",
+  banktransfer: "bankoverschrijving", applepay: "Apple Pay", bancontact: "Bancontact",
+};
+export function betaalmethodeNaam(code) {
+  const c = String(code || "").trim().toLowerCase();
+  return BETAALMETHODE_NAAM[c] || c;
+}
+
 // Een bedrag in centen als "1.234,56". Zonder muntteken; dat zet de opmaak erbij.
 export function centenTekst(centen) {
   const c = Math.max(0, Math.round(Number(centen) || 0));
@@ -1519,8 +1531,12 @@ export function centenTekst(centen) {
 const FACTUUR_MAANDEN = ["januari", "februari", "maart", "april", "mei", "juni",
   "juli", "augustus", "september", "oktober", "november", "december"];
 export function factuurDatumTekst(ms) {
-  const d = new Date(Math.max(0, Math.round(Number(ms) || 0)));
-  return d.getUTCDate() + " " + FACTUUR_MAANDEN[d.getUTCMonth()] + " " + d.getUTCFullYear();
+  // In NEDERLANDSE tijd, net als het jaartal in het factuurnummer. Dit een halve
+  // reparatie laten was erger dan geen: dan valt het nummer in het nieuwe jaar terwijl
+  // de datum erboven nog het oude jaar noemt, en spreekt de factuur zichzelf tegen.
+  // Tussen middernacht en twee uur zou de datum elke dag van het jaar verkeerd staan.
+  const delen = dagSleutel(Math.max(0, Math.round(Number(ms) || 0))).split("-");
+  return Number(delen[2]) + " " + FACTUUR_MAANDEN[Number(delen[1]) - 1] + " " + delen[0];
 }
 
 // ── DIR-95 - de PDF ────────────────────────────────────────────────────────
@@ -1600,7 +1616,7 @@ export function factuurPdf(gegevens) {
 
   // Voldaan, met de betaaldatum. Zonder dit is het geen kwijting.
   c += pdfRegel(57, 440, 10, "Voldaan op " + factuurDatumTekst(g.betaaldatum)
-    + (g.methode ? (" via " + g.methode) : "") + ". Dit bedrag hoeft niet meer betaald te worden.", true);
+    + (g.methode ? (" via " + betaalmethodeNaam(g.methode)) : "") + ". Dit bedrag hoeft niet meer betaald te worden.", true);
   if (g.betaalId) c += pdfRegel(57, 424, 8, "Betalingskenmerk: " + g.betaalId);
 
   // De wettelijke gegevens van de verkoper, onderaan.
@@ -3543,6 +3559,12 @@ export class CreditsDO {
       // Zonder adres valt er niets bij te boeken - een saldo hangt aan een adres.
       // De melding wordt dan wel vastgelegd, zodat /admin hem laat zien met de
       // waarschuwing eronder in plaats van dat hij nergens opduikt.
+      //
+      // BEKEND GAT (DIR-95). In dit geval is er bij Mollie wel degelijk betaald en is
+      // er dus btw verschuldigd, maar er komt geen factuur omdat die aan de boeking
+      // hangt. Dat is geen sluitende oplossing, alleen een zichtbare. Er is bewust nog
+      // geen knop om er alsnog een te maken; dat vraagt een keuze over welk adres er
+      // dan op komt te staan. Tot die tijd meldt /admin het geval met zoveel woorden.
       if (status === "paid" && !alGeboekt && credits > 0 && adres) {
         const rec = (await this.saldoVan(adres)) || { saldo: 0, gemaakt: now };
         rec.saldo += credits;
