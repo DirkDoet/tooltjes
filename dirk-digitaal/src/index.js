@@ -8125,6 +8125,10 @@ const ADMIN_HTML = `<!doctype html>
 
   // ── DIR-87 · Gebruik-sectie ───────────────────────────────────────────────
   var gebruikRegels=[], onbekendVandaag=0;
+  // Dezelfde namen als GEBRUIK_AGENTNAAM aan de serverkant (DIR-98): die maakt er
+  // de Gedaan-kolom en de CSV mee, deze kant het Credits-tabblad. Wijzig je er een,
+  // wijzig dan allebei - net als bij modelWijktAf is de kopie hier onvermijdelijk,
+  // dus de comment wijst twee kanten op.
   var AGENTNAAM={ gsc:'Albert (GSC)', ga4:'Gertjan (GA4)', ads:'Ilona (Ads)', anton:'Anton (content)',
     conversie:'Document omzetten' };
   function tijdTekst(ms){
