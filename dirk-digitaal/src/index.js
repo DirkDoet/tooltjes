@@ -1085,6 +1085,7 @@ function boekConversiekosten(env, ctx, meter, naam, mislukt) {
         method: "POST",
         body: JSON.stringify({
           agent: PDF_CONVERSIE_AGENT, model: meter.model,
+          gemeldModel: meter.gemeld, tariefOnbekend: meter.tariefOnbekend === true,
           invoer: meter.invoer, uitvoer: meter.uitvoer,
           cacheLees: meter.cacheLees, cacheSchrijf: meter.cacheSchrijf,
           credits: meterCredits(meter, cfg.koers, cfg.marge),
@@ -1367,6 +1368,13 @@ export function modelPrijs(model) {
   return MODEL_PRIJZEN[String(model || "")] || PRIJS_ONBEKEND;
 }
 
+// DIR-108 AC-5 - is er een echt tarief voor dit model, of viel het terug op het
+// vangnet? De afboeking verandert daar niet door; het is er zodat /admin kan laten
+// zien dat de prijstabel bijgewerkt moet worden.
+export function modelPrijsBekend(model) {
+  return Object.prototype.hasOwnProperty.call(MODEL_PRIJZEN, String(model || ""));
+}
+
 function tokenGetal(waarde) {
   return Math.max(0, Math.floor(Number(waarde) || 0));
 }
@@ -1395,21 +1403,52 @@ export function kostenNaarCredits(kostenUSD, koers, marge) {
 // halen eerst data op en antwoorden daarna. De meter telt die aanroepen bij elkaar
 // op, zodat er een boeking uitkomt en geen vijf.
 export function nieuweMeter() {
-  return { aanroepen: 0, model: "", invoer: 0, uitvoer: 0, cacheLees: 0, cacheSchrijf: 0, kostenUSD: 0 };
+  return {
+    aanroepen: 0, model: "", invoer: 0, uitvoer: 0, cacheLees: 0, cacheSchrijf: 0, kostenUSD: 0,
+    // DIR-108 - wat de API terugmeldde (AC-2), en of we tegen het vangnettarief
+    // moesten rekenen (AC-5). Allebei alleen om vast te leggen en te tonen.
+    gemeld: "", tariefOnbekend: false,
+  };
 }
 
-export function meetAanroep(meter, model, usage) {
+// DIR-108 - `model` is wat de Worker AANVROEG; `gemeldModel` is de naam die de API
+// in zijn antwoord zette. Er wordt gerekend met het aangevraagde model, want dat is
+// het enige dat wij kiezen en dat in de prijstabel staat. Zou de API ooit een
+// opgeloste naam teruggeven die daar niet letterlijk gelijk aan is - een snapshot,
+// een versienaam - dan viel elke aanroep terug op het vangnettarief, en dat is
+// 2,5x het Sonnet-tarief. Van het saldo van de klant, en zonder dat iemand het ziet.
+//
+// De teruggemelde naam gooien we niet weg (AC-2): het is het enige signaal over wat
+// er werkelijk gedraaid heeft. Hij gaat mee naar het grootboek en /admin laat een
+// afwijking zien.
+export function meetAanroep(meter, model, usage, gemeldModel) {
   if (!meter) return meter;
   const u = usage || {};
+  const aangevraagd = model || meter.model;
   meter.aanroepen += 1;
-  meter.model = model || meter.model;
+  meter.model = aangevraagd;
+
+  // Eén antwoord kan meerdere aanroepen kosten (de tool-lus). Wijkt er ééntje af,
+  // dan is dat het interessante geval, dus die naam houden we vast in plaats van hem
+  // te laten overschrijven door een volgende aanroep die wel klopt.
+  const gemeld = String(gemeldModel || "");
+  if (gemeld && !(meter.gemeld && meter.gemeld !== meter.model)) meter.gemeld = gemeld;
+  if (!modelPrijsBekend(aangevraagd)) meter.tariefOnbekend = true;
+
   meter.invoer += tokenGetal(u.input_tokens);
   meter.uitvoer += tokenGetal(u.output_tokens);
   meter.cacheLees += tokenGetal(u.cache_read_input_tokens);
   meter.cacheSchrijf += tokenGetal(u.cache_creation_input_tokens);
   // Per aanroep omgerekend, zodat het ook klopt als het model halverwege wisselt.
-  meter.kostenUSD += tokenKosten(model, u);
+  meter.kostenUSD += tokenKosten(aangevraagd, u);
   return meter;
+}
+
+// AC-4 - week de teruggemelde naam af van wat wij aanvroegen? Apart gezet zodat de
+// vraag op één plek beantwoord wordt: in de DO, in /admin en in de test.
+export function meterWijktAf(meter) {
+  const m = meter || {};
+  return Boolean(m.gemeld && m.model && m.gemeld !== m.model);
 }
 
 // Eenmaal afronden over het totaal, niet per aanroep: anders betaalt de klant vijf
@@ -2707,6 +2746,11 @@ export class CreditsDO {
       const geschreven = {
         tijd: now, soort: "verbruik", email,
         agent: String(inv.agent || ""), model: String(inv.model || ""),
+        // DIR-108 AC-2/AC-5 - wat de API terugmeldde, en of er tegen het vangnettarief
+        // gerekend is. Oudere regels hebben deze velden niet; /admin gaat daarmee om
+        // als "niets bijzonders", zodat er niets met terugwerkende kracht verandert.
+        gemeldModel: String(inv.gemeldModel || ""),
+        tariefOnbekend: inv.tariefOnbekend === true,
         invoer: Math.max(0, Math.round(Number(inv.invoer) || 0)),
         uitvoer: Math.max(0, Math.round(Number(inv.uitvoer) || 0)),
         cacheLees: Math.max(0, Math.round(Number(inv.cacheLees) || 0)),
@@ -2735,6 +2779,8 @@ export class CreditsDO {
       const regel = {
         tijd: now, soort: "kosten", email: "",
         agent: String(inv.agent || ""), model: String(inv.model || ""),
+        gemeldModel: String(inv.gemeldModel || ""),
+        tariefOnbekend: inv.tariefOnbekend === true,
         invoer: Math.max(0, Math.round(Number(inv.invoer) || 0)),
         uitvoer: Math.max(0, Math.round(Number(inv.uitvoer) || 0)),
         cacheLees: Math.max(0, Math.round(Number(inv.cacheLees) || 0)),
@@ -2861,6 +2907,7 @@ function verrekenKrediet(env, ctx, krediet, agent, meter) {
         method: "POST",
         body: JSON.stringify({
           email: krediet.email, agent, model: meter.model,
+          gemeldModel: meter.gemeld, tariefOnbekend: meter.tariefOnbekend === true,
           invoer: meter.invoer, uitvoer: meter.uitvoer,
           cacheLees: meter.cacheLees, cacheSchrijf: meter.cacheSchrijf,
           credits: meterCredits(meter, cfg.koers, cfg.marge),
@@ -3405,8 +3452,10 @@ async function callAnthropic(env, system, messages, tools, meter, gekozenModel, 
   });
   if (!resp.ok) return null;
   const data = await resp.json();
-  // DIR-92: afrekenen op wat de API zelf terugmeldt, nooit op een schatting.
-  meetAanroep(meter, data.model || model, data.usage);
+  // DIR-92: afrekenen op de token-aantallen die de API zelf terugmeldt, nooit op een
+  // schatting. DIR-108: maar op HET MODEL DAT WIJ AANVROEGEN, niet op de naam die de
+  // API teruggeeft - die gaat er als losse waarde naast mee.
+  meetAanroep(meter, model, data.usage, data.model);
   return data;
 }
 
@@ -5744,6 +5793,9 @@ const ADMIN_HTML = `<!doctype html>
   .bronrij b{ display:block; }
   .bronmeter{ font-size:.9rem; color:#3f4750; margin:.3rem 0 .6rem; }
   .bronmeter.vol{ color:#b3402f; font-weight:700; }
+  /* DIR-108 - alleen zichtbaar als er iets te melden is; anders neemt hij geen ruimte in. */
+  .modelmelding{ display:none; }
+  .modelmelding.aan{ display:block; color:#b3402f; font-weight:700; margin:.4rem 0 .6rem; }
   .bronknoppen{ display:flex; gap:.35rem; flex-wrap:wrap; margin-top:.4rem; }
   .bronknoppen button{ font-size:.88rem; padding:.3rem .55rem; }
   .bronvoorbeeld{ white-space:pre-wrap; background:#fff; border:1px solid #ccc; padding:.6rem;
@@ -5816,6 +5868,7 @@ const ADMIN_HTML = `<!doctype html>
       <h2>Saldo per klant</h2>
       <div id="cSaldi"></div>
       <h2>Grootboek</h2>
+      <p class="modelmelding" id="cModelMelding"></p>
       <div id="cBoekingen"></div>
     </div>
     <div id="sectieAgents" class="verborgen">
@@ -6512,10 +6565,50 @@ const ADMIN_HTML = `<!doctype html>
           +' \u2014 '+(r.invoer||0)+' in / '+(r.uitvoer||0)+' uit';
         if(r.cacheLees||r.cacheSchrijf) wat+=' (cache '+(r.cacheLees||0)+' gelezen, '+(r.cacheSchrijf||0)+' geschreven)';
       }
+      // DIR-108 AC-4/AC-5 - twee dingen die je aan de bedragen niet ziet: dat de API
+      // een andere modelnaam terugmeldde dan wij aanvroegen, en dat er tegen het
+      // vangnettarief is gerekend omdat het model niet in de prijstabel staat.
+      if(modelWijktAf(r)) wat+=' \u2014 de API meldde "'+r.gemeldModel+'" terug';
+      if(r.tariefOnbekend) wat+=' \u2014 onbekend tarief, tegen het hoogste tarief afgerekend';
       sp.textContent=tijdTekst(r.tijd)+' \u2014 '+wat
         + (r.soort==='kosten' ? '' : (' \u2014 saldo daarna '+(r.saldoNa||0)));
       rij.appendChild(sp); doel.appendChild(rij);
     });
+    toonModelMelding(regels);
+  }
+
+  // Oudere regels hebben deze velden niet; die tellen als "niets bijzonders", zodat
+  // er met terugwerkende kracht niets verandert (AC-7).
+  function modelWijktAf(r){
+    return !!(r && r.gemeldModel && r.model && r.gemeldModel !== r.model);
+  }
+
+  // AC-4/AC-5 - een vangnet dat zwijgt laat een fout maanden doorlopen. Daarom
+  // bovenaan het grootboek, met de namen erbij, en niet alleen verstopt in een regel.
+  function toonModelMelding(regels){
+    var doel=document.getElementById('cModelMelding'); if(!doel) return;
+    var afwijkend=regels.filter(modelWijktAf);
+    var onbekend=regels.filter(function(r){ return r && r.tariefOnbekend; });
+    var uit=[];
+    if(onbekend.length){
+      uit.push('Er is ' + onbekend.length + ' keer afgerekend tegen het vangnettarief omdat het '
+        + 'model niet in de prijstabel staat: ' + uniekeModellen(onbekend, 'model')
+        + '. Zet het tarief erbij in MODEL_PRIJZEN, anders betaalt iedereen het hoogste tarief.');
+    }
+    if(afwijkend.length){
+      uit.push('Bij ' + afwijkend.length + (afwijkend.length===1?' boeking':' boekingen')
+        + ' meldde de API een andere modelnaam terug dan '
+        + 'we aanvroegen: ' + uniekeModellen(afwijkend, 'gemeldModel') + ' tegenover '
+        + uniekeModellen(afwijkend, 'model')
+        + '. Er is afgerekend op wat we aanvroegen, dus niemand heeft te veel betaald.');
+    }
+    doel.textContent=uit.join(' ');
+    doel.className='modelmelding'+(uit.length?' aan':'');
+  }
+  function uniekeModellen(regels, veld){
+    var uit=[];
+    regels.forEach(function(r){ if(r[veld] && uit.indexOf(r[veld])<0) uit.push(r[veld]); });
+    return uit.join(', ');
   }
   // DIR-104 - verlagen van de bewaartermijn of het maximum ruimt regels op die niet
   // terugkomen. De server weigert zo'n wijziging tot er bevestigd is en stuurt het

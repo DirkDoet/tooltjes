@@ -90,6 +90,8 @@ import {
   geldigeBronUrl,
   schoneBron,
   CreditsDO,
+  modelPrijsBekend,
+  meterWijktAf,
   tekstUitHtml,
   bronnenSysteemTekst,
   bouwSysteem,
@@ -2498,4 +2500,142 @@ test("schoneBron: de herkomst van een omgezet bestand blijft staan (DIR-107 AC-4
   assert.equal(schoneBron({ id: "1", titel: "t", soort: "url", url: "https://a.nl", herkomst: "verzonnen.pdf" }).herkomst, "");
   // Net als de titel wordt hij begrensd, zodat een lange naam de opslag niet oprekt.
   assert.equal(schoneBron({ id: "1", titel: "t", soort: "tekst", tekst: "x", herkomst: "a".repeat(300) }).herkomst.length, 120);
+});
+
+
+// -- DIR-108 - afrekenen op het model dat WIJ aanvroegen ---------------------
+
+const SONNET = "claude-sonnet-5";
+const USAGE = { input_tokens: 1000, output_tokens: 1000 };
+
+test("de teruggemelde modelnaam verandert niets aan wat er wordt afgeboekt (AC-1)", () => {
+  // Dit is de hele bedoeling van het issue. Meldt de API een snapshotnaam terug die
+  // niet in de prijstabel staat, dan viel elke aanroep vroeger terug op het
+  // vangnettarief: 2,5x zoveel, van het saldo van de klant, en volledig stil.
+  const eerlijk = meetAanroep(nieuweMeter(), SONNET, USAGE, SONNET);
+  const raar = meetAanroep(nieuweMeter(), SONNET, USAGE, "claude-sonnet-5-20260114");
+  assert.equal(raar.kostenUSD, eerlijk.kostenUSD);
+  assert.equal(meterCredits(raar, 0.92, 2), meterCredits(eerlijk, 0.92, 2));
+
+  // En het bedrag hoort bij Sonnet, niet bij het vangnet.
+  const sonnet = tokenKosten(SONNET, USAGE);
+  assert.equal(raar.kostenUSD, sonnet);
+  assert.notEqual(sonnet, tokenKosten("iets-wat-niet-bestaat", USAGE));
+});
+
+test("wat de API terugmeldde blijft bewaard, ook als het afwijkt (AC-2/AC-4)", () => {
+  const m = meetAanroep(nieuweMeter(), SONNET, USAGE, "claude-sonnet-5-20260114");
+  assert.equal(m.model, SONNET, "afgerekend op het aangevraagde model");
+  assert.equal(m.gemeld, "claude-sonnet-5-20260114");
+  assert.equal(meterWijktAf(m), true);
+
+  // Melden ze gewoon terug wat wij vroegen, dan is er niets aan de hand.
+  const g = meetAanroep(nieuweMeter(), SONNET, USAGE, SONNET);
+  assert.equal(g.gemeld, SONNET);
+  assert.equal(meterWijktAf(g), false);
+
+  // Meldt de API niets terug, dan blijft het veld leeg en is er ook niets te melden.
+  const leeg = meetAanroep(nieuweMeter(), SONNET, USAGE, "");
+  assert.equal(leeg.gemeld, "");
+  assert.equal(meterWijktAf(leeg), false);
+});
+
+test("bij meerdere aanroepen wint de afwijkende naam, niet de laatste (AC-4)", () => {
+  // Een antwoord kan vijf aanroepen kosten. Wijkt de tweede af en de derde niet, dan
+  // is dat nog steeds het geval dat Dirk moet zien.
+  const m = nieuweMeter();
+  meetAanroep(m, SONNET, USAGE, SONNET);
+  meetAanroep(m, SONNET, USAGE, "claude-sonnet-5-20260114");
+  meetAanroep(m, SONNET, USAGE, SONNET);
+  assert.equal(m.aanroepen, 3);
+  assert.equal(m.gemeld, "claude-sonnet-5-20260114");
+  assert.equal(meterWijktAf(m), true);
+});
+
+test("een model buiten de prijstabel gaat tegen het hoogste tarief en wordt gemarkeerd (AC-5/AC-6)", () => {
+  const m = meetAanroep(nieuweMeter(), "claude-iets-nieuws", USAGE, "claude-iets-nieuws");
+  assert.equal(m.tariefOnbekend, true);
+  // AC-6 - het vangnet blijft: niet gratis, maar tegen het hoogste tarief.
+  const duurste = Math.max(...klantModelKeuzes().map((k) => tokenKosten(k.id, USAGE)));
+  assert.equal(m.kostenUSD, duurste);
+  assert.ok(m.kostenUSD > tokenKosten(SONNET, USAGE));
+
+  // Een model dat er wel in staat wordt niet gemarkeerd.
+  assert.equal(meetAanroep(nieuweMeter(), SONNET, USAGE, SONNET).tariefOnbekend, false);
+  assert.equal(modelPrijsBekend(SONNET), true);
+  assert.equal(modelPrijsBekend("claude-iets-nieuws"), false);
+  assert.equal(modelPrijsBekend(""), false);
+  assert.equal(modelPrijsBekend(null), false);
+});
+
+test("elk model dat we kunnen aanvragen staat in de prijstabel (AC-6)", () => {
+  // Het vangnet is er voor het geval dit misgaat. Deze test zorgt dat het niet
+  // ongemerkt misgaat: voeg je een trede toe en vergeet je het tarief, dan valt hij
+  // hier om in plaats van maanden later op een rekening.
+  for (const k of klantModelKeuzes()) {
+    assert.equal(modelPrijsBekend(k.id), true, "geen tarief voor de trede " + k.label + " (" + k.id + ")");
+  }
+  // En de modellen die in /admin te kiezen zijn, langs dezelfde meetlat.
+  for (const id of ["claude-sonnet-5", "claude-opus-4-8", "claude-opus-5"]) {
+    assert.equal(modelPrijsBekend(kiesModel(id)), true, "geen tarief voor " + id);
+  }
+  assert.equal(modelPrijsBekend(kiesModel("verzonnen")), true, "de terugval zelf heeft ook een tarief nodig");
+});
+
+test("de klant ziet de naam van zijn trede, niet een technische modelnaam (AC-3)", () => {
+  // Wat de klant in zijn verbruikstabel ziet komt uit klantModelKeuzes(); die lijst
+  // wordt gekoppeld aan het model dat in de boeking staat. Nu dat altijd het
+  // AANGEVRAAGDE model is, valt er ook altijd een trede bij te vinden.
+  const label = (id) => (klantModelKeuzes().find((k) => k.id === id) || {}).label;
+  assert.equal(label(SONNET), "Standaard");
+  assert.equal(label("claude-opus-4-8"), "Beter");
+  assert.equal(label("claude-opus-5"), "Super");
+  for (const k of klantModelKeuzes()) {
+    assert.ok(k.label && !/claude|sonnet|opus/i.test(k.label), "technische naam in de Model-kolom: " + k.label);
+  }
+});
+
+test("klantRegel geeft de afwijking niet door aan de klant (NG-4)", () => {
+  // De klant hoeft dit niet te weten en er is niets misgegaan aan zijn kant; dit is
+  // een zaak voor /admin.
+  const uit = klantRegel({
+    tijd: 1, soort: "verbruik", agent: "gsc", model: SONNET,
+    gemeldModel: "claude-sonnet-5-20260114", tariefOnbekend: true,
+    invoer: 1, uitvoer: 1, credits: 2, saldoNa: 5,
+  });
+  assert.equal(uit.gemeldModel, undefined);
+  assert.equal(uit.tariefOnbekend, undefined);
+  assert.equal(uit.model, SONNET);
+});
+
+test("route /credits/boek legt de teruggemelde naam en het vangnet vast (AC-2/AC-5/AC-7)", async () => {
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 100, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  await doo.fetch(new Request("https://do/credits/boek", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "klant@voorbeeld.nl", agent: "gsc", model: SONNET,
+      gemeldModel: "claude-sonnet-5-20260114", tariefOnbekend: true,
+      invoer: 100, uitvoer: 10, credits: 7, maxRegels: 500, bewaardagen: 365,
+    }),
+  }));
+  const regel = [...opslag.data.values()].find((v) => v && v.soort === "verbruik");
+  assert.equal(regel.model, SONNET);
+  assert.equal(regel.gemeldModel, "claude-sonnet-5-20260114");
+  assert.equal(regel.tariefOnbekend, true);
+
+  // AC-7 - een boeking zonder die velden krijgt ze niet aangepraat: leeg en false,
+  // dus /admin ziet er niets bijzonders in.
+  const opslag2 = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 100, gemaakt: 1 } });
+  const doo2 = new CreditsDO({ storage: opslag2 });
+  await doo2.fetch(new Request("https://do/credits/boek", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "klant@voorbeeld.nl", agent: "gsc", model: SONNET,
+      invoer: 100, uitvoer: 10, credits: 7, maxRegels: 500, bewaardagen: 365,
+    }),
+  }));
+  const oud = [...opslag2.data.values()].find((v) => v && v.soort === "verbruik");
+  assert.equal(oud.gemeldModel, "");
+  assert.equal(oud.tariefOnbekend, false);
 });
