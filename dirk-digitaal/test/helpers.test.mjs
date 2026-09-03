@@ -95,6 +95,17 @@ import {
   bronTags,
   leesBeschrijving,
   bronnenPak,
+  schoonBedrijf,
+  bedrijfOntbreekt,
+  schoneKlantFactuur,
+  klantFactuurOntbreekt,
+  factuurNummerTekst,
+  maakFactuurGegevens,
+  centenTekst,
+  factuurDatumTekst,
+  factuurPdf,
+  pdfTekst,
+  betaalmethodeNaam,
   geldigeBronUrl,
   schoneBron,
   CreditsDO,
@@ -3170,4 +3181,298 @@ test("een elfde bron wordt geweigerd door de route zelf (AC-1)", async () => {
     assert.equal(JSON.parse(store["bronnen:anton"]).length, 10);
     assert.equal(nep.tel(), 0, "een geweigerde bron mag geen aanroep kosten");
   } finally { nep.herstel(); }
+});
+
+
+// -- DIR-95 - de factuur ----------------------------------------------------
+
+const KOPER = { naam: "Klant B.V.", adres: "Voorbeeldstraat 1", postcode: "1234 AB",
+  plaats: "Amsterdam", btw: "NL001234567B01" };
+
+test("de btw-berekening op de factuur (DIR-95)", () => {
+  // EUR 10 exclusief geeft EUR 2,10 btw en EUR 12,10 totaal - dezelfde som als bij het
+  // kopen, maar dan andersom uit wat er betaald is.
+  const f = maakFactuurGegevens({ nummer: "2026-0001", datum: 1, bedragCent: 1210, btwCent: 210,
+    credits: 1000, klant: KOPER });
+  assert.equal(f.exclCent, 1000);
+  assert.equal(f.btwCent, 210);
+  assert.equal(f.totaalCent, 1210);
+  assert.equal(f.btwPercentage, 21);
+  assert.equal(f.exclCent + f.btwCent, f.totaalCent, "de drie bedragen horen op te tellen");
+  // Credits horen bij het bedrag EXCLUSIEF btw; btw is geen tegoed.
+  assert.equal(f.credits, f.exclCent);
+});
+
+test("het factuurnummer loopt door en heeft een vaste vorm (AC-5)", () => {
+  assert.equal(factuurNummerTekst(2026, 1), "2026-0001");
+  assert.equal(factuurNummerTekst(2026, 2), "2026-0002");
+  assert.equal(factuurNummerTekst(2026, 10), "2026-0010");
+  assert.equal(factuurNummerTekst(2027, 1), "2027-0001", "een nieuw jaar begint opnieuw bij 1");
+  // Rommel levert nooit een leeg nummer op.
+  assert.equal(factuurNummerTekst(2026, 0), "2026-0001");
+  assert.equal(factuurNummerTekst(2026, null), "2026-0001");
+});
+
+test("ook de DATUM op de factuur volgt de Nederlandse tijd (AC-6)", () => {
+  // Dit hoort bij de vorige test en niet los ervan: het jaartal in het nummer en de
+  // datum op het document moeten uit dezelfde klok komen. Staat het nummer in het
+  // nieuwe jaar en de datum in het oude, dan spreekt de factuur zichzelf tegen en dat
+  // is lastiger uit te leggen dan een reeks die netjes in UTC liep.
+  const oudejaar = Date.UTC(2026, 11, 31, 23, 30);      // 1 januari 00:30 in Nederland
+  assert.equal(factuurDatumTekst(oudejaar), "1 januari 2027");
+  assert.equal(dagSleutel(oudejaar).slice(0, 4), "2027", "nummer en datum uit dezelfde klok");
+
+  // En het gaat niet alleen om oudejaarsnacht: tussen middernacht en twee uur staat de
+  // Nederlandse datum het hele jaar door een dag voor op UTC.
+  const zomernacht = Date.UTC(2026, 6, 15, 0, 30);      // 15 juli 02:30 in Nederland
+  assert.equal(new Date(zomernacht).getUTCDate(), 15);
+  assert.equal(factuurDatumTekst(zomernacht), "15 juli 2026");
+  const winternacht = Date.UTC(2026, 0, 14, 23, 30);    // 15 januari 00:30 in Nederland
+  assert.equal(new Date(winternacht).getUTCDate(), 14);
+  assert.equal(factuurDatumTekst(winternacht), "15 januari 2026");
+});
+
+test("het jaar in het nummer volgt de Nederlandse tijd, niet UTC (AC-5)", () => {
+  // 31 december 23:30 UTC is in Nederland al 1 januari. Zou het jaar uit UTC komen,
+  // dan kreeg de eerste factuur van het jaar het vorige jaartal - en dan loopt de
+  // reeks niet meer door.
+  const oudejaar = Date.UTC(2026, 11, 31, 23, 30);
+  assert.equal(new Date(oudejaar).getUTCFullYear(), 2026);
+  assert.equal(dagSleutel(oudejaar).slice(0, 4), "2027");
+});
+
+test("de bedrijfsgegevens hebben Dirks gegevens als standaard (AC-1)", () => {
+  const b = schoonBedrijf({});
+  assert.equal(b.naam, "Dirk Doet");
+  assert.equal(b.kvk, "60667729");
+  assert.equal(b.btw, "NL854007210B01");
+  assert.equal(b.postcode, "5302 XC");
+  assert.equal(b.iban, "", "de IBAN is nog niet aangeleverd en blijft leeg");
+  // Maar Dirk kan ze wijzigen, en dan wint zijn versie - ook een lege.
+  assert.equal(schoonBedrijf({ naam: "Iets Anders" }).naam, "Iets Anders");
+  assert.equal(schoonBedrijf({ kvk: "" }).kvk, "");
+});
+
+test("zonder de wettelijke velden is er geen geldige factuur (AC-2)", () => {
+  assert.deepEqual(bedrijfOntbreekt(schoonBedrijf({})), []);
+  assert.deepEqual(bedrijfOntbreekt(schoonBedrijf({ kvk: "" })), ["KVK-nummer"]);
+  assert.deepEqual(bedrijfOntbreekt({ naam: "", adres: "", postcode: "", plaats: "", kvk: "", btw: "" }),
+    ["bedrijfsnaam", "adres", "postcode", "plaats", "KVK-nummer", "btw-nummer"]);
+  // Telefoon, e-mail en IBAN zijn niet verplicht op een factuur die al voldaan is.
+  assert.deepEqual(bedrijfOntbreekt(schoonBedrijf({ telefoon: "", email: "", iban: "" })), []);
+});
+
+test("de klant moet naam en adres invullen, het btw-nummer is optioneel (AC-4)", () => {
+  assert.deepEqual(klantFactuurOntbreekt(KOPER), []);
+  assert.deepEqual(klantFactuurOntbreekt({ ...KOPER, btw: "" }), [], "btw mag leeg");
+  assert.deepEqual(klantFactuurOntbreekt({}), ["bedrijfsnaam", "adres", "postcode", "plaats"]);
+  assert.deepEqual(klantFactuurOntbreekt(null), ["bedrijfsnaam", "adres", "postcode", "plaats"]);
+  assert.deepEqual(klantFactuurOntbreekt({ ...KOPER, plaats: "   " }), ["plaats"], "spaties tellen niet");
+});
+
+test("een factuur draagt zijn eigen kopie van beide partijen (AC-9)", () => {
+  const bedrijf = schoonBedrijf({ btw: "NL111111111B01" });
+  const f = maakFactuurGegevens({ nummer: "2026-0001", datum: 1, bedragCent: 1210, btwCent: 210,
+    credits: 1000, bedrijf, klant: KOPER });
+  // Wijzigt de bron daarna, dan verandert de factuur niet mee: hij heeft een kopie.
+  bedrijf.btw = "NL999999999B01";
+  KOPER.adres = "Andere straat 9";
+  assert.equal(f.verkoper.btw, "NL111111111B01");
+  assert.equal(f.koper.adres, "Voorbeeldstraat 1");
+  KOPER.adres = "Voorbeeldstraat 1";           // netjes terugzetten voor de andere tests
+});
+
+test("bedragen en datums in Nederlandse vorm", () => {
+  assert.equal(centenTekst(1210), "12,10");
+  assert.equal(centenTekst(123456), "1.234,56");
+  assert.equal(centenTekst(5), "0,05");
+  assert.equal(centenTekst(0), "0,00");
+  assert.equal(centenTekst(100000000), "1.000.000,00");
+  assert.equal(factuurDatumTekst(Date.UTC(2026, 8, 3)), "3 september 2026");
+  assert.equal(factuurDatumTekst(Date.UTC(2026, 0, 1)), "1 januari 2026");
+});
+
+test("de PDF is een echt bestand met alle wettelijke velden erin (AC-6)", () => {
+  const f = maakFactuurGegevens({
+    nummer: "2026-0007", datum: Date.UTC(2026, 8, 3), betaaldatum: Date.UTC(2026, 8, 3),
+    email: "koper@voorbeeld.nl", betaalId: "tr_abc", methode: "ideal",
+    bedragCent: 1210, btwCent: 210, credits: 1000, klant: KOPER,
+  });
+  const pdf = factuurPdf(f);
+  assert.ok(pdf instanceof Uint8Array);
+  const tekst = Buffer.from(pdf).toString("latin1");
+  assert.match(tekst, /^%PDF-1\.4/);
+  assert.match(tekst, /%%EOF/);
+
+  // De wettelijke velden, stuk voor stuk.
+  for (const nodig of ["2026-0007", "3 september 2026", "Dirk Doet", "Wichard van Pontlaan 86",
+    "5302 XC", "Zaltbommel", "60667729", "NL854007210B01", "Klant B.V.", "Voorbeeldstraat 1",
+    "1234 AB", "Amsterdam", "NL001234567B01", "Credits Dirk Digitaal", "12,10", "10,00", "2,10",
+    "Btw 21%", "Voldaan op", "Totaal"]) {
+    assert.ok(tekst.includes(nodig), "ontbreekt op de factuur: " + nodig);
+  }
+
+  // En de verwijzingstabel moet naar de echte objecten wijzen, anders opent geen enkele
+  // lezer het bestand.
+  const start = Number(tekst.slice(tekst.lastIndexOf("startxref") + 9).trim().split("\n")[0]);
+  const regels = tekst.slice(start).split("\n");
+  for (let n = 1; n <= 6; n++) {
+    const m = regels[2 + n].match(/^([0-9]{10}) 00000 n/);
+    assert.ok(m, "geen verwijzing voor object " + n);
+    assert.ok(tekst.slice(Number(m[1])).startsWith(n + " 0 obj"), "object " + n + " wijst verkeerd");
+  }
+});
+
+test("tekst in de PDF wordt ontsnapt en omgezet (AC-6)", () => {
+  // Haakjes en de backslash sturen de PDF-syntaxis aan; niet ontsnappen betekent een
+  // stukgelopen bestand bij een bedrijfsnaam als "Doe & Zn (Holding)".
+  assert.equal(pdfTekst("Doe (Holding)"), "Doe \\(Holding\\)");
+  assert.equal(pdfTekst("pad\\naar"), "pad\\\\naar");
+  // Accenten gaan als WinAnsi mee; het euroteken heeft daar een eigen plek.
+  assert.equal(pdfTekst("\u00e9"), String.fromCharCode(0xe9));
+  assert.equal(pdfTekst("\u20ac"), String.fromCharCode(0x80));
+  // Iets wat er niet in past wordt een vraagteken en niet een stukgelopen bestand.
+  assert.equal(pdfTekst("\u4e2d"), "?");
+  assert.equal(pdfTekst(null), "");
+});
+
+
+// -- DIR-95 - het nummer valt in de Durable Object --------------------------
+
+const BEDRIJF = { naam: "Dirk Doet", adres: "Wichard van Pontlaan 86", postcode: "5302 XC",
+  plaats: "Zaltbommel", kvk: "60667729", btw: "NL854007210B01" };
+
+function betaling(nr, extra) {
+  return Object.assign({
+    email: "klant@voorbeeld.nl", betaalId: "tr_" + nr, status: "paid",
+    bedragCent: 1210, btwCent: 210, credits: 1000, methode: "ideal",
+    bedrijf: BEDRIJF, klant: KOPER, maxRegels: 500, bewaardagen: 365,
+  }, extra || {});
+}
+async function boek(doo, inv) {
+  const r = await doo.fetch(new Request("https://do/credits/betaling", {
+    method: "POST", body: JSON.stringify(inv),
+  }));
+  return r.json();
+}
+
+test("opeenvolgende facturen krijgen opeenvolgende nummers (AC-5)", async () => {
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 0, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  const jaar = new Date().getFullYear();
+
+  const een = await boek(doo, betaling(1));
+  const twee = await boek(doo, betaling(2));
+  const drie = await boek(doo, betaling(3));
+  assert.equal(een.factuur.nummer, jaar + "-0001");
+  assert.equal(twee.factuur.nummer, jaar + "-0002");
+  assert.equal(drie.factuur.nummer, jaar + "-0003");
+
+  // Elke factuur staat als eigen regel in de opslag, buiten het grootboek om, zodat
+  // het snoeien van grootboekregels er niet bij kan.
+  assert.ok(opslag.data.get("f:" + jaar + "-0002"));
+  assert.ok(opslag.data.get("fi:klant@voorbeeld.nl:" + jaar + "-0002"));
+});
+
+test("een mislukte betaling laat geen gat in de nummering (AC-5)", async () => {
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 0, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  const jaar = new Date().getFullYear();
+
+  const een = await boek(doo, betaling(1));
+  assert.equal(een.factuur.nummer, jaar + "-0001");
+
+  // Alles wat niet leidt tot een boeking mag geen nummer opbranden.
+  for (const status of ["open", "canceled", "expired", "failed", "pending"]) {
+    const uit = await boek(doo, betaling("mis-" + status, { status }));
+    assert.equal(uit.factuur, null, "status " + status + " kreeg toch een factuur");
+  }
+  // Ook een tweede melding van een al geboekte betaling niet.
+  const nogmaals = await boek(doo, betaling(1));
+  assert.equal(nogmaals.factuur, null);
+  // En een betaling zonder adres evenmin: die kan niet geboekt worden.
+  const zonderAdres = await boek(doo, betaling("geen-adres", { email: "" }));
+  assert.equal(zonderAdres.factuur, null);
+
+  // De volgende echte betaling krijgt dus 0002 en niet 0007.
+  const twee = await boek(doo, betaling(2));
+  assert.equal(twee.factuur.nummer, jaar + "-0002");
+});
+
+test("de factuur hangt niet aan het grootboek en wordt niet gesnoeid (AC-9)", async () => {
+  // Grootboekregels worden gesnoeid op maxRegels en bewaardagen; een factuur moet
+  // zeven jaar bewaard blijven. Daarom staat hij in een eigen sleutel.
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 0, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  const jaar = new Date().getFullYear();
+  await boek(doo, betaling(1, { maxRegels: 50, bewaardagen: 30 }));
+  const nummer = jaar + "-0001";
+  assert.ok(opslag.data.get("f:" + nummer), "de factuur hoort een eigen sleutel te hebben");
+  // Het snoeien raakt alleen de index en de regels van het grootboek.
+  const geschreven = opslag.geschreven.filter((k) => k.startsWith("f:") || k.startsWith("fi:"));
+  assert.equal(geschreven.length, 2, "verwacht een factuur en een verwijzing: " + geschreven.join(", "));
+});
+
+test("wijzigen van klantgegevens verandert een bestaande factuur niet (AC-9)", async () => {
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 0, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  const jaar = new Date().getFullYear();
+
+  await boek(doo, betaling(1, { klant: { ...KOPER, adres: "Oude straat 1" } }));
+  const eerste = opslag.data.get("f:" + jaar + "-0001");
+  assert.equal(eerste.koper.adres, "Oude straat 1");
+
+  // De klant verhuist en koopt opnieuw.
+  await doo.fetch(new Request("https://do/credits/factuurgegevens", {
+    method: "POST",
+    body: JSON.stringify({ email: "klant@voorbeeld.nl", gegevens: { ...KOPER, adres: "Nieuwe straat 9" } }),
+  }));
+  await boek(doo, betaling(2, { klant: { ...KOPER, adres: "Nieuwe straat 9" } }));
+
+  assert.equal(opslag.data.get("f:" + jaar + "-0001").koper.adres, "Oude straat 1",
+    "de oude factuur is meeveranderd");
+  assert.equal(opslag.data.get("f:" + jaar + "-0002").koper.adres, "Nieuwe straat 9");
+});
+
+test("de factuurgegevens van de klant worden bewaard en teruggegeven (AC-3)", async () => {
+  const opslag = nepDoOpslag({});
+  const doo = new CreditsDO({ storage: opslag });
+  const zet = (gegevens) => doo.fetch(new Request("https://do/credits/factuurgegevens", {
+    method: "POST", body: JSON.stringify({ email: "klant@voorbeeld.nl", startsaldo: 200, gegevens }),
+  }));
+
+  const leeg = await (await zet(null)).json();
+  assert.deepEqual(klantFactuurOntbreekt(leeg.gegevens), ["bedrijfsnaam", "adres", "postcode", "plaats"]);
+  assert.equal(leeg.saldo, 200, "wie nog geen record had, krijgt het startsaldo");
+
+  const na = await (await zet(KOPER)).json();
+  assert.equal(na.gegevens.naam, "Klant B.V.");
+  assert.deepEqual(klantFactuurOntbreekt(na.gegevens), []);
+  // En het saldo is er niet door veranderd.
+  assert.equal(opslag.data.get("s:klant@voorbeeld.nl").saldo, 200);
+});
+
+
+test("de betaalmethode staat op de factuur zoals mensen hem kennen", () => {
+  // Mollie geeft codes terug; "Voldaan via ideal" leest als een tikfout op een
+  // document dat de belastingdienst onder ogen krijgt.
+  assert.equal(betaalmethodeNaam("ideal"), "iDEAL");
+  assert.equal(betaalmethodeNaam("IDEAL"), "iDEAL");
+  assert.equal(betaalmethodeNaam("paypal"), "PayPal");
+  assert.equal(betaalmethodeNaam("banktransfer"), "bankoverschrijving");
+  // Een methode die we niet kennen blijft staan zoals hij is, MET zijn eigen
+  // hoofdletters. Kleingeschreven teruggeven zou "Riverty" tot "riverty" maken op een
+  // document dat na het uitgeven niet meer te wijzigen is.
+  assert.equal(betaalmethodeNaam("iets_nieuws"), "iets_nieuws");
+  assert.equal(betaalmethodeNaam("Riverty"), "Riverty");
+  assert.equal(betaalmethodeNaam("Trustly"), "Trustly");
+  assert.equal(betaalmethodeNaam("  Riverty  "), "Riverty", "alleen de spaties eromheen gaan weg");
+  assert.equal(betaalmethodeNaam(""), "");
+  assert.equal(betaalmethodeNaam(null), "");
+
+  const f = maakFactuurGegevens({ nummer: "2026-0001", datum: 1, bedragCent: 1210,
+    btwCent: 210, credits: 1000, methode: "ideal", klant: KOPER });
+  const tekst = Buffer.from(factuurPdf(f)).toString("latin1");
+  assert.match(tekst, /via iDEAL/);
+  assert.doesNotMatch(tekst, /via ideal/);
 });
