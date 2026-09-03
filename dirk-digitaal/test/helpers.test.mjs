@@ -143,6 +143,7 @@ import {
   snoeiGebruik,
   telOnbekendVandaag,
   heeftVerbruik,
+  kostenVoorbeeld,
   onboardingDoel,
   sorteerGebruik,
   gebeurtenisTekst,
@@ -2508,14 +2509,18 @@ function nepDoOpslag(begin) {
     async get(k) { return data.has(k) ? data.get(k) : undefined; },
     async put(k, v) { geschreven.push(k); data.set(k, v); },
     async delete(k) { data.delete(k); },
-    // prefix, end en limit doen er allemaal toe: het snoeien in CreditsDO begrenst
-    // zijn list() met `end` en `limit`, en een nabootsing die dat negeert wist regels
-    // die de echte opslag laat staan.
+    // prefix, start, end, limit EN reverse doen er allemaal toe: het snoeien
+    // begrenst zijn list() met `end` en `limit`, en klantHeeftVerbruik (DIR-97)
+    // leunt op `reverse` om nieuwste-eerst te bladeren. Een nabootsing die reverse
+    // negeert zei "geen verbruik" tegen een klant met 120 regels waarvan alleen
+    // nummer 110 verbruik was, terwijl de echte opslag hem meteen vond.
     async list(opties) {
       const o = opties || {};
       const prefix = o.prefix || "";
+      const sleutels = [...data.keys()].sort();
+      if (o.reverse) sleutels.reverse();
       const uit = new Map();
-      for (const k of [...data.keys()].sort()) {
+      for (const k of sleutels) {
         if (!k.startsWith(prefix)) continue;
         if (o.start && k < o.start) continue;
         if (o.end && k >= o.end) continue;            // `end` is exclusief
@@ -4133,6 +4138,24 @@ test("de inlogroute krijgt de stand mee, en alleen als hij erom vraagt", async (
   assert.equal(daarna.saldo, 197, "en het startsaldo wordt niet opnieuw uitgedeeld");
 });
 
+test("verbruik diep in een lange historie wordt gevonden (should-fix 1)", async () => {
+  // De meting van de reviewer: 120 regels, alleen nummer 110 is verbruik. Met een
+  // dubbel dat reverse negeerde zei de test "geen verbruik" terwijl de echte opslag
+  // hem vond; nu bladert het dubbel net als de echte opslag nieuwste-eerst.
+  const begin = { "s:diep@voorbeeld.nl": { saldo: 100, gemaakt: 1 } };
+  for (let i = 0; i < 120; i++) {
+    const soort = i === 109 ? "verbruik" : "aankoop";
+    const sleutel = boekSleutel(1000000 + i * 1000, "r" + i);
+    begin[sleutel] = { tijd: 1000000 + i * 1000, soort, email: "diep@voorbeeld.nl", credits: 1 };
+    begin[boekIndexSleutel("diep@voorbeeld.nl", 1000000 + i * 1000, "r" + i)] = sleutel;
+  }
+  const doo = new CreditsDO({ storage: nepDoOpslag(begin) });
+  const uit = await doo.fetch(new Request("https://do/credits/start", {
+    method: "POST", body: JSON.stringify({ email: "diep@voorbeeld.nl", startsaldo: 200, metStand: true }),
+  })).then((r) => r.json());
+  assert.equal(uit.nieuw, false, "regel 110 van 120 is verbruik en moet gevonden worden");
+});
+
 test("het dashboard weet of het welkomstblok moet staan (AC-5)", async () => {
   const opslag = nepDoOpslag({ "s:k@voorbeeld.nl": { saldo: 200, gemaakt: 1 } });
   const doo = new CreditsDO({ storage: opslag });
@@ -4148,6 +4171,19 @@ test("het dashboard weet of het welkomstblok moet staan (AC-5)", async () => {
     }),
   }));
   assert.equal((await klant()).nieuw, false);
+});
+
+test("het kostenbereik beweegt mee met koers en marge (should-fix 2)", () => {
+  // De zin op het scherm komt uit kostenVoorbeeld met de instellingen van dat
+  // moment. Bij de standaardinstellingen is dat "2 tot 5"; gaat de marge omhoog,
+  // dan gaan de getallen mee in plaats van dat het blok stil gaat liegen.
+  const std = schoneCreditsConfig({});
+  const gewoon = kostenVoorbeeld(std.koers, std.marge);
+  assert.equal(gewoon.laag, 2);
+  assert.equal(gewoon.hoog, 5);
+  const duurder = kostenVoorbeeld(std.koers, 4);
+  assert.ok(duurder.hoog > gewoon.hoog, "marge 4 hoort meer te kosten: " + duurder.hoog);
+  assert.ok(duurder.laag >= gewoon.laag);
 });
 
 test("de kostenzin in het welkomstblok klopt met de prijstabel (AC-3)", () => {

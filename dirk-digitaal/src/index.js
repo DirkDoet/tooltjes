@@ -4220,6 +4220,18 @@ function creditsStub(env) {
   return env.CREDITS.get(env.CREDITS.idFromName("credits:hoofdboek"));
 }
 
+// DIR-97 AC-3 (should-fix) - het kostenvoorbeeld in het welkomstblok rekent met de
+// ECHTE koers en marge, want die zet Dirk om zonder deploy; een vast "2 tot 5" zou
+// dan stil gaan liegen zodra de marge omhoog gaat. De twee profielen zijn de
+// definitie van "een gewone vraag": kort 3.000 tokens in / 400 uit, flink 8.000 in
+// / 800 uit, op het standaardmodel.
+export function kostenVoorbeeld(koers, marge) {
+  return {
+    laag: kostenNaarCredits(tokenKosten(ANTHROPIC_MODEL, { input_tokens: 3000, output_tokens: 400 }), koers, marge),
+    hoog: kostenNaarCredits(tokenKosten(ANTHROPIC_MODEL, { input_tokens: 8000, output_tokens: 800 }), koers, marge),
+  };
+}
+
 // DIR-97 - waar hoort iemand na het inloggen terecht te komen? Nieuw (nog nooit
 // iets gevraagd) of een leeg saldo: het dashboard, met de uitleg respectievelijk de
 // koopknop (AC-1, AC-7). Anders het kantoor, zoals altijd (AC-6). Een onbekend
@@ -6607,7 +6619,13 @@ const OFFICE_HTML = `<!doctype html>
     for(var i=0;i<dashKeuzes.length;i++) if(dashKeuzes[i].id===id) return dashKeuzes[i].label;
     return id||'';
   }
-  function dashDicht(){ dashOverlay.style.display='none'; }
+  function dashDicht(){
+    dashOverlay.style.display='none';
+    // DIR-97 should-fix - ELKE sluitweg zet de URL terug, ook de X en een klik
+    // naast het paneel. Anders bleef /dashboard staan en zette elke verversing de
+    // klant terug in het paneel - juist die met saldo nul, die geen knop heeft.
+    if(location.pathname!=='/') history.replaceState(null,'','/');
+  }
   function dashOpen(){
     dashOverlay.style.display='flex';
     dashCursor='';
@@ -6633,17 +6651,20 @@ const OFFICE_HTML = `<!doctype html>
   // DIR-97 AC-2/AC-3 - maximaal vijf zinnen, jij-vorm. Het startsaldo-getal komt
   // uit de instelling; de kostenzin is met een test aan de prijstabel geklonken,
   // zodat hij omvalt als de tarieven veranderen.
-  function dashWelkomTekst(startsaldo){
+  function dashWelkomTekst(startsaldo, kosten){
+    // Het bereik komt van de server, gerekend met de koers en marge van dit moment;
+    // de getallen hieronder zijn alleen de terugval als het veld ontbreekt.
+    var laag=(kosten&&kosten.laag)||2, hoog=(kosten&&kosten.hoog)||5;
     return 'Dirk Digitaal is het online kantoor van Dirk Doet. '
       + 'Je praat er met vier AI-collega\u2019s over je eigen cijfers: vindbaarheid, bezoekers, advertenties en teksten. '
       + 'Je hebt '+startsaldo+' gratis credits gekregen, en 1 credit is een cent. '
-      + 'Elke vraag kost er een paar: een gewone vraag zo\u2019n 2 tot 5 credits. '
+      + 'Elke vraag kost er een paar: een gewone vraag zo\u2019n '+laag+' tot '+hoog+' credits. '
       + 'Genoeg om rustig uit te proberen dus \u2014 en bijkopen kan hieronder.';
   }
   function dashWelkomTonen(j){
     var blok=document.getElementById('dash-welkom'), hoe=document.getElementById('dash-hoe');
     if(!blok) return;
-    document.getElementById('dash-welkom-tekst').textContent=dashWelkomTekst(j.startsaldo||0);
+    document.getElementById('dash-welkom-tekst').textContent=dashWelkomTekst(j.startsaldo||0, j.kosten);
     var nieuw = j.nieuw===true;
     // LET OP: .verborgen werkt alleen onder .zijmenu; hier is .dash-uit de
     // verbergklasse (zie de CSS-comment erbij).
@@ -6957,16 +6978,12 @@ const OFFICE_HTML = `<!doctype html>
         melding.textContent='We konden de betaling even niet opzoeken. Ververs de pagina zo nog eens.';
       });
   }
-  // DIR-97 AC-4 - naar het kantoor: het paneel dicht en de URL terug naar de
-  // kantoorpagina. Het kantoor stond er al die tijd al achter (NG-3).
-  function dashNaarKantoor(){
-    dashDicht();
-    if(location.pathname!=='/') history.replaceState(null,'','/');
-  }
+  // DIR-97 AC-4 - naar het kantoor: gewoon het paneel dicht; dashDicht zet zelf de
+  // URL terug, langs elke sluitweg. Het kantoor stond er al die tijd al achter (NG-3).
   var dashKantoorKnop=document.getElementById('dash-kantoor');
-  if(dashKantoorKnop) dashKantoorKnop.addEventListener('click',dashNaarKantoor);
+  if(dashKantoorKnop) dashKantoorKnop.addEventListener('click',dashDicht);
   var dashVerderKnop=document.getElementById('dash-verder');
-  if(dashVerderKnop) dashVerderKnop.addEventListener('click',dashNaarKantoor);
+  if(dashVerderKnop) dashVerderKnop.addEventListener('click',dashDicht);
   // AC-5 - de uitleg blijft bereikbaar: het linkje klapt het blok gewoon weer open.
   var dashHoeKnop=document.getElementById('dash-hoe');
   if(dashHoeKnop) dashHoeKnop.addEventListener('click',function(){
@@ -9800,8 +9817,10 @@ export default {
           factuurGegevens: schoneKlantFactuur(j.factuur),
           // DIR-109 AC-5 - wanneer vervalt het eerstvolgende deel, en hoeveel.
           verval: j.verval || null,
-          // DIR-97 - stuurt het welkomstblok aan.
+          // DIR-97 - stuurt het welkomstblok aan; het kostenbereik rekent met de
+          // instellingen van dit moment.
           nieuw: j.nieuw === true,
+          kosten: kostenVoorbeeld(cfg.koers, cfg.marge),
         });
       } catch (e) {
         return json({ error: "Kon je gegevens niet laden. Probeer het zo opnieuw." }, 502);
