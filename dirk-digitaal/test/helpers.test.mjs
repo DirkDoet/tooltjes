@@ -141,6 +141,11 @@ import {
   magLoggen,
   snoeiGebruik,
   telOnbekendVandaag,
+  sorteerGebruik,
+  gebeurtenisTekst,
+  gebruikTijdTekst,
+  csvVeld,
+  gebruikCsvTekst,
   dagSleutel,
   gebruikerSleutel,
   geldigSessieId,
@@ -3611,4 +3616,78 @@ test("soort blijft de oude betekenis houden", () => {
   assert.equal(toegangAntwoord(false, true, "x", 1).soort, "klant");
   assert.equal(toegangAntwoord(true, false, "", null).soort, "admin");
   assert.equal(toegangAntwoord(false, false, "", null).soort, null);
+});
+
+// -- DIR-98 - de gebruikstabel en de CSV -------------------------------------
+
+const GEBRUIK = [
+  { tijd: 3000, wat: "agent", agent: "gsc", naam: "Bakker B.V.", email: "b@bakker.nl" },
+  { tijd: 1000, wat: "login", naam: "Aalbers", email: "a@aalbers.nl" },
+  { tijd: 4000, wat: "onbekend", naam: "", email: "" },
+  { tijd: 2000, wat: "agent", agent: "anton", naam: "Cats & Zn; \"de echte\"", email: "c@cats.nl" },
+];
+
+test("standaard staat de nieuwste bovenaan, en op naam sorteren draait om (AC-3)", () => {
+  const standaard = sorteerGebruik(GEBRUIK, "", "");
+  assert.deepEqual(standaard.map((r) => r.tijd), [4000, 3000, 2000, 1000]);
+
+  const opNaam = sorteerGebruik(GEBRUIK, "naam", "op");
+  assert.deepEqual(opNaam.map((r) => r.naam),
+    ["", "Aalbers", "Bakker B.V.", "Cats & Zn; \"de echte\""]);
+  const neerNaam = sorteerGebruik(GEBRUIK, "naam", "neer");
+  assert.deepEqual(neerNaam.map((r) => r.naam), opNaam.map((r) => r.naam).slice().reverse());
+
+  // Een onzin-kolom valt terug op de datumkolom in plaats van te ontsporen; de
+  // richting blijft gewoon werken.
+  assert.deepEqual(sorteerGebruik(GEBRUIK, "hack", "").map((r) => r.tijd), [4000, 3000, 2000, 1000]);
+  assert.deepEqual(sorteerGebruik(GEBRUIK, "hack", "op").map((r) => r.tijd), [1000, 2000, 3000, 4000]);
+  // En het origineel blijft ongemoeid: sorteren geeft een kopie terug.
+  assert.equal(GEBRUIK[0].tijd, 3000);
+});
+
+test("op de kolom Gedaan sorteert de leesbare tekst, niet de interne code", () => {
+  // "agent" komt intern voor "login", maar op het scherm staat "opende ..." na
+  // "ingelogd"; wie op die kolom klikt moet krijgen wat hij ziet.
+  const uit = sorteerGebruik(GEBRUIK, "wat", "op").map(gebeurtenisTekst);
+  assert.deepEqual(uit, uit.slice().sort((a, b) => a.localeCompare(b, "nl")));
+  assert.equal(gebeurtenisTekst({ wat: "login" }), "ingelogd");
+  assert.equal(gebeurtenisTekst({ wat: "agent", agent: "gsc" }), "opende Albert (GSC)");
+  assert.equal(gebeurtenisTekst({ wat: "agent", agent: "straks-nieuw" }), "opende straks-nieuw");
+  assert.equal(gebeurtenisTekst({ wat: "onbekend" }), "inlogpoging geweigerd");
+});
+
+test("een veld met een puntkomma of aanhalingsteken wordt aangehaald (AC-6)", () => {
+  assert.equal(csvVeld("gewoon"), "gewoon");
+  assert.equal(csvVeld("a;b"), '"a;b"');
+  assert.equal(csvVeld('zeg "ha"'), '"zeg ""ha"""');
+  assert.equal(csvVeld("twee\nregels"), '"twee\nregels"');
+  assert.equal(csvVeld(null), "");
+  assert.equal(csvVeld(undefined), "");
+});
+
+test("de CSV: BOM, puntkomma, koppen, en de volgorde van het scherm (AC-5/AC-6)", () => {
+  const gesorteerd = sorteerGebruik(GEBRUIK, "naam", "op");
+  const csv = gebruikCsvTekst(gesorteerd);
+
+  // UTF-8 met BOM, anders leest de Nederlandse Excel de accenten stuk.
+  assert.equal(csv.charCodeAt(0), 0xfeff);
+  const regels = csv.slice(1).split("\r\n").filter((r) => r !== "");
+  assert.equal(regels[0], "Datum en tijd;Naam;E-mailadres;Gedaan");
+  assert.equal(regels.length, 1 + gesorteerd.length);
+
+  // AC-5 - de rijen staan in exact de volgorde die de sortering gaf. De naam met de
+  // puntkomma erin blijft daarbij een veld, geen twee.
+  assert.match(regels[1], /;;inlogpoging geweigerd$/);
+  assert.match(regels[2], /;Aalbers;a@aalbers.nl;ingelogd$/);
+  assert.match(regels[3], /;Bakker B.V.;b@bakker.nl;opende Albert \(GSC\)$/);
+  assert.match(regels[4], /;"Cats & Zn; ""de echte""";c@cats.nl;opende Anton \(content\)$/);
+});
+
+test("de datum in de CSV is tekst in de tijdzone van de zaak", () => {
+  // Zelfde afspraak als het factuurnummer (DIR-95): Amsterdam, niet UTC. Even voor
+  // middernacht op oudjaar hoort er 31-12 te staan, niet 01-01.
+  assert.equal(gebruikTijdTekst(Date.UTC(2026, 11, 31, 22, 59)), "31-12-2026 23:59");
+  assert.equal(gebruikTijdTekst(Date.UTC(2026, 11, 31, 23, 1)), "01-01-2027 00:01");
+  // In juli loopt Amsterdam twee uur voor.
+  assert.equal(gebruikTijdTekst(Date.UTC(2026, 6, 1, 12, 0)), "01-07-2026 14:00");
 });
