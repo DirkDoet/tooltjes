@@ -1380,6 +1380,268 @@ const CACHE_SCHRIJF_FACTOR = 1.25;
 const PRIJS_ONBEKEND = { invoer: 5, uitvoer: 25 };
 
 // ============================================================================
+// DIR-95 - DE FACTUUR
+// ============================================================================
+// Een zakelijke klant kan een betaalbevestiging van Mollie niet aftrekken; daar is
+// een factuur voor nodig die aan de Nederlandse eisen voldoet.
+//
+// Twee dingen liggen hier vast, en die zijn met opzet zo:
+//
+// 1. Het factuurnummer wordt uitgegeven in de Durable Object, op het moment dat de
+//    betaling wordt geboekt. Dat is de enige plek waar twee gelijktijdige betalingen
+//    elkaar niet in de weg zitten. En omdat het nummer pas valt als er werkelijk
+//    geboekt wordt, laat een mislukte of geannuleerde betaling geen gat achter in de
+//    reeks - en dat is precies wat "doorlopend zonder gaten" betekent.
+// 2. De factuur wordt bij het boeken VASTGELEGD, niet bij het downloaden opgebouwd.
+//    Wijzigt Dirk later zijn adres, of de klant het zijne, dan verandert een oude
+//    factuur daar niet in mee (AC-9). Een factuur is een vastgelegd feit, geen
+//    weergave van de huidige stand.
+
+const BEDRIJF_KV_SLEUTEL = "config:bedrijf";
+
+// De gegevens van Dirk, zoals hij ze op 1 september 2026 aanleverde. Ze staan hier
+// als STANDAARD en niet als vaste waarde: Dirk kan ze in /admin wijzigen zonder
+// deploy (AC-1), en dan komt zijn versie in KV te staan.
+const BEDRIJF_STANDAARD = {
+  naam: "Dirk Doet",
+  adres: "Wichard van Pontlaan 86",
+  postcode: "5302 XC",
+  plaats: "Zaltbommel",
+  kvk: "60667729",
+  btw: "NL854007210B01",
+  telefoon: "0418 84 11 27",
+  email: "info@dirkdoet.nl",
+  iban: "",                    // nog niet aangeleverd; op een voldane factuur niet verplicht
+};
+
+async function bedrijfGegevens(env) {
+  try {
+    if (env.CLIENTS) {
+      const raw = await env.CLIENTS.get(BEDRIJF_KV_SLEUTEL);
+      if (raw) return schoonBedrijf(JSON.parse(raw));
+    }
+  } catch (e) { /* KV onbereikbaar of stukke JSON -> de standaardgegevens */ }
+  return schoonBedrijf({});
+}
+
+export function schoonBedrijf(ruw) {
+  const r = ruw || {};
+  const veld = (naam, max) => {
+    const waarde = r[naam] !== undefined ? r[naam] : BEDRIJF_STANDAARD[naam];
+    return String(waarde == null ? "" : waarde).trim().slice(0, max || 120);
+  };
+  return {
+    naam: veld("naam"), adres: veld("adres"),
+    postcode: veld("postcode", 12), plaats: veld("plaats", 60),
+    kvk: veld("kvk", 20), btw: veld("btw", 20),
+    telefoon: veld("telefoon", 30), email: veld("email"), iban: veld("iban", 40),
+  };
+}
+
+// AC-2 - wat er minimaal moet staan om een geldige factuur te kunnen maken. De IBAN,
+// het telefoonnummer en het e-mailadres horen daar niet bij: die zijn niet wettelijk
+// verplicht op een factuur die al voldaan is.
+export function bedrijfOntbreekt(bedrijf) {
+  const b = bedrijf || {};
+  const nodig = [["naam", "bedrijfsnaam"], ["adres", "adres"], ["postcode", "postcode"],
+    ["plaats", "plaats"], ["kvk", "KVK-nummer"], ["btw", "btw-nummer"]];
+  return nodig.filter((paar) => !String(b[paar[0]] || "").trim()).map((paar) => paar[1]);
+}
+
+// AC-3/AC-4 - de gegevens van de klant. Het btw-nummer is optioneel; de rest niet,
+// want zonder naam en adres van de afnemer is de factuur ongeldig.
+export function schoneKlantFactuur(ruw) {
+  const r = ruw || {};
+  const tekst = (v, max) => String(v == null ? "" : v).trim().slice(0, max || 120);
+  return {
+    naam: tekst(r.naam), adres: tekst(r.adres),
+    postcode: tekst(r.postcode, 12), plaats: tekst(r.plaats, 60), btw: tekst(r.btw, 20),
+  };
+}
+
+export function klantFactuurOntbreekt(klant) {
+  const k = klant || {};
+  const nodig = [["naam", "bedrijfsnaam"], ["adres", "adres"],
+    ["postcode", "postcode"], ["plaats", "plaats"]];
+  return nodig.filter((paar) => !String(k[paar[0]] || "").trim()).map((paar) => paar[1]);
+}
+
+// Het nummer: per jaar doorlopend, met vier cijfers. 2026-0001, 2026-0002, ...
+export function factuurNummerTekst(jaar, volgnummer) {
+  const n = Math.max(1, Math.round(Number(volgnummer) || 1));
+  return String(jaar) + "-" + String(n).padStart(4, "0");
+}
+
+// AC-10 - HIER worden de gegevens van de factuur samengesteld, en nergens anders.
+// Komt er ooit een koppeling met SnelStart, dan is dit de functie die vervangen wordt
+// door "vraag SnelStart om een factuur". De rest van de tool merkt daar niets van,
+// want alles hierna werkt met de UITKOMST en niet met de bron.
+//
+// Alles wat de factuur nodig heeft wordt hier overgenomen en niet opgezocht: een
+// factuur die zijn gegevens pas bij het tonen ophaalt, verandert mee met de
+// instellingen, en dat mag niet (AC-9).
+export function maakFactuurGegevens(inv) {
+  const i = inv || {};
+  const bedragCent = Math.max(0, Math.round(Number(i.bedragCent) || 0));
+  const btwCent = Math.max(0, Math.round(Number(i.btwCent) || 0));
+  const datum = Math.max(0, Math.round(Number(i.datum) || 0));
+  return {
+    nummer: String(i.nummer || ""),
+    datum,
+    betaaldatum: Math.max(0, Math.round(Number(i.betaaldatum) || datum)),
+    email: normaliseerEmail(i.email),
+    betaalId: String(i.betaalId || ""),
+    methode: String(i.methode || ""),
+    // Beide partijen, zoals ze op DIT moment zijn.
+    verkoper: schoonBedrijf(i.bedrijf),
+    koper: schoneKlantFactuur(i.klant),
+    // De bedragen. Btw is geen tegoed, dus wat de klant aan credits krijgt en wat hij
+    // betaalt zijn met opzet twee verschillende getallen.
+    omschrijving: "Credits Dirk Digitaal",
+    credits: Math.max(0, Math.round(Number(i.credits) || 0)),
+    exclCent: Math.max(0, bedragCent - btwCent),
+    btwPercentage: BTW_PERCENT,
+    btwCent,
+    totaalCent: bedragCent,
+    voldaan: true,
+  };
+}
+
+// Een bedrag in centen als "1.234,56". Zonder muntteken; dat zet de opmaak erbij.
+export function centenTekst(centen) {
+  const c = Math.max(0, Math.round(Number(centen) || 0));
+  const heel = String(Math.floor(c / 100)).replace(/(?=(?:[0-9]{3})+$)(?!^)/g, ".");
+  return heel + "," + String(c % 100).padStart(2, "0");
+}
+
+// Een tijdstip als "3 september 2026". Vaste vorm, want dit staat op een document dat
+// zeven jaar bewaard moet blijven.
+const FACTUUR_MAANDEN = ["januari", "februari", "maart", "april", "mei", "juni",
+  "juli", "augustus", "september", "oktober", "november", "december"];
+export function factuurDatumTekst(ms) {
+  const d = new Date(Math.max(0, Math.round(Number(ms) || 0)));
+  return d.getUTCDate() + " " + FACTUUR_MAANDEN[d.getUTCMonth()] + " " + d.getUTCFullYear();
+}
+
+// ── DIR-95 - de PDF ────────────────────────────────────────────────────────
+// Met opzet met de hand geschreven en zonder bibliotheek: een PDF met alleen tekst
+// is een klein formaat, en een bibliotheek erbij halen zou de Worker opblazen voor
+// iets wat in tachtig regels past. Wat hier NIET in zit is opmaakvrijheid; dat is
+// precies goed, want een factuur hoort er elke keer hetzelfde uit te zien.
+//
+// Deze functie weet niets van credits of betalingen: hij krijgt de uitkomst van
+// maakFactuurGegevens en zet die op papier (AC-10).
+
+// PDF's van dit type gebruiken WinAnsi. Dat is Latin-1 met een paar afwijkingen; de
+// enige die hier voorkomt is het euroteken. Een teken dat er niet in past wordt een
+// vraagteken - beter een leesbaar vraagteken dan een stukgelopen bestand.
+const WINANSI_AFWIJKEND = { "€": 0x80, "‚": 0x82, "„": 0x84, "…": 0x85,
+  "‘": 0x91, "’": 0x92, "“": 0x93, "”": 0x94, "–": 0x96, "—": 0x97 };
+
+export function pdfTekst(tekst) {
+  let uit = "";
+  for (const teken of String(tekst == null ? "" : tekst)) {
+    let code = WINANSI_AFWIJKEND[teken];
+    if (code === undefined) {
+      const punt = teken.codePointAt(0);
+      code = punt <= 0xff ? punt : 63;              // 63 is het vraagteken
+    }
+    const c = String.fromCharCode(code);
+    // Haakjes en de backslash sturen de PDF-syntaxis aan en moeten ontsnapt worden.
+    if (c === "(" || c === ")" || c === "\\") uit += "\\" + c;
+    else uit += c;
+  }
+  return uit;
+}
+
+// Eén regel tekst op een vaste plek. `vet` kiest het tweede lettertype.
+function pdfRegel(x, y, grootte, tekst, vet) {
+  return "BT /" + (vet ? "F2" : "F1") + " " + grootte + " Tf "
+    + x + " " + y + " Td (" + pdfTekst(tekst) + ") Tj ET\n";
+}
+
+export function factuurPdf(gegevens) {
+  const g = gegevens || {};
+  const v = g.verkoper || {};
+  const k = g.koper || {};
+  const euro = (centen) => "EUR " + centenTekst(centen);
+  let c = "";
+
+  // Kop: wie stuurt de factuur.
+  c += pdfRegel(57, 780, 18, v.naam || "", true);
+  c += pdfRegel(57, 762, 9, v.adres || "");
+  c += pdfRegel(57, 750, 9, ((v.postcode || "") + " " + (v.plaats || "")).trim());
+  if (v.telefoon) c += pdfRegel(57, 738, 9, "Telefoon " + v.telefoon);
+  if (v.email) c += pdfRegel(57, 726, 9, v.email);
+
+  c += pdfRegel(400, 780, 16, "FACTUUR", true);
+  c += pdfRegel(400, 758, 10, "Factuurnummer: " + (g.nummer || ""));
+  c += pdfRegel(400, 744, 10, "Factuurdatum: " + factuurDatumTekst(g.datum));
+
+  // Aan wie.
+  c += pdfRegel(57, 680, 10, "Factuuradres", true);
+  c += pdfRegel(57, 664, 10, k.naam || "");
+  c += pdfRegel(57, 651, 10, k.adres || "");
+  c += pdfRegel(57, 638, 10, ((k.postcode || "") + " " + (k.plaats || "")).trim());
+  if (k.btw) c += pdfRegel(57, 625, 10, "Btw-nummer: " + k.btw);
+
+  // De regel zelf.
+  c += pdfRegel(57, 570, 10, "Omschrijving", true);
+  c += pdfRegel(400, 570, 10, "Bedrag", true);
+  c += pdfRegel(57, 552, 10, (g.omschrijving || "") + " (" + (g.credits || 0) + " credits)");
+  c += pdfRegel(400, 552, 10, euro(g.exclCent));
+
+  c += pdfRegel(300, 524, 10, "Subtotaal excl. btw");
+  c += pdfRegel(400, 524, 10, euro(g.exclCent));
+  c += pdfRegel(300, 508, 10, "Btw " + (g.btwPercentage || 0) + "%");
+  c += pdfRegel(400, 508, 10, euro(g.btwCent));
+  c += pdfRegel(300, 490, 11, "Totaal", true);
+  c += pdfRegel(400, 490, 11, euro(g.totaalCent), true);
+
+  // Voldaan, met de betaaldatum. Zonder dit is het geen kwijting.
+  c += pdfRegel(57, 440, 10, "Voldaan op " + factuurDatumTekst(g.betaaldatum)
+    + (g.methode ? (" via " + g.methode) : "") + ". Dit bedrag hoeft niet meer betaald te worden.", true);
+  if (g.betaalId) c += pdfRegel(57, 424, 8, "Betalingskenmerk: " + g.betaalId);
+
+  // De wettelijke gegevens van de verkoper, onderaan.
+  c += pdfRegel(57, 80, 8, "KVK " + (v.kvk || "") + "   Btw-nummer " + (v.btw || "")
+    + (v.iban ? ("   IBAN " + v.iban) : ""));
+
+  return pdfBestand(c);
+}
+
+// De omhulling: een pagina van A4-formaat met twee lettertypes en de tekst erin.
+// Handmatig, want dat is precies wat een PDF is: genummerde objecten, een index met
+// hun byteposities, en een verwijzing naar die index.
+function pdfBestand(inhoud) {
+  const objecten = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font "
+      + "<< /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>",
+    "<< /Length " + inhoud.length + " >>\nstream\n" + inhoud + "\nendstream",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
+  ];
+  let uit = "%PDF-1.4\n";
+  const plekken = [];
+  objecten.forEach((o, i) => {
+    plekken.push(uit.length);
+    uit += (i + 1) + " 0 obj\n" + o + "\nendobj\n";
+  });
+  const xref = uit.length;
+  uit += "xref\n0 " + (objecten.length + 1) + "\n0000000000 65535 f \n";
+  for (const plek of plekken) uit += String(plek).padStart(10, "0") + " 00000 n \n";
+  uit += "trailer\n<< /Size " + (objecten.length + 1) + " /Root 1 0 R >>\nstartxref\n" + xref + "\n%%EOF\n";
+
+  // Elk teken in `uit` is inmiddels een byte (0-255), dus dit is een letterlijke
+  // omzetting en geen tekstcodering.
+  const bytes = new Uint8Array(uit.length);
+  for (let i = 0; i < uit.length; i++) bytes[i] = uit.charCodeAt(i) & 0xff;
+  return bytes;
+}
+
+// ============================================================================
 // DIR-94 - CREDITS KOPEN
 // ============================================================================
 // De verkoopprijs ligt vast: 1 credit is EUR 0,01. Dat is met opzet losgekoppeld van
@@ -3044,6 +3306,21 @@ export class CreditsDO {
 
     // DIR-93 - de modelkeuze van de klant hangt aan zijn saldo-record, zodat het
     // ophalen van saldo en keuze samen een DO-aanroep is.
+    // AC-3 - de factuurgegevens van de klant, bij zijn saldorecord. Ze worden bewaard
+    // en bij een volgende aankoop voorgevuld. Wijzigen raakt bestaande facturen niet:
+    // die dragen hun eigen kopie (AC-9).
+    if (url.pathname === "/credits/factuurgegevens") {
+      if (!email) return json({ error: "geen adres" }, 400);
+      const rec = nieuwSaldoRecord(await this.saldoVan(email), inv.startsaldo, now);
+      if (inv.gegevens) {
+        rec.factuur = schoneKlantFactuur(inv.gegevens);
+        await this.state.storage.put("s:" + email, rec);
+      } else if (!(await this.saldoVan(email))) {
+        await this.state.storage.put("s:" + email, rec);
+      }
+      return json({ gegevens: schoneKlantFactuur(rec.factuur), saldo: rec.saldo });
+    }
+
     if (url.pathname === "/credits/model") {
       if (!email) return json({ error: "geen adres" }, 400);
       // Kiest iemand zijn model voordat zijn saldo ooit is uitgedeeld, dan krijgt hij
@@ -3087,6 +3364,9 @@ export class CreditsDO {
       return json({
         saldo: rec ? rec.saldo : null,
         model: (rec && rec.model) || "",
+        // DIR-95 - de factuurgegevens van deze klant gaan mee, zodat het formulier in
+        // het dashboard meteen gevuld is (AC-3).
+        factuur: (rec && rec.factuur) || null,
         regels,
         cursor,
         meer: !uitgelezen,
@@ -3258,6 +3538,7 @@ export class CreditsDO {
       const credits = Math.max(0, Math.round(Number(inv.credits) || 0));
       let saldo = bestaand && typeof bestaand.saldoNa === "number" ? bestaand.saldoNa : null;
       let nuGeboekt = false;
+      let factuur = null;
 
       // Zonder adres valt er niets bij te boeken - een saldo hangt aan een adres.
       // De melding wordt dan wel vastgelegd, zodat /admin hem laat zien met de
@@ -3271,8 +3552,33 @@ export class CreditsDO {
         // AC-7 - in het grootboek, met alles erbij wat je later nodig hebt om een
         // bedrag terug te vinden bij Mollie. Net als bij een correctie staat het
         // AFgeschreven bedrag in `credits`, dus met een minteken bij een bijboeking.
+        // DIR-95 AC-5 - het factuurnummer valt HIER, in hetzelfde blok als de boeking.
+        // Twee gelijktijdige betalingen kunnen elkaar niet inhalen, want de DO houdt
+        // zijn input gate dicht zolang er alleen op de eigen opslag gewacht wordt. En
+        // omdat het nummer pas valt als er echt geboekt wordt, laat een geannuleerde
+        // of mislukte betaling geen gat in de reeks achter.
+        // Het jaar in NEDERLANDSE tijd. Op 1 januari om half een is het hier al het
+        // nieuwe jaar terwijl het in UTC nog het oude is; dan zou de eerste factuur van
+        // het jaar het vorige jaartal krijgen. dagSleutel gebruikt Europe/Amsterdam.
+        const jaar = Number(dagSleutel(now).slice(0, 4));
+        const tellerSleutel = "fnr:" + jaar;
+        const volgnummer = (Number(await this.state.storage.get(tellerSleutel)) || 0) + 1;
+        await this.state.storage.put(tellerSleutel, volgnummer);
+        factuur = maakFactuurGegevens({
+          nummer: factuurNummerTekst(jaar, volgnummer),
+          datum: now, betaaldatum: now, email: adres, betaalId,
+          methode: String(inv.methode || ""),
+          bedragCent: Math.max(0, Math.round(Number(inv.bedragCent) || 0)),
+          btwCent: Math.max(0, Math.round(Number(inv.btwCent) || 0)),
+          credits, bedrijf: inv.bedrijf, klant: inv.klant,
+        });
+        // De factuur wordt hier VASTGELEGD en later nooit meer opgebouwd (AC-9).
+        await this.state.storage.put("f:" + factuur.nummer, factuur);
+        await this.state.storage.put("fi:" + adres + ":" + factuur.nummer, factuur.nummer);
+
         await this.schrijfRegel({
           tijd: now, soort: "aankoop", email: adres, agent: "", model: "",
+          factuur: factuur.nummer,
           invoer: 0, uitvoer: 0, cacheLees: 0, cacheSchrijf: 0,
           credits: -credits, saldoNa: rec.saldo,
           bedragCent: Math.max(0, Math.round(Number(inv.bedragCent) || 0)),
@@ -3299,6 +3605,7 @@ export class CreditsDO {
         btwCent: houdVast(inv.btwCent, bestaand && bestaand.btwCent),
         credits: nuGeboekt ? credits : ((bestaand && bestaand.credits) || 0),
         methode: String(inv.methode || (bestaand && bestaand.methode) || ""),
+        factuur: factuur ? factuur.nummer : ((bestaand && bestaand.factuur) || ""),
         geboekt: alGeboekt || nuGeboekt,
         saldoNa: saldo,
         tijd: (bestaand && bestaand.tijd) || now,
@@ -3306,7 +3613,34 @@ export class CreditsDO {
       };
       await this.state.storage.put(sleutel, regel);
       if (regel.ref) await this.state.storage.put("q:" + regel.ref, betaalId);
-      return json({ saldo, geboekt: regel.geboekt, nuGeboekt, betaling: regel });
+      return json({ saldo, geboekt: regel.geboekt, nuGeboekt, betaling: regel, factuur });
+    }
+
+    // DIR-95 - de facturen van EEN klant (AC-7), of alle facturen (AC-8). Ze worden
+    // nooit gesnoeid: een factuur moet zeven jaar bewaard blijven.
+    if (url.pathname === "/credits/facturen") {
+      const lijst = [];
+      const prefix = email ? ("fi:" + email + ":") : "";
+      if (email) {
+        for (const [, nummer] of await this.state.storage.list({ prefix })) {
+          const f = await this.state.storage.get("f:" + nummer);
+          if (f) lijst.push(f);
+        }
+      } else {
+        for (const [, f] of await this.state.storage.list({ prefix: "f:" })) lijst.push(f);
+      }
+      lijst.sort((a, b) => String(b.nummer).localeCompare(String(a.nummer)));
+      // Met opzet GEEN bovengrens zoals bij de betalingen: met deze lijst doet Dirk
+      // zijn aangifte, en een factuur die stil buiten beeld valt is een gat in zijn
+      // boekhouding. Bij honderden facturen per jaar blijft dit een kleine lijst.
+      return json({ facturen: lijst });
+    }
+
+    // Een enkele factuur. Het adres uit de sessie beslist wie hem mag zien; die
+    // controle staat in de Worker, want daar is de sessie bekend.
+    if (url.pathname === "/credits/factuur") {
+      const f = await this.state.storage.get("f:" + String(inv.nummer || ""));
+      return json({ factuur: f || null });
     }
 
     // De lijst voor /admin (AC-10). Betalingen worden niet gesnoeid zoals grootboek-
@@ -4920,6 +5254,16 @@ const OFFICE_HTML = `<!doctype html>
   .dash-koop input{ width:6rem; border:2px solid var(--ink); background:#fff; color:var(--ink);
     font-family:var(--leesfont); font-size:1rem; padding:.4rem .5rem; }
   .dash-koopfout{ color:#b3402f; font-weight:700; }
+  /* DIR-95 - het factuurformulier. Label boven het veld, want de labels zijn te lang
+     om er netjes naast te passen op een telefoon. */
+  .dash-factuur{ display:grid; gap:.15rem; margin-top:.5rem; }
+  .dash-factuur label{ font-size:.9rem; color:#45505b; margin-top:.35rem; }
+  .dash-factuur input{ border:2px solid var(--ink); background:#fff; color:var(--ink);
+    font-family:var(--leesfont); font-size:1rem; padding:.4rem .5rem; }
+  .dash-factuurrij{ border:2px solid var(--ink); background:#fff; padding:.5rem .6rem; margin:.35rem 0; }
+  .dash-factuurrij b{ display:block; }
+  .dash-factuurrij a{ display:inline-block; margin-top:.35rem; background:var(--ink); color:#fff;
+    text-decoration:none; font-size:.9rem; padding:.3rem .6rem; }
   .dash-keuze{ display:block; width:100%; text-align:left; border:2px solid var(--ink);
     background:#fff; color:var(--ink); font-family:var(--leesfont); font-size:1rem;
     padding:.5rem .7rem; margin:.35rem 0; cursor:pointer; }
@@ -5166,6 +5510,22 @@ const OFFICE_HTML = `<!doctype html>
       </div>
       <p class="dash-melding" id="dash-koopsom"></p>
       <p class="dash-melding" id="dash-koopmelding"></p>
+      <h3>Je factuurgegevens</h3>
+      <p class="dash-melding">Deze komen op je factuur te staan. Zonder deze gegevens kunnen we
+        geen geldige factuur maken, dus vul ze in voordat je credits koopt.</p>
+      <div class="dash-factuur">
+        <label for="dash-fnaam">Bedrijfsnaam</label><input id="dash-fnaam" type="text" autocomplete="organization">
+        <label for="dash-fadres">Adres</label><input id="dash-fadres" type="text" autocomplete="street-address">
+        <label for="dash-fpostcode">Postcode</label><input id="dash-fpostcode" type="text" autocomplete="postal-code">
+        <label for="dash-fplaats">Plaats</label><input id="dash-fplaats" type="text" autocomplete="address-level2">
+        <label for="dash-fbtw">Btw-nummer (mag leeg)</label><input id="dash-fbtw" type="text">
+      </div>
+      <div class="dash-knoppen">
+        <button class="knop" id="dash-fbewaar" type="button">Factuurgegevens bewaren</button>
+        <span class="dash-melding" id="dash-fmelding"></span>
+      </div>
+      <h3>Je facturen</h3>
+      <div id="dash-facturen"></div>
       <h3>${klantModelKop()}</h3>
       <p class="dash-melding">${klantModelInleiding()}</p>
       <div id="dash-modellen"></div>
@@ -5768,8 +6128,55 @@ const OFFICE_HTML = `<!doctype html>
     doel.className='dash-melding';
   }
 
+  // DIR-95 AC-3 - de factuurgegevens van de klant zelf, voorgevuld bij een volgende
+  // aankoop. Ze raken bestaande facturen niet: die dragen hun eigen kopie (AC-9).
+  var DASHFACTUUR=[['dash-fnaam','naam'],['dash-fadres','adres'],['dash-fpostcode','postcode'],
+    ['dash-fplaats','plaats'],['dash-fbtw','btw']];
+  function dashFactuurGegevensTonen(g){
+    DASHFACTUUR.forEach(function(paar){
+      var el=document.getElementById(paar[0]); if(el) el.value=(g&&g[paar[1]])||'';
+    });
+  }
+  function dashFactuurGegevensLaden(){
+    fetch('/api/klant/factuurgegevens').then(function(r){ return r.json(); })
+      .then(function(j){ dashFactuurGegevensTonen(j.gegevens); })
+      .catch(function(){ /* het dashboard werkt ook zonder */ });
+  }
+  // AC-7 - alleen je eigen facturen; de server filtert op het adres uit je sessie.
+  function dashFacturenLaden(){
+    fetch('/api/klant/facturen').then(function(r){ return r.json(); })
+      .then(function(j){
+        var doel=document.getElementById('dash-facturen'); if(!doel) return;
+        doel.textContent='';
+        var lijst=(j&&j.facturen)||[];
+        if(!lijst.length){
+          var p=document.createElement('p'); p.className='dash-melding';
+          p.textContent='Nog geen facturen. Zodra je credits koopt, staat de factuur hier.';
+          doel.appendChild(p); return;
+        }
+        lijst.forEach(function(f){
+          var rij=document.createElement('div'); rij.className='dash-factuurrij';
+          var b=document.createElement('b');
+          b.textContent=f.nummer + ' \u2014 ' + dashEuro(f.totaalCent||0);
+          rij.appendChild(b);
+          var sp=document.createElement('span'); sp.className='dash-melding';
+          sp.textContent=dashTijd(f.datum) + ' \u2014 ' + dashEuro(f.exclCent||0) + ' excl. btw, '
+            + dashEuro(f.btwCent||0) + ' btw \u2014 ' + (f.credits||0) + ' credits';
+          rij.appendChild(sp);
+          var dl=document.createElement('a');
+          dl.href='/api/factuur?nummer=' + encodeURIComponent(f.nummer);
+          dl.textContent='Download PDF';
+          rij.appendChild(dl);
+          doel.appendChild(rij);
+        });
+      })
+      .catch(function(){ /* het dashboard werkt ook zonder */ });
+  }
+
   function dashModellenTonen(j){
     dashKopenTonen(j);
+    dashFactuurGegevensTonen(j.factuurGegevens);
+    dashFacturenLaden();
     dashKeuzes=j.keuzes||[]; dashModel=j.model||'';
     var doel=document.getElementById('dash-modellen'); doel.textContent='';
     dashKeuzes.forEach(function(k){
@@ -5885,6 +6292,30 @@ const OFFICE_HTML = `<!doctype html>
   }
   document.getElementById('dash-sluit').addEventListener('click',dashDicht);
   document.getElementById('dash-meer').addEventListener('click',function(){ dashLaad(true); });
+  document.getElementById('dash-fbewaar').addEventListener('click',function(){
+    var body={};
+    DASHFACTUUR.forEach(function(paar){ body[paar[1]]=document.getElementById(paar[0]).value; });
+    var melding=document.getElementById('dash-fmelding');
+    melding.className='dash-melding'; melding.textContent='Bezig...';
+    fetch('/api/klant/factuurgegevens',{ method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(j.error){ melding.className='dash-melding dash-koopfout'; melding.textContent=j.error; return; }
+        dashFactuurGegevensTonen(j.gegevens);
+        if(j.ontbreekt && j.ontbreekt.length){
+          melding.className='dash-melding dash-koopfout';
+          melding.textContent='Bewaard, maar er ontbreekt nog: ' + j.ontbreekt.join(', ') + '.';
+        } else {
+          melding.className='dash-melding';
+          melding.textContent='Bewaard. Je kunt nu credits kopen.';
+        }
+      })
+      .catch(function(){
+        melding.className='dash-melding dash-koopfout';
+        melding.textContent='Bewaren mislukt. Probeer het zo opnieuw.';
+      });
+  });
   document.getElementById('dash-euro').addEventListener('input',dashKoopsom);
   document.getElementById('dash-koop').addEventListener('click',function(){
     var knop=this;
@@ -6450,6 +6881,8 @@ const ADMIN_HTML = `<!doctype html>
   .modelmelding.aan{ display:block; color:#b3402f; font-weight:700; margin:.4rem 0 .6rem; }
   .bronknoppen{ display:flex; gap:.35rem; flex-wrap:wrap; margin-top:.4rem; }
   .bronknoppen button{ font-size:.88rem; padding:.3rem .55rem; }
+  .factuurknop{ display:inline-block; background:#015092; color:#fff; text-decoration:none;
+    font-size:.88rem; padding:.35rem .6rem; border-radius:3px; }
   .bronvoorbeeld{ white-space:pre-wrap; background:#fff; border:1px solid #ccc; padding:.6rem;
     max-height:22rem; overflow:auto; font-size:.88rem; line-height:1.45; }
 </style></head><body>
@@ -6521,6 +6954,23 @@ const ADMIN_HTML = `<!doctype html>
       </div>
       <h2>Saldo per klant</h2>
       <div id="cSaldi"></div>
+      <h2>Bedrijfsgegevens</h2>
+      <p class="modelmelding" id="bedrijfWaarschuwing"></p>
+      <div class="balk">
+        <div class="veld"><label for="bNaam">Bedrijfsnaam</label><input id="bNaam" type="text"></div>
+        <div class="veld"><label for="bAdres">Adres</label><input id="bAdres" type="text"></div>
+        <div class="veld"><label for="bPostcode">Postcode</label><input id="bPostcode" type="text"></div>
+        <div class="veld"><label for="bPlaats">Plaats</label><input id="bPlaats" type="text"></div>
+        <div class="veld"><label for="bKvk">KVK-nummer</label><input id="bKvk" type="text"></div>
+        <div class="veld"><label for="bBtw">Btw-identificatienummer</label><input id="bBtw" type="text"></div>
+        <div class="veld"><label for="bTelefoon">Telefoon</label><input id="bTelefoon" type="text"></div>
+        <div class="veld"><label for="bEmail">E-mailadres</label><input id="bEmail" type="text"></div>
+        <div class="veld"><label for="bIban">IBAN</label><input id="bIban" type="text">
+          <span class="hint">Mag leeg blijven: een factuur die al voldaan is hoeft geen rekeningnummer te noemen.</span></div>
+        <div class="knoppen"><button id="bBewaar">Bedrijfsgegevens bewaren</button><span class="melding" id="bMelding"></span></div>
+      </div>
+      <h2>Facturen</h2>
+      <div id="cFacturen"></div>
       <h2>Betalingen</h2>
       <div id="cBetalingen"></div>
       <h2>Grootboek</h2>
@@ -7245,6 +7695,65 @@ const ADMIN_HTML = `<!doctype html>
       renderBoekingen((res.j&&res.j.regels)||[]);
     });
     laadBetalingen();
+    laadBedrijf();
+    laadFacturen();
+  }
+  // DIR-95 AC-1/AC-2 - de gegevens die op de factuur komen. Ontbreekt er een, dan kan
+  // er geen geldige factuur gemaakt worden; dat moet je zien voordat er iemand koopt.
+  var BEDRIJFVELDEN=[['bNaam','naam'],['bAdres','adres'],['bPostcode','postcode'],
+    ['bPlaats','plaats'],['bKvk','kvk'],['bBtw','btw'],['bTelefoon','telefoon'],
+    ['bEmail','email'],['bIban','iban']];
+  function laadBedrijf(){
+    api('GET','/api/admin/bedrijf').then(function(res){
+      if(!res.ok) return;
+      toonBedrijf(res.j.bedrijf||{}, res.j.ontbreekt||[]);
+    });
+  }
+  function toonBedrijf(bedrijf, ontbreekt){
+    BEDRIJFVELDEN.forEach(function(paar){
+      var el=document.getElementById(paar[0]); if(el) el.value=bedrijf[paar[1]]||'';
+    });
+    var w=document.getElementById('bedrijfWaarschuwing'); if(!w) return;
+    if(ontbreekt.length){
+      w.textContent='LET OP: zonder ' + ontbreekt.join(', ') + ' kan er geen geldige factuur '
+        + 'gemaakt worden. Kopen blijft werken, maar je klant krijgt dan een factuur die de '
+        + 'belastingdienst niet accepteert.';
+      w.className='modelmelding aan';
+    } else {
+      w.textContent=''; w.className='modelmelding';
+    }
+  }
+  // AC-8 - alle facturen, met een downloadknop, zodat Dirk ze in zijn boekhouding kan
+  // verwerken.
+  function laadFacturen(){
+    api('GET','/api/admin/facturen').then(function(res){
+      var doel=document.getElementById('cFacturen'); if(!doel) return;
+      doel.textContent='';
+      var lijst=(res.ok && res.j && res.j.facturen) || [];
+      if(!lijst.length){
+        var p=document.createElement('p'); p.className='leeg';
+        p.textContent=res.ok ? 'Nog geen facturen.' : 'Kon de facturen niet laden.';
+        doel.appendChild(p); return;
+      }
+      lijst.forEach(function(f){ doel.appendChild(factuurRij(f, true)); });
+    });
+  }
+  function factuurRij(f, metAdres){
+    var rij=document.createElement('div'); rij.className='rij';
+    var b=document.createElement('b');
+    b.textContent=f.nummer + ' \u2014 ' + euroTekst(f.totaalCent||0)
+      + (metAdres ? (' \u2014 ' + ((f.koper&&f.koper.naam)||f.email||'')) : '');
+    rij.appendChild(b);
+    var sp=document.createElement('span'); sp.className='muted';
+    sp.textContent=tijdTekst(f.datum) + ' \u2014 ' + euroTekst(f.exclCent||0) + ' excl. btw, '
+      + euroTekst(f.btwCent||0) + ' btw \u2014 ' + (f.credits||0) + ' credits';
+    rij.appendChild(sp);
+    var kn=document.createElement('div'); kn.className='bronknoppen';
+    var dl=document.createElement('a');
+    dl.href='/api/factuur?nummer=' + encodeURIComponent(f.nummer);
+    dl.textContent='Download PDF'; dl.className='factuurknop';
+    kn.appendChild(dl); rij.appendChild(kn);
+    return rij;
   }
   // DIR-94 AC-10 - wie, wanneer, hoeveel, welke methode, welke status.
   function laadBetalingen(){
@@ -7272,7 +7781,8 @@ const ADMIN_HTML = `<!doctype html>
         // niet neutraal in een lijst staan; dan valt het pas op als iemand belt.
         if(b.status==='paid' && !b.geboekt){
           var let_=document.createElement('span'); let_.className='modelmelding aan';
-          let_.textContent='LET OP: betaald maar niets bijgeboekt. Zoek deze betaling op bij Mollie.';
+          let_.textContent='LET OP: betaald maar niets bijgeboekt, en er is dus ook geen '
+            + 'factuur van. Zoek deze betaling op bij Mollie en boek de credits zo nodig handmatig bij.';
           rij.appendChild(let_);
         }
         doel.appendChild(rij);
@@ -7436,6 +7946,16 @@ const ADMIN_HTML = `<!doctype html>
       meld(''); document.getElementById('cMelding').textContent='Bewaard.'; laadCredits();
     });
   }
+  document.getElementById('bBewaar').addEventListener('click',function(){
+    var body={};
+    BEDRIJFVELDEN.forEach(function(paar){ body[paar[1]]=document.getElementById(paar[0]).value; });
+    var melding=document.getElementById('bMelding'); melding.textContent='Bezig...';
+    api('POST','/api/admin/bedrijf', body).then(function(res){
+      if(!res.ok){ melding.textContent=(res.j&&res.j.error)||'Bewaren mislukt.'; return; }
+      melding.textContent='Bewaard.';
+      toonBedrijf(res.j.bedrijf||{}, res.j.ontbreekt||[]);
+    });
+  });
   document.getElementById('cBewaar').addEventListener('click',function(){ bewaarCredits(false); });
   document.getElementById('cBoek').addEventListener('click',function(){
     api('POST','/api/admin/credits/correctie',{
@@ -8553,6 +9073,8 @@ export default {
           startsaldo: cfg.startsaldo,
           // DIR-94 - wat de koopknop nodig heeft. Zonder sleutel staat hij uit (AC-9).
           kopen: { kan: !!env.MOLLIE_API_KEY, min: cfg.koopMin, max: cfg.koopMax, btw: BTW_PERCENT },
+          // DIR-95 AC-3 - meteen mee, zodat het formulier gevuld is zonder extra verzoek.
+          factuurGegevens: schoneKlantFactuur(j.factuur),
         });
       } catch (e) {
         return json({ error: "Kon je gegevens niet laden. Probeer het zo opnieuw." }, 502);
@@ -8596,6 +9118,21 @@ export default {
       // AC-2 - eerst rekenen en weigeren, en pas daarna een betaling aanmaken.
       const koop = koopBedrag(b && b.euro, cfg.koopMin, cfg.koopMax);
       if (koop.fout) return json({ error: koop.fout }, 400);
+
+      // DIR-95 AC-4 - zonder factuurgegevens geen betaling. Een aankoop zonder naam en
+      // adres van de afnemer levert een factuur op die niet geldig is, en dan heeft de
+      // klant betaald voor iets waar hij niets mee kan.
+      let klantFactuur = null;
+      try {
+        const r = await creditsStub(env).fetch("https://do/credits/factuurgegevens", {
+          method: "POST", body: JSON.stringify({ email: sessie.email, startsaldo: cfg.startsaldo }),
+        });
+        klantFactuur = (await r.json()).gegevens;
+      } catch (e) { klantFactuur = null; }
+      const mist = klantFactuurOntbreekt(klantFactuur);
+      if (mist.length) {
+        return json({ error: "Vul eerst je factuurgegevens in: " + mist.join(", ") + ".", factuurNodig: true }, 400);
+      }
 
       const ref = crypto.randomUUID();
       const gemaakt = await mollieMaakBetaling(env, {
@@ -8647,11 +9184,23 @@ export default {
       const btwCent = bet.bedragCent === null ? 0 : bet.bedragCent - creditsUitBetaling(bet.bedragCent);
       try {
         const cfg = await creditsConfig(env);
+        // DIR-95 - de gegevens van beide partijen gaan MEE naar de DO, zodat de factuur
+        // daar in een keer kan worden vastgelegd. De DO leest zelf geen KV: hij mag
+        // tussen het lezen en schrijven van het saldo nergens op wachten.
+        const bedrijf = await bedrijfGegevens(env);
+        let klant = null;
+        try {
+          const r = await creditsStub(env).fetch("https://do/credits/factuurgegevens", {
+            method: "POST", body: JSON.stringify({ email: bet.email, startsaldo: cfg.startsaldo }),
+          });
+          klant = (await r.json()).gegevens;
+        } catch (e) { klant = null; }
         await creditsStub(env).fetch("https://do/credits/betaling", {
           method: "POST",
           body: JSON.stringify({
             email: bet.email, betaalId: bet.betaalId, status: bet.status, ref: bet.ref,
             bedragCent: bet.bedragCent || 0, btwCent, credits, methode: bet.methode,
+            bedrijf, klant,
             maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen,
           }),
         });
@@ -8680,6 +9229,94 @@ export default {
       } catch (e) {
         return json({ error: "Kon de betaling niet opzoeken." }, 502);
       }
+    }
+
+    // DIR-95 AC-3 - de factuurgegevens van de klant zelf.
+    if (path === "/api/klant/factuurgegevens" && (request.method === "GET" || request.method === "POST")) {
+      const sessie = await huidigeSessie(request, env);
+      if (!sessie || !sessie.email) return geenSessie();
+      let b = null;
+      if (request.method === "POST") { try { b = await request.json(); } catch (e) { b = {}; } }
+      try {
+        const cfg = await creditsConfig(env);
+        const r = await creditsStub(env).fetch("https://do/credits/factuurgegevens", {
+          method: "POST",
+          body: JSON.stringify({ email: sessie.email, startsaldo: cfg.startsaldo, gegevens: b }),
+        });
+        const j = await r.json();
+        return json({ gegevens: j.gegevens, ontbreekt: klantFactuurOntbreekt(j.gegevens) });
+      } catch (e) {
+        return json({ error: "Kon je factuurgegevens niet opslaan. Probeer het zo opnieuw." }, 502);
+      }
+    }
+
+    // AC-7 - de facturen van deze klant. Het adres komt uit de sessie, dus je ziet
+    // nooit die van een ander.
+    if (path === "/api/klant/facturen" && request.method === "GET") {
+      const sessie = await huidigeSessie(request, env);
+      if (!sessie || !sessie.email) return geenSessie();
+      try {
+        const r = await creditsStub(env).fetch("https://do/credits/facturen", {
+          method: "POST", body: JSON.stringify({ email: sessie.email }),
+        });
+        return json({ facturen: (await r.json()).facturen || [] });
+      } catch (e) { return json({ error: "Kon je facturen niet laden." }, 502); }
+    }
+
+    // AC-6 - de factuur als PDF. Voor de klant alleen zijn eigen; voor Dirk alle.
+    if (path === "/api/factuur" && request.method === "GET") {
+      const nummer = String(url.searchParams.get("nummer") || "").slice(0, 20);
+      if (!nummer) return json({ error: "Geen factuurnummer opgegeven." }, 400);
+      const admin = await isAdmin(request, env);
+      const sessie = admin ? null : await huidigeSessie(request, env);
+      if (!admin && (!sessie || !sessie.email)) return geenSessie();
+      let factuur = null;
+      try {
+        const r = await creditsStub(env).fetch("https://do/credits/factuur", {
+          method: "POST", body: JSON.stringify({ nummer }),
+        });
+        factuur = (await r.json()).factuur;
+      } catch (e) { factuur = null; }
+      if (!factuur) return json({ error: "Die factuur bestaat niet." }, 404);
+      // Wie geen admin is, ziet uitsluitend zijn eigen factuur. Het adres komt uit de
+      // ondertekende sessie, nooit uit het verzoek.
+      if (!admin && normaliseerEmail(factuur.email) !== normaliseerEmail(sessie.email)) {
+        return json({ error: "Die factuur bestaat niet." }, 404);
+      }
+      return new Response(factuurPdf(factuur), {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": 'attachment; filename="factuur-' + factuur.nummer + '.pdf"',
+        },
+      });
+    }
+
+    // AC-1/AC-2 - de bedrijfsgegevens van Dirk.
+    if (path === "/api/admin/bedrijf") {
+      if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
+      if (request.method === "GET") {
+        const bedrijf = await bedrijfGegevens(env);
+        return json({ bedrijf, ontbreekt: bedrijfOntbreekt(bedrijf) });
+      }
+      if (request.method === "POST") {
+        if (!env.CLIENTS) return json({ error: "KV (CLIENTS) is nog niet geconfigureerd." }, 500);
+        let b = {}; try { b = await request.json(); } catch (e) { /* leeg */ }
+        const bedrijf = schoonBedrijf(b);
+        await env.CLIENTS.put(BEDRIJF_KV_SLEUTEL, JSON.stringify(bedrijf));
+        return json({ bedrijf, ontbreekt: bedrijfOntbreekt(bedrijf) });
+      }
+      return json({ error: "Methode niet toegestaan." }, 405);
+    }
+
+    // AC-8 - alle facturen, voor de boekhouding van Dirk.
+    if (path === "/api/admin/facturen" && request.method === "GET") {
+      if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
+      try {
+        const r = await creditsStub(env).fetch("https://do/credits/facturen", {
+          method: "POST", body: JSON.stringify({}),
+        });
+        return json({ facturen: (await r.json()).facturen || [] });
+      } catch (e) { return json({ error: "Kon de facturen niet laden." }, 502); }
     }
 
     // AC-10 - de betalingen in /admin.
