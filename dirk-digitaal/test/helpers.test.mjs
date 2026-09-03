@@ -2615,6 +2615,87 @@ test("bij meerdere aanroepen wint de afwijkende naam, niet de laatste (AC-4)", (
   assert.equal(meterWijktAf(m), true);
 });
 
+// -- DIR-110 - het oordeel valt per aanroep, niet achteraf -------------------
+
+test("een modelwissel met twee kloppende terugmeldingen is geen afwijking (AC-1)", () => {
+  // De comment bij meetAanroep beschrijft de wissel binnen een antwoord als
+  // ondersteund. De oude meldregel vergeleek achteraf met meter.model, dat meeschuift
+  // met elke aanroep - dan meldde dit scenario een afwijking terwijl beide aanroepen
+  // keurig hun eigen naam terugmeldden. Een alarm dat afgaat in een ondersteund geval
+  // ondermijnt het alarm.
+  const m = nieuweMeter();
+  meetAanroep(m, SONNET, USAGE, SONNET);
+  meetAanroep(m, "claude-opus-5", USAGE, "claude-opus-5");
+  assert.equal(meterWijktAf(m), false);
+  assert.equal(m.wijktAf, false);
+  // En andersom gewisseld net zo goed.
+  const t = nieuweMeter();
+  meetAanroep(t, "claude-opus-5", USAGE, "claude-opus-5");
+  meetAanroep(t, SONNET, USAGE, SONNET);
+  assert.equal(meterWijktAf(t), false);
+});
+
+test("een echte afwijking blijft staan, ook na een modelwissel die klopt (AC-2)", () => {
+  const m = nieuweMeter();
+  meetAanroep(m, SONNET, USAGE, "claude-sonnet-5-20260114");   // wijkt af
+  meetAanroep(m, "claude-opus-5", USAGE, "claude-opus-5");     // klopt
+  assert.equal(meterWijktAf(m), true);
+  assert.equal(m.gemeld, "claude-sonnet-5-20260114", "de afwijkende naam hoort te blijven staan");
+});
+
+test("een afwijking na de wissel wordt ook gezien (AC-2)", () => {
+  // Het oordeel valt tegen het model van DIE aanroep. Vroeg de tweede aanroep opus en
+  // kwam er een snapshotnaam terug, dan is dat een afwijking - ook al is meter.model
+  // dan toevallig ook opus.
+  const m = nieuweMeter();
+  meetAanroep(m, SONNET, USAGE, SONNET);
+  meetAanroep(m, "claude-opus-5", USAGE, "claude-opus-5-20260301");
+  assert.equal(meterWijktAf(m), true);
+  assert.equal(m.gemeld, "claude-opus-5-20260301");
+});
+
+test("het oordeel gaat als veld het grootboek in en de kosten veranderen niet (AC-3/AC-5)", async () => {
+  // meterWijktAf draait nu echt in productie: de Worker stuurt de uitkomst mee en de
+  // regel draagt hem, zodat /admin niets zelf hoeft te beoordelen.
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 100, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  await doo.fetch(new Request("https://do/credits/boek", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "klant@voorbeeld.nl", agent: "gsc", model: SONNET,
+      gemeldModel: "claude-sonnet-5-20260114", wijktAf: true,
+      invoer: 100, uitvoer: 10, credits: 7, maxRegels: 500, bewaardagen: 365,
+    }),
+  }));
+  const regel = [...opslag.data.values()].find((v) => v && v.soort === "verbruik");
+  assert.equal(regel.wijktAf, true);
+  assert.equal(regel.credits, 7, "aan de afboeking verandert niets");
+
+  // Zonder het veld: false, geen melding aangepraat (zelfde afspraak als DIR-108 AC-7).
+  const opslag2 = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 100, gemaakt: 1 } });
+  const doo2 = new CreditsDO({ storage: opslag2 });
+  await doo2.fetch(new Request("https://do/credits/boek", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "klant@voorbeeld.nl", agent: "gsc", model: SONNET,
+      invoer: 100, uitvoer: 10, credits: 7, maxRegels: 500, bewaardagen: 365,
+    }),
+  }));
+  const oud = [...opslag2.data.values()].find((v) => v && v.soort === "verbruik");
+  assert.equal(oud.wijktAf, false);
+});
+
+test("een ontbrekend tarief geeft geen NaN maar bijna gratis - daarom het vangnet (AC-4)", () => {
+  // De correctie op de redenering uit PR #78: zonder vangnettarief zou een vergeten
+  // prijsregel niet ontsporen in NaN, want kostenNaarCredits klemt op minstens 1
+  // credit. Het gevaar is andersom: het antwoord wordt dan bijna gratis en dat kost
+  // Dirk geld, stil, juist bij het model dat net is toegevoegd.
+  assert.equal(kostenNaarCredits(NaN, 0.92, 2), 1);
+  assert.equal(kostenNaarCredits(undefined, 0.92, 2), 1);
+  // Met het vangnet erin gaat een onbekend model juist tegen het HOOGSTE tarief.
+  assert.ok(tokenKosten("claude-iets-nieuws", USAGE) >= tokenKosten("claude-opus-5", USAGE));
+});
+
 test("een model buiten de prijstabel gaat tegen het hoogste tarief en wordt gemarkeerd (AC-5/AC-6)", () => {
   const m = meetAanroep(nieuweMeter(), "claude-iets-nieuws", USAGE, "claude-iets-nieuws");
   assert.equal(m.tariefOnbekend, true);

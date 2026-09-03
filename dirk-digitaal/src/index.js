@@ -1103,7 +1103,8 @@ function boekConversiekosten(env, ctx, meter, naam, mislukt) {
         method: "POST",
         body: JSON.stringify({
           agent: PDF_CONVERSIE_AGENT, model: meter.model,
-          gemeldModel: meter.gemeld, tariefOnbekend: meter.tariefOnbekend === true,
+          gemeldModel: meter.gemeld, wijktAf: meterWijktAf(meter),
+          tariefOnbekend: meter.tariefOnbekend === true,
           invoer: meter.invoer, uitvoer: meter.uitvoer,
           cacheLees: meter.cacheLees, cacheSchrijf: meter.cacheSchrijf,
           credits: meterCredits(meter, cfg.koers, cfg.marge),
@@ -1393,8 +1394,13 @@ const MODEL_PRIJZEN = {
 const CACHE_LEES_FACTOR = 0.1;
 const CACHE_SCHRIJF_FACTOR = 1.25;
 // Een model dat niet in de tabel staat (nieuwe keuze toegevoegd, tabel vergeten)
-// rekenen we tegen het Opus-tarief af. Gratis weggeven lijkt de nette kant, maar
-// dan kost een vergeten regel Dirk stilletjes echt geld.
+// rekenen we tegen het Opus-tarief af.
+//
+// DIR-110 - voor de duidelijkheid over wat er ZONDER dit vangnet zou gebeuren: geen
+// rekenfout. Een ontbrekend tarief geeft geen NaN, want kostenNaarCredits klemt alles
+// op minstens 1 credit. Het gevaar is precies andersom: het antwoord wordt dan bijna
+// gratis, en dat kost Dirk stilletjes geld - juist bij het model dat net is
+// toegevoegd en dus het meest gebruikt wordt.
 const PRIJS_ONBEKEND = { invoer: 5, uitvoer: 25 };
 
 // ============================================================================
@@ -1861,7 +1867,8 @@ export function nieuweMeter() {
     aanroepen: 0, model: "", invoer: 0, uitvoer: 0, cacheLees: 0, cacheSchrijf: 0, kostenUSD: 0,
     // DIR-108 - wat de API terugmeldde (AC-2), en of we tegen het vangnettarief
     // moesten rekenen (AC-5). Allebei alleen om vast te leggen en te tonen.
-    gemeld: "", tariefOnbekend: false,
+    // DIR-110 - `wijktAf` is het oordeel daarover, geveld in meetAanroep, per aanroep.
+    gemeld: "", wijktAf: false, tariefOnbekend: false,
   };
 }
 
@@ -1882,11 +1889,23 @@ export function meetAanroep(meter, model, usage, gemeldModel) {
   meter.aanroepen += 1;
   meter.model = aangevraagd;
 
-  // Eén antwoord kan meerdere aanroepen kosten (de tool-lus). Wijkt er ééntje af,
-  // dan is dat het interessante geval, dus die naam houden we vast in plaats van hem
-  // te laten overschrijven door een volgende aanroep die wel klopt.
+  // DIR-110 - of er iets mis is, wordt HIER beslist, per aanroep, tegen het model
+  // dat bij deze aanroep is aangevraagd. Achteraf vergelijken met meter.model kan
+  // niet: dat veld schuift mee met elke aanroep, dus een modelwissel binnen een
+  // antwoord waarbij beide aanroepen keurig hun eigen naam terugmeldden zou dan
+  // vals alarm slaan (AC-1).
+  //
+  // Wijkt er ééntje echt af, dan is dat het interessante geval: die naam en dat
+  // oordeel blijven staan, ook als een latere aanroep wel klopt (AC-2).
   const gemeld = String(gemeldModel || "");
-  if (gemeld && !(meter.gemeld && meter.gemeld !== meter.model)) meter.gemeld = gemeld;
+  if (!meter.wijktAf) {
+    if (gemeld && aangevraagd && gemeld !== aangevraagd) {
+      meter.wijktAf = true;
+      meter.gemeld = gemeld;
+    } else if (gemeld) {
+      meter.gemeld = gemeld;
+    }
+  }
   if (!modelPrijsBekend(aangevraagd)) meter.tariefOnbekend = true;
 
   meter.invoer += tokenGetal(u.input_tokens);
@@ -1898,11 +1917,14 @@ export function meetAanroep(meter, model, usage, gemeldModel) {
   return meter;
 }
 
-// AC-4 - week de teruggemelde naam af van wat wij aanvroegen? Apart gezet zodat de
-// vraag op één plek beantwoord wordt: in de DO, in /admin en in de test.
+// AC-4 - week de teruggemelde naam af van wat wij aanvroegen? Het oordeel is al
+// geveld in meetAanroep; hier wordt het alleen afgelezen. DIR-110: deze functie
+// draait nu ook echt - de Worker geeft de uitkomst als `wijktAf` mee aan het
+// grootboek, en /admin leest dat veld van de regel af. De enige kopie die overblijft
+// zit in de client van /admin, als terugval voor regels van vóór dit veld; daar
+// staat dat er ook bij.
 export function meterWijktAf(meter) {
-  const m = meter || {};
-  return Boolean(m.gemeld && m.model && m.gemeld !== m.model);
+  return Boolean(meter && meter.wijktAf);
 }
 
 // Eenmaal afronden over het totaal, niet per aanroep: anders betaalt de klant vijf
@@ -3508,7 +3530,9 @@ export class CreditsDO {
         // DIR-108 AC-2/AC-5 - wat de API terugmeldde, en of er tegen het vangnettarief
         // gerekend is. Oudere regels hebben deze velden niet; /admin gaat daarmee om
         // als "niets bijzonders", zodat er niets met terugwerkende kracht verandert.
+        // DIR-110 - `wijktAf` is het oordeel van meetAanroep, per aanroep geveld.
         gemeldModel: String(inv.gemeldModel || ""),
+        wijktAf: inv.wijktAf === true,
         tariefOnbekend: inv.tariefOnbekend === true,
         invoer: Math.max(0, Math.round(Number(inv.invoer) || 0)),
         uitvoer: Math.max(0, Math.round(Number(inv.uitvoer) || 0)),
@@ -3539,6 +3563,7 @@ export class CreditsDO {
         tijd: now, soort: "kosten", email: "",
         agent: String(inv.agent || ""), model: String(inv.model || ""),
         gemeldModel: String(inv.gemeldModel || ""),
+        wijktAf: inv.wijktAf === true,
         tariefOnbekend: inv.tariefOnbekend === true,
         invoer: Math.max(0, Math.round(Number(inv.invoer) || 0)),
         uitvoer: Math.max(0, Math.round(Number(inv.uitvoer) || 0)),
@@ -3825,7 +3850,8 @@ function verrekenKrediet(env, ctx, krediet, agent, meter) {
         method: "POST",
         body: JSON.stringify({
           email: krediet.email, agent, model: meter.model,
-          gemeldModel: meter.gemeld, tariefOnbekend: meter.tariefOnbekend === true,
+          gemeldModel: meter.gemeld, wijktAf: meterWijktAf(meter),
+          tariefOnbekend: meter.tariefOnbekend === true,
           invoer: meter.invoer, uitvoer: meter.uitvoer,
           cacheLees: meter.cacheLees, cacheSchrijf: meter.cacheSchrijf,
           credits: meterCredits(meter, cfg.koers, cfg.marge),
@@ -7937,10 +7963,16 @@ const ADMIN_HTML = `<!doctype html>
     toonModelMelding(regels);
   }
 
-  // Oudere regels hebben deze velden niet; die tellen als "niets bijzonders", zodat
-  // er met terugwerkende kracht niets verandert (AC-7).
+  // DIR-110 - het oordeel komt van de server, die het per aanroep velde; deze kant
+  // heeft de losse aanroepen nooit gezien en KAN het dus niet zelf beoordelen. De
+  // vergelijking hieronder is alleen de terugval voor regels van voor het veld
+  // wijktAf; die kan bij een modelwissel te streng zijn, maar met terugwerkende
+  // kracht is er niets beters. Regels zonder beide velden tellen als "niets
+  // bijzonders" (AC-7 van DIR-108).
   function modelWijktAf(r){
-    return !!(r && r.gemeldModel && r.model && r.gemeldModel !== r.model);
+    if(!r) return false;
+    if(typeof r.wijktAf==='boolean') return r.wijktAf;
+    return !!(r.gemeldModel && r.model && r.gemeldModel !== r.model);
   }
 
   // AC-4/AC-5 - een vangnet dat zwijgt laat een fout maanden doorlopen. Daarom
