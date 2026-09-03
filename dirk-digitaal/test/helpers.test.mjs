@@ -106,6 +106,9 @@ import {
   factuurPdf,
   pdfTekst,
   betaalmethodeNaam,
+  aankoopMail,
+  htmlVeilig,
+  mailKanUit,
   geldigeBronUrl,
   schoneBron,
   CreditsDO,
@@ -3475,4 +3478,156 @@ test("de betaalmethode staat op de factuur zoals mensen hem kennen", () => {
   const tekst = Buffer.from(factuurPdf(f)).toString("latin1");
   assert.match(tekst, /via iDEAL/);
   assert.doesNotMatch(tekst, /via ideal/);
+});
+
+
+// -- DIR-96 - de aankoopbevestiging -----------------------------------------
+
+test("de mail is kort, in de jij-vorm, en noemt wat er moet staan (AC-2)", () => {
+  const f = maakFactuurGegevens({ nummer: "2026-0001", datum: 1, bedragCent: 1210,
+    btwCent: 210, credits: 1000, klant: KOPER });
+  const brief = aankoopMail(f, 1200, "https://dirkdigitaal.nl");
+  assert.match(brief.onderwerp, /2026-0001/);
+  assert.match(brief.tekst, /1000 credits/);
+  assert.match(brief.tekst, /EUR 12,10/);
+  assert.match(brief.tekst, /EUR 2,10 btw/);
+  assert.match(brief.tekst, /saldo staat nu op 1200 credits/);
+  assert.match(brief.tekst, /https:\/\/dirkdigitaal\.nl\/dashboard/);
+  // Jij-vorm, geen u-vorm.
+  assert.doesNotMatch(brief.tekst, /\bU\b|\buw\b/);
+  // En kort: dit is een bevestiging, geen brochure.
+  assert.ok(brief.tekst.split("\n").length <= 12, "te lang: " + brief.tekst.split("\n").length + " regels");
+});
+
+test("een onbekend saldo laat die regel gewoon weg (AC-2)", () => {
+  const f = maakFactuurGegevens({ nummer: "2026-0002", datum: 1, bedragCent: 1210,
+    btwCent: 210, credits: 1000, klant: KOPER });
+  const brief = aankoopMail(f, null, "https://dirkdigitaal.nl");
+  assert.doesNotMatch(brief.tekst, /saldo staat nu/);
+  // Maar er komt geen gat en geen "null" in de mail.
+  assert.doesNotMatch(brief.tekst, /null|undefined/);
+  assert.doesNotMatch(brief.tekst, /\n\n\n/);
+});
+
+test("tekst in de HTML-versie wordt ontsnapt", () => {
+  assert.equal(htmlVeilig('<b>Doe & Zn</b>'), "&lt;b&gt;Doe &amp; Zn&lt;/b&gt;");
+  assert.equal(htmlVeilig(null), "");
+  const f = maakFactuurGegevens({ nummer: "<script>", datum: 1, bedragCent: 1210,
+    btwCent: 210, credits: 1000, klant: KOPER });
+  const brief = aankoopMail(f, 1, "https://dirkdigitaal.nl");
+  assert.doesNotMatch(brief.html, /<script>/);
+});
+
+test("zonder binding staat mail uit en draait de rest door (AC-6)", () => {
+  assert.equal(mailKanUit({}), true);
+  assert.equal(mailKanUit({ EMAIL: {} }), true, "een binding zonder send telt niet");
+  assert.equal(mailKanUit({ EMAIL: { send: 1 } }), true);
+  assert.equal(mailKanUit({ EMAIL: { send: () => {} } }), false);
+  assert.equal(mailKanUit(null), true);
+});
+
+// -- DIR-96 - claimen, versturen, vastleggen --------------------------------
+
+async function claim(doo, betaalId) {
+  const r = await doo.fetch(new Request("https://do/credits/mailclaim", {
+    method: "POST", body: JSON.stringify({ betaalId }),
+  }));
+  return r.json();
+}
+async function klaar(doo, betaalId, gelukt, fout) {
+  const r = await doo.fetch(new Request("https://do/credits/mailklaar", {
+    method: "POST", body: JSON.stringify({ betaalId, gelukt, fout }),
+  }));
+  return r.json();
+}
+
+test("dezelfde betaling levert nooit twee mails op (AC-5)", async () => {
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 0, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  await boek(doo, betaling(1));
+
+  // Eerste webhook claimt en verstuurt.
+  const een = await claim(doo, "tr_1");
+  assert.equal(een.claim, true);
+  assert.equal(een.email, "klant@voorbeeld.nl");
+  assert.ok(een.factuur, "de factuur hoort mee te komen als bijlage");
+  await klaar(doo, "tr_1", true);
+
+  // Elke volgende melding krijgt geen claim meer.
+  const twee = await claim(doo, "tr_1");
+  assert.equal(twee.claim, false);
+  assert.equal(twee.reden, "al gemaild");
+  const drie = await claim(doo, "tr_1");
+  assert.equal(drie.claim, false);
+});
+
+test("twee gelijktijdige webhooks: maar een krijgt de claim (AC-5)", async () => {
+  // Het claimen is een SCHRIJFACTIE, niet een vraag. Was het alleen een vraag, dan
+  // kregen twee meldingen allebei ja en gingen er twee mails uit - en een verstuurde
+  // mail komt niet terug.
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 0, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  await boek(doo, betaling(1));
+
+  const een = await claim(doo, "tr_1");
+  const twee = await claim(doo, "tr_1");     // vóórdat de eerste klaar is
+  assert.equal(een.claim, true);
+  assert.equal(twee.claim, false);
+  assert.equal(twee.reden, "al bezig");
+});
+
+test("een mislukte verzending geeft de claim vrij (AC-4)", async () => {
+  // Zonder vrijgave zou een enkele storing betekenen dat deze klant zijn bevestiging
+  // nooit meer krijgt.
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 0, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  await boek(doo, betaling(1));
+
+  assert.equal((await claim(doo, "tr_1")).claim, true);
+  await klaar(doo, "tr_1", false, "mailserver deed niet open");
+
+  const opnieuw = await claim(doo, "tr_1");
+  assert.equal(opnieuw.claim, true, "na een mislukking hoort er opnieuw geprobeerd te worden");
+
+  // En de mislukking staat vastgelegd, zodat /admin hem laat zien.
+  const regel = opslag.data.get("p:tr_1");
+  assert.equal(regel.gemaild, false);
+  assert.match(regel.mailFout, /mailserver deed niet open/);
+  assert.equal(regel.mailPogingen, 1);
+});
+
+test("een mislukte mail draait de bijboeking en de factuur niet terug (AC-4)", async () => {
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 0, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  const uit = await boek(doo, betaling(1));
+  const nummer = uit.factuur.nummer;
+
+  await claim(doo, "tr_1");
+  await klaar(doo, "tr_1", false, "van alles mis");
+
+  assert.equal(opslag.data.get("s:klant@voorbeeld.nl").saldo, 1000, "de credits horen te blijven staan");
+  assert.ok(opslag.data.get("f:" + nummer), "de factuur hoort te blijven staan");
+  assert.equal(opslag.data.get("p:tr_1").geboekt, true);
+});
+
+test("een betaling zonder boeking wordt niet gemaild (AC-4)", async () => {
+  // Er zijn regels met een leeg adres: de niet-geboekte. Een mailpoging daarop zou
+  // falen op iets wat geen fout is en in /admin een storing neerzetten die niets
+  // betekent.
+  const opslag = nepDoOpslag({});
+  const doo = new CreditsDO({ storage: opslag });
+  await boek(doo, betaling(1, { status: "canceled" }));
+  const uit = await claim(doo, "tr_1");
+  assert.equal(uit.claim, false);
+  assert.equal(uit.reden, "niet geboekt");
+
+  const zonderAdres = await boek(doo, betaling(2, { email: "" }));
+  assert.equal(zonderAdres.factuur, null);
+  assert.equal((await claim(doo, "tr_2")).claim, false);
+});
+
+test("een onbekende betaling levert geen claim op", async () => {
+  const doo = new CreditsDO({ storage: nepDoOpslag({}) });
+  assert.equal((await claim(doo, "tr_bestaatniet")).claim, false);
+  assert.equal((await claim(doo, "")).claim, false);
 });

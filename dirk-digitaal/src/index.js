@@ -1412,6 +1412,9 @@ const BEDRIJF_STANDAARD = {
   telefoon: "0418 84 11 27",
   email: "info@dirkdoet.nl",
   iban: "",                    // nog niet aangeleverd; op een voldane factuur niet verplicht
+  // DIR-96 AC-3 - waar een antwoord op de aankoopmail heen gaat. Apart van `email`,
+  // want dat staat op de factuur en hoeft niet dezelfde bus te zijn.
+  antwoord: "info@dirkdoet.nl",
 };
 
 async function bedrijfGegevens(env) {
@@ -1435,6 +1438,7 @@ export function schoonBedrijf(ruw) {
     postcode: veld("postcode", 12), plaats: veld("plaats", 60),
     kvk: veld("kvk", 20), btw: veld("btw", 20),
     telefoon: veld("telefoon", 30), email: veld("email"), iban: veld("iban", 40),
+    antwoord: veld("antwoord"),
   };
 }
 
@@ -1520,7 +1524,13 @@ export function betaalmethodeNaam(code) {
   // schrijfwijze terug. Anders komt een methode die wij nog niet kennen als "riverty"
   // op een factuur te staan terwijl de aanbieder hem als Riverty schrijft - en een
   // factuur is na het uitgeven niet meer te wijzigen.
-  return BETAALMETHODE_NAAM[ruw.toLowerCase()] || ruw;
+  // hasOwnProperty, niet de gewone opzoeking: die kijkt ook naar wat een object erft,
+  // en dan zou betaalmethodeNaam("constructor") de broncode van Object teruggeven. Op
+  // dit moment onbereikbaar omdat de methode uit Mollie komt, maar dan zit de
+  // veiligheid bij de aanroeper in plaats van hier. Zelfde vorm als modelPrijsBekend.
+  const kleine = ruw.toLowerCase();
+  return Object.prototype.hasOwnProperty.call(BETAALMETHODE_NAAM, kleine)
+    ? BETAALMETHODE_NAAM[kleine] : ruw;
 }
 
 // Een bedrag in centen als "1.234,56". Zonder muntteken; dat zet de opmaak erbij.
@@ -1662,6 +1672,98 @@ function pdfBestand(inhoud) {
 }
 
 // ============================================================================
+// DIR-96 - DE AANKOOPBEVESTIGING
+// ============================================================================
+// Dit is het eerste in deze tool dat iets naar buiten stuurt, en een verstuurde mail
+// is niet terug te halen. Vandaar dat het versturen precies zo werkt als de
+// reservering van DIR-100: eerst CLAIMEN met een schrijfactie, dan pas versturen, en
+// daarna vastleggen of het gelukt is.
+//
+// Waarom niet gewoon een vlag naast `geboekt`? Omdat versturen een netwerkaanroep is
+// en dus niet in de Durable Object kan staan - tussen het lezen en schrijven van het
+// saldo mag geen niet-storage await zitten. De DO claimt, de Worker verstuurt, de DO
+// legt vast. Precies daartussen gaat de input gate open, dus als de claim zelf geen
+// schrijfactie was, konden twee gelijktijdige webhooks allebei claimen en allebei
+// mailen.
+//
+// Mislukt het versturen, dan wordt de claim WEER VRIJGEGEVEN. Zonder dat zou een
+// enkele storing betekenen dat die klant zijn bevestiging nooit meer krijgt.
+
+const MAIL_VAN = "facturen@dirkdigitaal.nl";     // moet op het eigen domein staan (AC-3)
+const MAIL_VAN_NAAM = "Dirk Digitaal";
+// Hoe lang een claim geldig blijft. Lang genoeg voor een trage mailserver, kort genoeg
+// dat een afgebroken poging niet dagenlang de weg blokkeert.
+const MAIL_CLAIM_TTL_MS = 2 * 60 * 1000;
+
+// AC-2 - kort, Nederlands, jij-vorm. De tekst staat hier en niet in /admin (NG-2).
+export function aankoopMail(factuur, saldo, basisUrl) {
+  const f = factuur || {};
+  const credits = Math.max(0, Math.round(Number(f.credits) || 0));
+  const dashboard = String(basisUrl || "https://dirkdigitaal.nl") + "/dashboard";
+  const regels = [
+    "Je hebt " + credits + " credits gekocht bij Dirk Digitaal.",
+    "",
+    "Wat je betaalde: EUR " + centenTekst(f.totaalCent) + ", waarvan EUR "
+      + centenTekst(f.btwCent) + " btw.",
+    typeof saldo === "number" ? ("Je saldo staat nu op " + saldo + " credits.") : "",
+    "",
+    "De factuur zit als bijlage bij deze mail en staat ook in je dashboard:",
+    dashboard,
+    "",
+    "Vragen? Antwoord gewoon op deze mail.",
+  ].filter((r, i, a) => !(r === "" && a[i - 1] === ""));
+  return {
+    onderwerp: "Je credits staan klaar - factuur " + (f.nummer || ""),
+    tekst: regels.join("\n"),
+    html: "<p>" + regels.map(htmlVeilig).join("<br>").replace(/(<br>){2,}/g, "</p><p>") + "</p>",
+  };
+}
+
+// Alles wat in de HTML-versie komt is tekst, geen opmaak. Zonder dit zou een
+// bedrijfsnaam met een punthaak erin de mail stukmaken.
+export function htmlVeilig(tekst) {
+  return String(tekst == null ? "" : tekst)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// AC-6 - kan er uberhaupt gemaild worden? Zonder binding blijft de rest gewoon draaien
+// en zegt /admin dat mail uit staat.
+export function mailKanUit(env) {
+  return !(env && env.EMAIL && typeof env.EMAIL.send === "function");
+}
+
+// De verzending zelf. Geeft { gelukt } of { fout }. Gooit nooit: een mailstoring mag
+// een betaling niet raken (AC-4).
+async function verstuurMail(env, aan, onderwerp, tekst, html, bijlage, antwoordAdres) {
+  if (mailKanUit(env)) return { fout: "mail staat uit" };
+  try {
+    const bericht = {
+      to: aan,
+      from: { email: MAIL_VAN, name: MAIL_VAN_NAAM },
+      subject: onderwerp,
+      text: tekst,
+      html,
+    };
+    if (antwoordAdres) bericht.replyTo = antwoordAdres;
+    if (bijlage) {
+      bericht.attachments = [{
+        content: bijlage.inhoud,
+        filename: bijlage.naam,
+        type: bijlage.type || "application/pdf",
+        disposition: "attachment",
+      }];
+    }
+    await env.EMAIL.send(bericht);
+    return { gelukt: true };
+  } catch (e) {
+    // De melding van de mailserver is precies wat Dirk nodig heeft om te zien wat er
+    // scheelt; hem inslikken maakt een storing onvindbaar.
+    return { fout: String((e && e.message) || e || "onbekende fout").slice(0, 200) };
+  }
+}
+
+// ============================================================================
 // DIR-94 - CREDITS KOPEN
 // ============================================================================
 // De verkoopprijs ligt vast: 1 credit is EUR 0,01. Dat is met opzet losgekoppeld van
@@ -1773,6 +1875,41 @@ export function leesMollieBetaling(betaling) {
     ref: String((b.metadata && b.metadata.ref) || ""),
     bruikbaar: Boolean(typeof b.id === "string" && b.id && typeof b.status === "string" && b.status),
   };
+}
+
+// DIR-96 - claimen, versturen, vastleggen. Geeft terug wat er gebeurd is, zodat een
+// test het kan nalopen; de aanroeper hoeft er niets mee.
+//
+// Gooit nooit. Een mailstoring mag de betaling niet raken (AC-4): de credits staan er
+// al op en de factuur staat klaar voordat dit begint.
+async function mailAankoop(env, betaalId, basisUrl) {
+  if (mailKanUit(env)) return { verstuurd: false, reden: "mail staat uit" };
+  let claim = null;
+  try {
+    const r = await creditsStub(env).fetch("https://do/credits/mailclaim", {
+      method: "POST", body: JSON.stringify({ betaalId }),
+    });
+    claim = await r.json();
+  } catch (e) { return { verstuurd: false, reden: "kon de claim niet leggen" }; }
+  if (!claim || !claim.claim) return { verstuurd: false, reden: (claim && claim.reden) || "geen claim" };
+
+  const bedrijf = await bedrijfGegevens(env);
+  const brief = aankoopMail(claim.factuur, claim.saldo, basisUrl);
+  const bijlage = claim.factuur
+    ? { inhoud: factuurPdf(claim.factuur).buffer, naam: "factuur-" + claim.factuur.nummer + ".pdf" }
+    : null;
+  const uit = await verstuurMail(env, claim.email, brief.onderwerp, brief.tekst, brief.html,
+    bijlage, bedrijf.antwoord || bedrijf.email);
+
+  try {
+    await creditsStub(env).fetch("https://do/credits/mailklaar", {
+      method: "POST",
+      body: JSON.stringify({ betaalId, gelukt: uit.gelukt === true, fout: uit.fout || "" }),
+    });
+  } catch (e) { /* de claim vervalt vanzelf; dan probeert een volgende melding opnieuw */ }
+  return uit.gelukt === true
+    ? { verstuurd: true, aan: claim.email }
+    : { verstuurd: false, reden: uit.fout };
 }
 
 // AC-9 — startsaldo, koers en marge zijn instelbaar in /admin, zonder deploy.
@@ -3633,6 +3770,13 @@ export class CreditsDO {
         methode: String(inv.methode || (bestaand && bestaand.methode) || ""),
         factuur: factuur ? factuur.nummer : ((bestaand && bestaand.factuur) || ""),
         geboekt: alGeboekt || nuGeboekt,
+        // DIR-96 - `gemaild` staat NAAST `geboekt` en is er niet mee te verwarren:
+        // geboekt gaat over geld, gemaild over een bericht dat niet terug te halen is.
+        gemaild: (bestaand && bestaand.gemaild) === true,
+        gemaildTijd: (bestaand && bestaand.gemaildTijd) || 0,
+        mailClaimTot: (bestaand && bestaand.mailClaimTot) || 0,
+        mailFout: (bestaand && bestaand.mailFout) || "",
+        mailPogingen: (bestaand && bestaand.mailPogingen) || 0,
         saldoNa: saldo,
         tijd: (bestaand && bestaand.tijd) || now,
         bijgewerkt: now,
@@ -3640,6 +3784,52 @@ export class CreditsDO {
       await this.state.storage.put(sleutel, regel);
       if (regel.ref) await this.state.storage.put("q:" + regel.ref, betaalId);
       return json({ saldo, geboekt: regel.geboekt, nuGeboekt, betaling: regel, factuur });
+    }
+
+    // DIR-96 AC-5 - de mail claimen. Dit is een SCHRIJFACTIE en geen leesactie, en dat
+    // is het hele punt: tussen claimen en versturen gaat de input gate open, dus twee
+    // gelijktijdige webhooks zouden allebei "mag ik" kunnen vragen en allebei ja
+    // krijgen als het antwoord niet meteen wordt vastgelegd. Dezelfde vorm als de
+    // reservering van DIR-100, inclusief vervaltijd.
+    if (url.pathname === "/credits/mailclaim") {
+      const betaalId = String(inv.betaalId || "");
+      if (!betaalId) return json({ claim: false, reden: "geen betaal-id" });
+      const sleutel = "p:" + betaalId;
+      const regel = await this.state.storage.get(sleutel);
+      if (!regel) return json({ claim: false, reden: "onbekende betaling" });
+      // AC-7 van de reviewer: alleen mailen waar ook geboekt is. Zonder adres is er
+      // niets om naar te mailen, en een mislukking daarop zou een storing suggereren
+      // die er niet is.
+      if (!regel.geboekt || !regel.email) return json({ claim: false, reden: "niet geboekt" });
+      if (regel.gemaild) return json({ claim: false, reden: "al gemaild" });
+      if (Number(regel.mailClaimTot) > now) return json({ claim: false, reden: "al bezig" });
+
+      regel.mailClaimTot = now + MAIL_CLAIM_TTL_MS;
+      await this.state.storage.put(sleutel, regel);
+      const factuur = regel.factuur ? await this.state.storage.get("f:" + regel.factuur) : null;
+      const rec = await this.saldoVan(regel.email);
+      return json({ claim: true, email: regel.email, factuur, saldo: rec ? rec.saldo : null });
+    }
+
+    // Na het versturen: vastleggen hoe het afliep. Lukte het niet, dan gaat de claim
+    // WEER OPEN, anders zou een enkele storing betekenen dat deze klant zijn
+    // bevestiging nooit meer krijgt.
+    if (url.pathname === "/credits/mailklaar") {
+      const betaalId = String(inv.betaalId || "");
+      const sleutel = "p:" + betaalId;
+      const regel = await this.state.storage.get(sleutel);
+      if (!regel) return json({ ok: false });
+      regel.mailClaimTot = 0;
+      if (inv.gelukt === true) {
+        regel.gemaild = true;
+        regel.gemaildTijd = now;
+        regel.mailFout = "";
+      } else {
+        regel.mailFout = String(inv.fout || "onbekende fout").slice(0, 200);
+        regel.mailPogingen = Math.max(0, Math.round(Number(regel.mailPogingen) || 0)) + 1;
+      }
+      await this.state.storage.put(sleutel, regel);
+      return json({ ok: true, gemaild: regel.gemaild === true });
     }
 
     // DIR-95 - de facturen van EEN klant (AC-7), of alle facturen (AC-8). Ze worden
@@ -6993,7 +7183,18 @@ const ADMIN_HTML = `<!doctype html>
         <div class="veld"><label for="bEmail">E-mailadres</label><input id="bEmail" type="text"></div>
         <div class="veld"><label for="bIban">IBAN</label><input id="bIban" type="text">
           <span class="hint">Mag leeg blijven: een factuur die al voldaan is hoeft geen rekeningnummer te noemen.</span></div>
+        <div class="veld"><label for="bAntwoord">Antwoordadres voor de aankoopmail</label><input id="bAntwoord" type="text">
+          <span class="hint">Hier komt het terecht als een klant op de bevestigingsmail antwoordt.</span></div>
         <div class="knoppen"><button id="bBewaar">Bedrijfsgegevens bewaren</button><span class="melding" id="bMelding"></span></div>
+      </div>
+      <h2>Aankoopmail</h2>
+      <p class="modelmelding" id="mailWaarschuwing"></p>
+      <div class="balk">
+        <p class="muted">Na elke geslaagde betaling gaat er een bevestiging naar de klant, met de
+          factuur als bijlage. Stuur eerst een testmail naar jezelf om te controleren of het aankomt
+          en niet in de spam belandt.</p>
+        <div class="veld"><label for="mTest">Testmail sturen naar</label><input id="mTest" type="text" placeholder="jouw@adres.nl"></div>
+        <div class="knoppen"><button id="mVerstuur">Testmail sturen</button><span class="melding" id="mMelding"></span></div>
       </div>
       <h2>Facturen</h2>
       <div id="cFacturen"></div>
@@ -7728,11 +7929,21 @@ const ADMIN_HTML = `<!doctype html>
   // er geen geldige factuur gemaakt worden; dat moet je zien voordat er iemand koopt.
   var BEDRIJFVELDEN=[['bNaam','naam'],['bAdres','adres'],['bPostcode','postcode'],
     ['bPlaats','plaats'],['bKvk','kvk'],['bBtw','btw'],['bTelefoon','telefoon'],
-    ['bEmail','email'],['bIban','iban']];
+    ['bEmail','email'],['bIban','iban'],['bAntwoord','antwoord']];
   function laadBedrijf(){
     api('GET','/api/admin/bedrijf').then(function(res){
       if(!res.ok) return;
       toonBedrijf(res.j.bedrijf||{}, res.j.ontbreekt||[]);
+      var w=document.getElementById('mailWaarschuwing');
+      if(w){
+        if(res.j.mailUit){
+          w.textContent='Mail staat uit: deze Worker heeft geen EMAIL-binding. Kopen, facturen '
+            + 'en de rest van de tool werken gewoon; er gaat alleen geen bevestiging de deur uit.';
+          w.className='modelmelding aan';
+        } else { w.textContent=''; w.className='modelmelding'; }
+      }
+      var t=document.getElementById('mTest');
+      if(t && !t.value) t.value=(res.j.bedrijf&&(res.j.bedrijf.antwoord||res.j.bedrijf.email))||'';
     });
   }
   function toonBedrijf(bedrijf, ontbreekt){
@@ -7801,6 +8012,7 @@ const ADMIN_HTML = `<!doctype html>
         sp.textContent=tijdTekst(b.bijgewerkt||b.tijd)
           + ' \u2014 ' + (b.methode||'nog geen methode gekozen')
           + ' \u2014 ' + (b.geboekt ? ((b.credits||0)+' credits bijgeboekt') : 'niets bijgeboekt')
+          + ' \u2014 ' + mailStand(b)
           + ' \u2014 ' + (b.betaalId||'');
         rij.appendChild(sp);
         // Betaald maar niets bijgeboekt is geld binnen zonder tegoed eruit. Dat mag
@@ -7814,6 +8026,15 @@ const ADMIN_HTML = `<!doctype html>
         doel.appendChild(rij);
       });
     });
+  }
+  // DIR-96 AC-4 - of de bevestiging de deur uit is. Alleen bij een geboekte betaling
+  // is er iets te mailen; bij de rest zou "niet verstuurd" een storing suggereren die
+  // er niet is.
+  function mailStand(b){
+    if(!b.geboekt) return 'geen mail nodig';
+    if(b.gemaild) return 'mail verstuurd';
+    if(b.mailFout) return 'MAIL NIET GELUKT: ' + b.mailFout;
+    return 'mail nog niet verstuurd';
   }
   // De statusnamen van Mollie in gewone woorden.
   var BETAALSTATUS={ open:'nog niet betaald', pending:'wordt verwerkt', authorized:'goedgekeurd',
@@ -7972,6 +8193,18 @@ const ADMIN_HTML = `<!doctype html>
       meld(''); document.getElementById('cMelding').textContent='Bewaard.'; laadCredits();
     });
   }
+  // AC-7 - de testmail. Met bijlage, want een mail zonder bijlage toetst juist het
+  // deel dat niet stuk kan.
+  document.getElementById('mVerstuur').addEventListener('click',function(){
+    var knop=this, melding=document.getElementById('mMelding');
+    melding.textContent='Bezig met versturen...'; knop.disabled=true;
+    api('POST','/api/admin/testmail', { aan: document.getElementById('mTest').value }).then(function(res){
+      knop.disabled=false;
+      melding.textContent = res.ok
+        ? ('Verstuurd naar ' + res.j.aan + '. Kijk ook even in je spammap.')
+        : ((res.j&&res.j.error)||'Versturen mislukt.');
+    });
+  });
   document.getElementById('bBewaar').addEventListener('click',function(){
     var body={};
     BEDRIJFVELDEN.forEach(function(paar){ body[paar[1]]=document.getElementById(paar[0]).value; });
@@ -9231,6 +9464,11 @@ export default {
           }),
         });
       } catch (e) { return new Response("later", { status: 503 }); }
+
+      // AC-1 - de bevestiging gaat MEE NA het antwoord, niet ervoor. Een trage
+      // mailserver zou de webhook anders boven de tijdslimiet van Mollie duwen en een
+      // nieuwe poging uitlokken. Zelfde plek als het verrekenen van credits.
+      if (ctx && ctx.waitUntil) ctx.waitUntil(mailAankoop(env, bet.betaalId, origin));
       return new Response("ok", { status: 200 });
     }
 
@@ -9317,12 +9555,45 @@ export default {
       });
     }
 
+    // DIR-96 AC-7 - een testmail naar Dirk zelf, zodat hij de instellingen kan
+    // controleren zonder een echte betaling te doen. MET bijlage, want anders toetst
+    // hij juist het deel dat niet stuk kan.
+    if (path === "/api/admin/testmail" && request.method === "POST") {
+      if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
+      if (mailKanUit(env)) {
+        return json({ error: "Mail staat uit: er is geen EMAIL-binding op deze Worker." }, 503);
+      }
+      const bedrijf = await bedrijfGegevens(env);
+      let b = {}; try { b = await request.json(); } catch (e) { /* leeg */ }
+      const aan = String((b && b.aan) || bedrijf.antwoord || bedrijf.email || "").trim();
+      if (!aan) return json({ error: "Geen adres om naar te sturen." }, 400);
+
+      // Een nagemaakte factuur met dezelfde vorm als een echte, zodat de bijlage
+      // hetzelfde pad aflegt.
+      const proef = maakFactuurGegevens({
+        nummer: "PROEF-0001", datum: Date.now(), betaaldatum: Date.now(), email: aan,
+        betaalId: "proef", methode: "ideal", bedragCent: 1210, btwCent: 210, credits: 1000,
+        bedrijf, klant: { naam: bedrijf.naam, adres: bedrijf.adres, postcode: bedrijf.postcode,
+          plaats: bedrijf.plaats, btw: bedrijf.btw },
+      });
+      const brief = aankoopMail(proef, 1000, origin);
+      const uit = await verstuurMail(env, aan, "[TEST] " + brief.onderwerp,
+        "Dit is een testmail van Dirk Digitaal. Er is niets gekocht.\n\n" + brief.tekst,
+        "<p>Dit is een testmail van Dirk Digitaal. Er is niets gekocht.</p>" + brief.html,
+        { inhoud: factuurPdf(proef).buffer, naam: "proeffactuur.pdf" },
+        bedrijf.antwoord || bedrijf.email);
+      if (uit.fout) return json({ error: "Versturen mislukt: " + uit.fout }, 502);
+      return json({ ok: true, aan });
+    }
+
     // AC-1/AC-2 - de bedrijfsgegevens van Dirk.
     if (path === "/api/admin/bedrijf") {
       if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
       if (request.method === "GET") {
         const bedrijf = await bedrijfGegevens(env);
-        return json({ bedrijf, ontbreekt: bedrijfOntbreekt(bedrijf) });
+        // AC-6 - staat mail uit, dan hoort dat in /admin te staan en niet stilzwijgend
+        // te gebeuren.
+        return json({ bedrijf, ontbreekt: bedrijfOntbreekt(bedrijf), mailUit: mailKanUit(env) });
       }
       if (request.method === "POST") {
         if (!env.CLIENTS) return json({ error: "KV (CLIENTS) is nog niet geconfigureerd." }, 500);

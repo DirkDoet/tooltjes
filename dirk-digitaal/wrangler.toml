@@ -52,6 +52,21 @@ id = "d9d3026f28f24ab38d20080d757fd981"
 #   wrangler secret put ADMIN_PASSWORD        # admin-beheer klanten
 #   wrangler secret put MOLLIE_API_KEY         # credits kopen (DIR-94); test_ nu, live_ na verificatie
 
+# DIR-96 - de aankoopbevestiging mailen. Cloudflare Email Sending werkt met een
+# binding en niet met een API-sleutel, dus hier en niet als secret.
+#
+# LET OP, dit is niet aan de code te zien: mailen naar GEVERIFIEERDE bestemmingen in
+# het eigen account is gratis op elk plan, maar mailen naar een willekeurig adres -
+# dus naar een klant - vraagt het Workers Paid-plan. Staat het account op gratis, dan
+# slaagt de testmail naar Dirk en faalt elke aankoopmail. De tool blijft dan gewoon
+# draaien en /admin laat zien dat de mail niet verstuurd is.
+#
+# Het domein moet eenmalig aangemeld worden met:
+#   wrangler email sending enable dirkdigitaal.nl
+# Dat zet de SPF- en DKIM-records er zelf bij, want het domein staat al bij Cloudflare.
+[[send_email]]
+name = "EMAIL"
+
 # Eigen adres (DIR-91). Nodig voor Google's OAuth-branding: die eist een
 # geautoriseerd domein dat aantoonbaar van ons is, en workers.dev is van
 # Cloudflare. Cloudflare maakt en beheert het DNS-record hiervoor zelf.
