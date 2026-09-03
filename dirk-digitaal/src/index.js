@@ -5468,6 +5468,10 @@ const OFFICE_HTML = `<!doctype html>
     <p class="zm-tekst zm-klein" id="zm-klant-credits"></p>
     <button class="zm-knop" id="zm-dashboard" type="button">Mijn dashboard</button>
     <button class="zm-knop zm-sub" id="zm-klant-uitlog" type="button">Uitloggen</button>
+    <!-- DIR-112 should-fix (meegenomen in DIR-98): de Beheer-ingang stond alleen in
+         het gastblok, en dat verdwijnt zodra er een klantsessie is. Wie eerst als
+         klant inlogde kon dus niet meer bij het beheer-inlogscherm komen. -->
+    <button class="zm-knop zm-sub verborgen" id="zm-open-inlog-klant" type="button">Beheer</button>
   </div>
   <form class="zm-blok verborgen" id="zm-inlog" autocomplete="on">
     <h2 class="zm-kop">Beheer</h2>
@@ -6849,6 +6853,10 @@ const OFFICE_HTML = `<!doctype html>
     toon(form, false);
     toon(klantBlok, isKlant);
     toon(admin, isAdmin);
+    // De Beheer-ingang in het klantblok: alleen zolang er geen beheersessie is.
+    // Wie al beheerder is heeft het adminblok en hoeft nergens meer heen.
+    var beheerKlant=document.getElementById('zm-open-inlog-klant');
+    if(beheerKlant) toon(beheerKlant, isKlant && !isAdmin);
     melding(fout,''); melding(klantFout,'');
   }
   function toonGast(){ toonStand(false,false); }
@@ -6918,10 +6926,15 @@ const OFFICE_HTML = `<!doctype html>
     function na(){ haalStatus(); if(window.ddToegangVernieuwen) window.ddToegangVernieuwen(); }
     api('POST','/api/klant/logout').then(na).catch(na);
   });
-  document.getElementById('zm-open-inlog').addEventListener('click',function(){
+  function openBeheerInlog(){
     toon(gast,false); toon(form,true); melding(fout,''); pw.focus();
-  });
-  document.getElementById('zm-annuleer').addEventListener('click',function(){ pw.value=''; toonGast(); });
+  }
+  document.getElementById('zm-open-inlog').addEventListener('click',openBeheerInlog);
+  var beheerKlantKnop=document.getElementById('zm-open-inlog-klant');
+  if(beheerKlantKnop) beheerKlantKnop.addEventListener('click',openBeheerInlog);
+  // Annuleren vraagt opnieuw wie er is: een klant die het beheerformulier dichtdoet
+  // hoort zijn klantblok terug te krijgen, niet het gastblok.
+  document.getElementById('zm-annuleer').addEventListener('click',function(){ pw.value=''; haalStatus(); });
   form.addEventListener('submit',function(e){
     e.preventDefault(); melding(fout,'');
     api('POST','/api/admin/login',{ password: pw.value }).then(function(res){
