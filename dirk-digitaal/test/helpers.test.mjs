@@ -89,10 +89,14 @@ import {
   bronnenMeter,
   geldigeBronUrl,
   schoneBron,
+  CreditsDO,
   tekstUitHtml,
   bronnenSysteemTekst,
   bouwSysteem,
   leesBegrensd,
+  bestandSoort,
+  tekstUitDocumentXml,
+  tekstUitDocx,
   samenAgent,
   leesBijlagen,
   bijlageBlokken,
@@ -2270,4 +2274,228 @@ test("leesBegrensd: leest bytes, niet tekens", async () => {
   assert.equal(uit.teGroot, true);
   const past = await leesBegrensd(new Response("€€"), 6);
   assert.equal(past.tekst, "€€");
+});
+
+
+// ── DIR-107 · Word en PDF als kennisbron ────────────────────────────────────
+
+// Een echte .docx in elkaar zetten: een zip met word/document.xml erin. Zo test de
+// docx-lezer op een bestand zoals Word het maakt, en niet op een nagebouwd geval.
+async function maakDocx(xml, opties) {
+  const o = opties || {};
+  const naam = new TextEncoder().encode(o.naam || "word/document.xml");
+  const ruw = new TextEncoder().encode(xml);
+  let data = ruw;
+  let methode = 0;
+  if (o.deflate !== false) {
+    const stroom = new Blob([ruw]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+    data = new Uint8Array(await new Response(stroom).arrayBuffer());
+    methode = 8;
+  }
+  const lokaal = 30 + naam.length + data.length;
+  const totaal = lokaal + 46 + naam.length + 22;
+  const uit = new Uint8Array(totaal);
+  const dv = new DataView(uit.buffer);
+  let o1 = 0;
+  // lokale kop
+  dv.setUint32(o1, 0x04034b50, true);
+  dv.setUint16(o1 + 8, methode, true);
+  dv.setUint32(o1 + 18, data.length, true);
+  dv.setUint32(o1 + 22, ruw.length, true);
+  dv.setUint16(o1 + 26, naam.length, true);
+  uit.set(naam, o1 + 30);
+  uit.set(data, o1 + 30 + naam.length);
+  // centrale index
+  const c = lokaal;
+  dv.setUint32(c, 0x02014b50, true);
+  dv.setUint16(c + 10, methode, true);
+  dv.setUint32(c + 20, data.length, true);
+  dv.setUint32(c + 24, ruw.length, true);
+  dv.setUint16(c + 28, naam.length, true);
+  dv.setUint32(c + 42, 0, true);
+  uit.set(naam, c + 46);
+  // afsluiter
+  const e = c + 46 + naam.length;
+  dv.setUint32(e, 0x06054b50, true);
+  dv.setUint16(e + 8, 1, true);
+  dv.setUint16(e + 10, 1, true);
+  dv.setUint32(e + 12, 46 + naam.length, true);
+  dv.setUint32(e + 16, c, true);
+  return uit;
+}
+
+const DOCX_XML = '<?xml version="1.0"?><w:document><w:body>'
+  + '<w:p><w:r><w:t>Dirk Doet hanteert een minimumtarief van 750 euro per maand.</w:t></w:r></w:p>'
+  + '<w:p><w:r><w:t>Tweede alinea met een tab</w:t></w:r><w:r><w:tab/><w:t>erin.</w:t></w:r></w:p>'
+  + '</w:body></w:document>';
+
+test("tekstUitDocx: de tekst komt uit een echte, ingepakte .docx (AC-2)", async () => {
+  const uit = await tekstUitDocx(await maakDocx(DOCX_XML));
+  assert.equal(uit.fout, undefined);
+  assert.match(uit.tekst, /Dirk Doet hanteert een minimumtarief van 750 euro per maand\./);
+  assert.match(uit.tekst, /Tweede alinea met een tab\terin\./);
+  // Alinea's worden regels, de XML zelf blijft nergens staan.
+  assert.doesNotMatch(uit.tekst, /<w:/);
+  assert.equal(uit.tekst.split("\n").length, 2);
+});
+
+test("tekstUitDocx: werkt ook als het bestand niet is ingepakt", async () => {
+  const uit = await tekstUitDocx(await maakDocx(DOCX_XML, { deflate: false }));
+  assert.match(uit.tekst, /750 euro/);
+});
+
+test("tekstUitDocx: onderscheidt 'geen Word-bestand' van 'geen tekst erin' (AC-6)", async () => {
+  // Geen zip.
+  const rommel = await tekstUitDocx(new TextEncoder().encode("dit is gewoon tekst, geen zip"));
+  assert.match(rommel.fout, /geen leesbaar Word-bestand/);
+  assert.equal(rommel.tekst, undefined);
+  // Wel een zip, maar zonder word/document.xml.
+  const anders = await tekstUitDocx(await maakDocx(DOCX_XML, { naam: "xl/workbook.xml" }));
+  assert.match(anders.fout, /geen leesbaar Word-bestand/);
+  // Wel een document, maar leeg.
+  const leeg = await tekstUitDocx(await maakDocx('<w:document><w:body></w:body></w:document>'));
+  assert.match(leeg.fout, /geen tekst uit dit document/);
+  assert.notEqual(leeg.fout, rommel.fout, "de twee meldingen horen te verschillen");
+});
+
+test("tekstUitDocumentXml: alinea's, tabs en entiteiten", () => {
+  assert.equal(tekstUitDocumentXml("<w:p><w:t>een</w:t></w:p><w:p><w:t>twee</w:t></w:p>"), "een\ntwee");
+  assert.equal(tekstUitDocumentXml("<w:t>a</w:t><w:tab/><w:t>b</w:t>"), "a\tb");
+  assert.equal(tekstUitDocumentXml("<w:t>Jan &amp; Piet</w:t>"), "Jan & Piet");
+  // &amp; wordt als laatste vertaald, anders wordt dit alsnog een punthaak.
+  assert.equal(tekstUitDocumentXml("<w:t>&amp;lt;niet een tag&amp;gt;</w:t>"), "&lt;niet een tag&gt;");
+  assert.equal(tekstUitDocumentXml(""), "");
+  assert.equal(tekstUitDocumentXml(null), "");
+});
+
+test("bestandSoort: alleen .docx en .pdf (AC-1/NG-2)", () => {
+  assert.equal(bestandSoort("werkwijze.docx"), "docx");
+  assert.equal(bestandSoort("Werkwijze.DOCX"), "docx");
+  assert.equal(bestandSoort("rapport.pdf"), "pdf");
+  assert.equal(bestandSoort("rapport.PDF"), "pdf");
+  // Het oude Word-formaat, spreadsheets en presentaties horen er niet bij.
+  assert.equal(bestandSoort("oud.doc"), "");
+  assert.equal(bestandSoort("cijfers.xlsx"), "");
+  assert.equal(bestandSoort("praatje.pptx"), "");
+  assert.equal(bestandSoort("plaatje.png"), "");
+  assert.equal(bestandSoort("notities.txt"), "");
+  assert.equal(bestandSoort(""), "");
+  assert.equal(bestandSoort(null), "");
+});
+
+test("de tekenlimiet van DIR-99 geldt ook voor een omgezet document (AC-7)", () => {
+  // Een document dat 60.000 tekens oplevert past niet, ook niet in een lege agent.
+  const uitDocument = "x".repeat(60000);
+  assert.equal(bronPast([], uitDocument), false);
+  assert.equal(bronPast([], "x".repeat(50000)), true);
+  // En naast bestaande bronnen telt het gewoon mee.
+  assert.equal(bronPast([{ id: "a", tekst: "y".repeat(30000) }], "x".repeat(20001)), false);
+});
+
+// Een opslag die onthoudt wat erin geschreven is, zodat een test kan zien WELKE
+// sleutels een route aanraakt. list() geeft een Map terug, net als de echte.
+function nepDoOpslag(begin) {
+  const data = new Map(Object.entries(begin || {}));
+  const geschreven = [];
+  return {
+    geschreven, data,
+    async get(k) { return data.has(k) ? data.get(k) : undefined; },
+    async put(k, v) { geschreven.push(k); data.set(k, v); },
+    async delete(k) { data.delete(k); },
+    // prefix, end en limit doen er allemaal toe: het snoeien in CreditsDO begrenst
+    // zijn list() met `end` en `limit`, en een nabootsing die dat negeert wist regels
+    // die de echte opslag laat staan.
+    async list(opties) {
+      const o = opties || {};
+      const prefix = o.prefix || "";
+      const uit = new Map();
+      for (const k of [...data.keys()].sort()) {
+        if (!k.startsWith(prefix)) continue;
+        if (o.start && k < o.start) continue;
+        if (o.end && k >= o.end) continue;            // `end` is exclusief
+        uit.set(k, data.get(k));
+        if (o.limit && uit.size >= o.limit) break;
+      }
+      return uit;
+    },
+  };
+}
+
+const KOSTEN_BODY = {
+  agent: "conversie", model: "claude-sonnet-5", invoer: 4200, uitvoer: 180,
+  cacheLees: 0, cacheSchrijf: 0, credits: 12, reden: "omzetten van werkwijze.pdf",
+  maxRegels: 500, bewaardagen: 365,
+};
+
+test("route /credits/kosten schrijft geen enkel saldo (DIR-107 AC-8)", async () => {
+  // Dit is het punt waar het echt op staat. Niet: "een object dat ik zelf maak heeft
+  // saldoNa null", maar: de route zelf raakt geen saldo aan. Verhuist er ooit een
+  // saldoschrijving hierheen, dan valt deze test om.
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 100, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  const resp = await doo.fetch(new Request("https://do/credits/kosten", {
+    method: "POST", body: JSON.stringify(KOSTEN_BODY),
+  }));
+  assert.equal(resp.status, 200);
+
+  const saldoSleutels = opslag.geschreven.filter((k) => k.startsWith("s:"));
+  assert.deepEqual(saldoSleutels, [], "de kostenroute schreef een saldosleutel: " + saldoSleutels.join(", "));
+  assert.deepEqual(opslag.data.get("s:klant@voorbeeld.nl"), { saldo: 100, gemaakt: 1 });
+
+  // En de regel die er wél komt, hoort bij niemand.
+  const regels = [...opslag.data.values()].filter((v) => v && v.soort === "kosten");
+  assert.equal(regels.length, 1);
+  assert.equal(regels[0].email, "");
+  assert.equal(regels[0].saldoNa, null);
+  assert.equal(regels[0].agent, "conversie");
+  assert.equal(hoortBijGebruiker(regels[0], "klant@voorbeeld.nl"), false);
+});
+
+test("controle op die test: /credits/boek schrijft wél een saldo", async () => {
+  // Zonder deze test bewijst de vorige niets: als de nep-opslag geen schrijfacties
+  // zou zien, zou "geen saldosleutel geschreven" altijd slagen.
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 100, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  const resp = await doo.fetch(new Request("https://do/credits/boek", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "klant@voorbeeld.nl", agent: "gsc", model: "claude-sonnet-5",
+      invoer: 100, uitvoer: 10, credits: 7, maxRegels: 500, bewaardagen: 365,
+    }),
+  }));
+  assert.equal(resp.status, 200);
+  assert.ok(opslag.geschreven.some((k) => k.startsWith("s:")), "verwacht juist wél een saldoschrijving");
+  assert.equal(opslag.data.get("s:klant@voorbeeld.nl").saldo, 93);
+});
+
+test("route omzetten: te groot wordt geweigerd op de kop, vóór het inlezen (DIR-107 AC-9)", async () => {
+  const store = {};
+  const env = { ADMIN_PASSWORD: "geheim-voor-de-test", CLIENTS: nepKv(store) };
+  const ctx = { waitUntil() {} };
+  const login = await worker.fetch(new Request("https://dd.test/api/admin/login", {
+    method: "POST", body: JSON.stringify({ password: "geheim-voor-de-test" }),
+  }), env, ctx);
+  const cookie = String(login.headers.get("Set-Cookie") || "").split(";")[0];
+
+  // De body is vier bytes; de kop zegt 95 MB. Wordt er eerst ingelezen, dan is het
+  // antwoord "Er kwam geen bestand mee" of gewoon goed. Alleen als de kop vóór het
+  // inlezen wordt gelezen, kan hier 95 MB in de melding staan.
+  const resp = await worker.fetch(new Request("https://dd.test/api/admin/bronnen/omzetten?key=anton&naam=groot.pdf", {
+    method: "POST", headers: { Cookie: cookie, "content-length": "99999999" }, body: "kort",
+  }), env, ctx);
+  assert.equal(resp.status, 400);
+  const j = await resp.json();
+  assert.match(j.error, /Dit bestand is 95 MB en het maximum is 10 MB\./);
+});
+
+test("schoneBron: de herkomst van een omgezet bestand blijft staan (DIR-107 AC-4)", () => {
+  const b = schoneBron({ id: "1", titel: "Werkwijze", soort: "tekst", tekst: "iets", herkomst: " werkwijze.pdf " });
+  assert.equal(b.herkomst, "werkwijze.pdf");
+  // Zonder herkomst blijft het veld leeg; dat is een geplakte tekst.
+  assert.equal(schoneBron({ id: "1", titel: "t", soort: "tekst", tekst: "x" }).herkomst, "");
+  // Bij een URL zegt het adres al waar het vandaan komt; een meegegeven bestandsnaam
+  // zou daar een verzinsel zijn.
+  assert.equal(schoneBron({ id: "1", titel: "t", soort: "url", url: "https://a.nl", herkomst: "verzonnen.pdf" }).herkomst, "");
+  // Net als de titel wordt hij begrensd, zodat een lange naam de opslag niet oprekt.
+  assert.equal(schoneBron({ id: "1", titel: "t", soort: "tekst", tekst: "x", herkomst: "a".repeat(300) }).herkomst.length, 120);
 });
