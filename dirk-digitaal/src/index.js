@@ -597,6 +597,24 @@ async function huidigeKlant(request, env) {
   return { key: sessie.key, email: sessie.email, rec: rec || null };
 }
 
+// DIR-112 - wat /api/toegang teruggeeft, als losse functie zodat de vier combinaties
+// van wel of niet ingelogd zijn te toetsen zijn zonder er een verzoek voor op te tuigen.
+//
+// `soort` blijft erin staan voor wat er al op leunde, maar `beheerder` en `klant` zijn
+// vanaf nu de waarheid: `soort` kan er maar EEN noemen, en dat was precies de fout.
+export function toegangAntwoord(beheerder, klant, naam, credits) {
+  return {
+    chatten: !!(beheerder || klant),
+    soort: beheerder ? "admin" : (klant ? "klant" : null),
+    beheerder: !!beheerder,
+    klant: !!klant,
+    // Naam en saldo horen bij de klantsessie. Een beheerder zonder klantsessie heeft
+    // geen naam om te tonen en geen saldo dat van hem is.
+    naam: klant ? String(naam || "") : "",
+    credits: klant ? credits : null,
+  };
+}
+
 // ============================================================================
 // DIR-87 — GEBRUIKSREGISTRATIE
 // ============================================================================
@@ -1520,7 +1538,13 @@ export function betaalmethodeNaam(code) {
   // schrijfwijze terug. Anders komt een methode die wij nog niet kennen als "riverty"
   // op een factuur te staan terwijl de aanbieder hem als Riverty schrijft - en een
   // factuur is na het uitgeven niet meer te wijzigen.
-  return BETAALMETHODE_NAAM[ruw.toLowerCase()] || ruw;
+  //
+  // hasOwnProperty, niet de gewone opzoeking: die kijkt ook naar wat een object ERFT,
+  // en dan zou betaalmethodeNaam("constructor") de broncode van Object op de factuur
+  // zetten in plaats van het woord "constructor".
+  const kleine = ruw.toLowerCase();
+  return Object.prototype.hasOwnProperty.call(BETAALMETHODE_NAAM, kleine)
+    ? BETAALMETHODE_NAAM[kleine] : ruw;
 }
 
 // Een bedrag in centen als "1.234,56". Zonder muntteken; dat zet de opmaak erbij.
@@ -6719,8 +6743,18 @@ const OFFICE_HTML = `<!doctype html>
     for(var i=0;i<sel.options.length;i++) if(sel.options[i].value===id) return sel.options[i].textContent;
     return id;
   }
-  function toonGast(){ toon(gast,true); toon(form,false);
-    toon(klantBlok,false); toon(admin,false); melding(fout,''); melding(klantFout,''); }
+  // DIR-112 - de drie blokken sluiten elkaar NIET meer uit. De twee sessies hangen aan
+  // twee losse koekjes, dus wie beheerder is en klant, is allebei. Vullen en tonen zijn
+  // daarom uit elkaar gehaald: vulKlant en vulAdmin zetten de inhoud, toonStand zegt
+  // wat er zichtbaar is - en alleen daar staat nog welk blok weg moet.
+  function toonStand(isKlant, isAdmin){
+    toon(gast, !isKlant && !isAdmin);
+    toon(form, false);
+    toon(klantBlok, isKlant);
+    toon(admin, isAdmin);
+    melding(fout,''); melding(klantFout,'');
+  }
+  function toonGast(){ toonStand(false,false); }
   // DIR-102 - het saldoregeltje, apart zodat het na elk antwoord bijgewerkt kan
   // worden zonder de rest van het menu aan te raken.
   //
@@ -6733,43 +6767,44 @@ const OFFICE_HTML = `<!doctype html>
       ? ('Je hebt nog ' + credits + ' credits.')
       : 'Je credits zijn op — koop bij om verder te praten.';
   }
-  function toonKlant(naam, credits){
+  function vulKlant(naam, credits){
     klantNaam.textContent = naam || 'klant';
     // DIR-92: alleen het saldo, verder niets - een eigen dashboard komt later.
     klantCredits.textContent = '';
     toonKlantCredits(credits);
-    toon(gast,false); toon(form,false); toon(admin,false); toon(klantBlok,true);
-    melding(klantFout,'');
   }
   // De chat roept dit aan zodra een antwoord het nieuwe saldo meestuurt.
   window.ddMenuSaldo = toonKlantCredits;
-  function toonAdmin(res){
+  function vulAdmin(res){
     sel.innerHTML='';
     (res.keuzes||[]).forEach(function(k){
       var o=document.createElement('option'); o.value=k.id; o.textContent=k.label; sel.appendChild(o);
     });
     sel.value=res.model; actief.textContent=labelVan(res.model);
-    melding(modelFout,''); toon(gast,false); toon(form,false);
-    toon(klantBlok,false); toon(admin,true);
+    melding(modelFout,'');
   }
   function haalStatus(){
     // DIR-82: één goedkope status (altijd 200 → geen 401-ruis in de console van een
     // gewone bezoeker) vertelt of dit een gast, een klant of de beheerder is. Pas bij
     // een beheer-sessie halen we de modellenlijst op.
     return api('GET','/api/toegang').then(function(st){
-      var soort = st.ok && st.j ? st.j.soort : null;
-      if(soort==='admin'){
-        return api('GET','/api/admin/model').then(function(res){
-          if(res.ok) toonAdmin(res.j); else toonGast();
-          return res.ok;
-        });
-      }
-      if(soort==='klant'){
-        toonKlant(st.j.naam, st.j.credits);
-        if(window.ddDashboardAutoOpen) window.ddDashboardAutoOpen();
-        return true;
-      }
-      toonGast(); return false;
+      var j = (st.ok && st.j) ? st.j : {};
+      var isKlant = !!j.klant;
+      if(isKlant) vulKlant(j.naam, j.credits);
+      // Het klantblok mag NIET op de modellenlijst wachten: haperde die, dan verdween
+      // vroeger ook de klantkant. Dus eerst neerzetten wat we al weten.
+      toonStand(isKlant, false);
+      // DIR-112 - dit gebeurt ook als je daarnaast beheerder bent. Precies dat ging mis:
+      // /dashboard schoof niet open omdat de beheerderstak eerder afsloeg.
+      if(isKlant && window.ddDashboardAutoOpen) window.ddDashboardAutoOpen();
+      if(!j.beheerder) return isKlant;
+      return api('GET','/api/admin/model').then(function(res){
+        // Geen geldige beheersessie meer: dan het adminblok weg, maar de klantkant
+        // blijft staan - die hangt aan een ander koekje en is niets mis mee.
+        if(res.ok) vulAdmin(res.j);
+        toonStand(isKlant, res.ok);
+        return res.ok || isKlant;
+      });
     }).catch(function(){ toonGast(); return false; });
   }
   // De poort-modal (DIR-83) stuurt hierheen als iemand toch eerst wil kijken; de knop
@@ -6780,8 +6815,10 @@ const OFFICE_HTML = `<!doctype html>
   }
   window.ddOpenKlantInlog=openKlantForm;
 
+  // AC-3 - na uitloggen opnieuw vragen wie er nog is, in plaats van alles op gast
+  // zetten. Wie ook beheerder is, blijft dat: dat koekje is niet aangeraakt.
   document.getElementById('zm-klant-uitlog').addEventListener('click',function(){
-    function na(){ toonGast(); if(window.ddToegangVernieuwen) window.ddToegangVernieuwen(); }
+    function na(){ haalStatus(); if(window.ddToegangVernieuwen) window.ddToegangVernieuwen(); }
     api('POST','/api/klant/logout').then(na).catch(na);
   });
   document.getElementById('zm-open-inlog').addEventListener('click',function(){
@@ -6798,13 +6835,13 @@ const OFFICE_HTML = `<!doctype html>
     }).catch(function(){ melding(fout,'Inloggen mislukt — probeer het opnieuw.'); });
   });
   document.getElementById('zm-uitlog').addEventListener('click',function(){
-    function na(){ toonGast(); if(window.ddToegangVernieuwen) window.ddToegangVernieuwen(); }
+    function na(){ haalStatus(); if(window.ddToegangVernieuwen) window.ddToegangVernieuwen(); }
     api('POST','/api/admin/logout').then(na).catch(na);
   });
   sel.addEventListener('change',function(){
     var gekozen=sel.value; melding(modelFout,'');
     api('POST','/api/admin/model',{ model:gekozen }).then(function(res){
-      if(res.status===401){ toonGast(); return; }              // sessie verlopen
+      if(res.status===401){ haalStatus(); return; }             // sessie verlopen
       if(!res.ok){ melding(modelFout, res.j.error || 'Opslaan mislukt.'); haalStatus(); return; }
       actief.textContent=labelVan(res.j.model);
     }).catch(function(){ melding(modelFout,'Opslaan mislukt — probeer het opnieuw.'); });
@@ -9671,20 +9708,25 @@ export default {
     // eigen cookie al. Dit is het enige haakje dat de UI nodig heeft — komt er in
     // DIR-82 een klant-sessie bij, dan klopt dit antwoord vanzelf.
     if (path === "/api/toegang" && request.method === "GET") {
-      // DIR-82: het menu laat zien wie er is ingelogd. `soort` en `naam` gaan alleen
-      // over DEZE bezoeker; er komt nooit iets van een andere klant in mee.
-      if (await isAdmin(request, env)) return json({ chatten: true, soort: "admin", naam: "" });
+      // DIR-82: het menu laat zien wie er is ingelogd. Alles hier gaat alleen over DEZE
+      // bezoeker; er komt nooit iets van een andere klant in mee.
+      //
+      // DIR-112 - BEIDE rollen worden gemeld, niet alleen de sterkste. Ze hangen aan
+      // twee losse koekjes en sluiten elkaar niet uit: wie beheerder is EN klant, is
+      // allebei tegelijk. Vroeger stopte deze route bij de beheerder, en dan wist het
+      // menu niet eens dat er ook een klantsessie was.
+      const beheerder = await isAdmin(request, env);
       const klant = await huidigeKlant(request, env);
+      // DIR-92: het saldo als kort regeltje in het menu. Lukt het niet, dan blijft het
+      // weg - het menu hoort niet om te vallen omdat het grootboek hapert.
+      let credits = null;
+      if (klant) {
+        try { credits = await saldoStart(env, klant.email); } catch (e) { /* saldo is bijzaak hier */ }
+      }
       // DIR-88: staat er een klantrecord op dit adres, dan tonen we die naam; anders
       // het adres waarmee je bent ingelogd.
-      if (klant) {
-        // DIR-92: het saldo als kort regeltje in het menu. Lukt het niet, dan blijft
-        // het weg - het menu hoort niet om te vallen omdat het grootboek hapert.
-        let credits = null;
-        try { credits = await saldoStart(env, klant.email); } catch (e) { /* saldo is bijzaak hier */ }
-        return json({ chatten: true, soort: "klant", naam: (klant.rec && klant.rec.naam) || klant.email || "", credits });
-      }
-      return json({ chatten: false, soort: null, naam: "" });
+      const naam = klant ? ((klant.rec && klant.rec.naam) || klant.email || "") : "";
+      return json(toegangAntwoord(beheerder, !!klant, naam, credits));
     }
 
     // AC-6 — GSC-sites. DIR-86: heeft de klant een vastgelegde site, dan is dat de

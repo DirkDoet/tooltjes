@@ -106,6 +106,7 @@ import {
   factuurPdf,
   pdfTekst,
   betaalmethodeNaam,
+  toegangAntwoord,
   geldigeBronUrl,
   schoneBron,
   CreditsDO,
@@ -3469,10 +3470,64 @@ test("de betaalmethode staat op de factuur zoals mensen hem kennen", () => {
   assert.equal(betaalmethodeNaam("  Riverty  "), "Riverty", "alleen de spaties eromheen gaan weg");
   assert.equal(betaalmethodeNaam(""), "");
   assert.equal(betaalmethodeNaam(null), "");
+  // Namen die elk object ERFT horen er niet uit te komen. Zonder hasOwnProperty geeft
+  // "constructor" de broncode van Object terug, en die zou op de factuur belanden.
+  assert.equal(betaalmethodeNaam("constructor"), "constructor");
+  assert.equal(betaalmethodeNaam("toString"), "toString");
+  assert.equal(betaalmethodeNaam("__proto__"), "__proto__");
 
   const f = maakFactuurGegevens({ nummer: "2026-0001", datum: 1, bedragCent: 1210,
     btwCent: 210, credits: 1000, methode: "ideal", klant: KOPER });
   const tekst = Buffer.from(factuurPdf(f)).toString("latin1");
   assert.match(tekst, /via iDEAL/);
   assert.doesNotMatch(tekst, /via ideal/);
+});
+
+
+// -- DIR-112 - beheerder en klant sluiten elkaar niet uit --------------------
+
+test("de vier combinaties van beheerder en klant (AC-1, AC-2)", () => {
+  // Beide rollen hangen aan hun eigen koekje. De oude route noemde alleen de sterkste,
+  // waardoor het menu van iemand die allebei was niet eens wist van de klantsessie.
+  const gast = toegangAntwoord(false, false, "", null);
+  assert.equal(gast.beheerder, false);
+  assert.equal(gast.klant, false);
+  assert.equal(gast.chatten, false);
+
+  const klant = toegangAntwoord(false, true, "Klant B.V.", 1200);
+  assert.equal(klant.beheerder, false);
+  assert.equal(klant.klant, true);
+  assert.equal(klant.naam, "Klant B.V.");
+  assert.equal(klant.credits, 1200);
+  assert.equal(klant.chatten, true);
+
+  const beheer = toegangAntwoord(true, false, "", null);
+  assert.equal(beheer.beheerder, true);
+  assert.equal(beheer.klant, false);
+  assert.equal(beheer.chatten, true);
+
+  // Dit is het geval waar het om gaat.
+  const allebei = toegangAntwoord(true, true, "Klant B.V.", 1200);
+  assert.equal(allebei.beheerder, true, "de beheerderskant hoort te blijven");
+  assert.equal(allebei.klant, true, "en de klantkant ook");
+  assert.equal(allebei.naam, "Klant B.V.", "zonder naam kan het klantblok niets tonen");
+  assert.equal(allebei.credits, 1200);
+});
+
+test("naam en saldo horen alleen bij een klantsessie", () => {
+  // Een beheerder zonder klantsessie heeft geen naam om te tonen en geen saldo dat van
+  // hem is; zou dat toch meekomen, dan stond er een bedrag in het menu dat nergens op
+  // slaat.
+  const uit = toegangAntwoord(true, false, "Iemand", 999);
+  assert.equal(uit.naam, "");
+  assert.equal(uit.credits, null);
+});
+
+test("soort blijft de oude betekenis houden", () => {
+  // Er leunde al iets op `soort`. Dat blijft werken; het is alleen niet langer het
+  // enige wat het menu leest, want het kan er maar EEN noemen.
+  assert.equal(toegangAntwoord(true, true, "x", 1).soort, "admin");
+  assert.equal(toegangAntwoord(false, true, "x", 1).soort, "klant");
+  assert.equal(toegangAntwoord(true, false, "", null).soort, "admin");
+  assert.equal(toegangAntwoord(false, false, "", null).soort, null);
 });
