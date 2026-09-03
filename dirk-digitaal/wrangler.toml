@@ -50,6 +50,7 @@ id = "d9d3026f28f24ab38d20080d757fd981"
 #   wrangler secret put META_SYSTEM_TOKEN     # Meta System User-token (Ilona)
 #   wrangler secret put META_APP_SECRET       # voor appsecret_proof
 #   wrangler secret put ADMIN_PASSWORD        # admin-beheer klanten
+#   wrangler secret put MOLLIE_API_KEY         # credits kopen (DIR-94); test_ nu, live_ na verificatie
 
 # Eigen adres (DIR-91). Nodig voor Google's OAuth-branding: die eist een
 # geautoriseerd domein dat aantoonbaar van ons is, en workers.dev is van
