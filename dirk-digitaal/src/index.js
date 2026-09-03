@@ -1887,6 +1887,7 @@ const CREDITS_STANDAARD = {
   startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365,
   koersAuto: true,                    // DIR-103: wekelijks de koers ophalen
   koopMin: KOOP_MIN_STANDAARD, koopMax: KOOP_MAX_STANDAARD,   // DIR-94 AC-11
+  vervalMaanden: 12,                  // DIR-109: wat de voorwaarden beloven
 };
 // DIR-104 - ondergrenzen die je niet per ongeluk typt. Een bewaartermijn van 1 dag is
 // twee toetsaanslagen van 100 verwijderd en gooit bij de eerstvolgende boeking bijna
@@ -2035,6 +2036,9 @@ export function schoneCreditsConfig(ruw) {
     // heeft geen zin, en 0 zou een betaling van niets toestaan.
     koopMin: Math.round(binnenGrens(r.koopMin, 1, 100000, CREDITS_STANDAARD.koopMin)),
     koopMax: Math.round(binnenGrens(r.koopMax, 1, 100000, CREDITS_STANDAARD.koopMax)),
+    // DIR-109 - na hoeveel maanden een partij vervalt. Twaalf, zoals de voorwaarden
+    // beloven; instelbaar tussen 1 en 120.
+    vervalMaanden: Math.round(binnenGrens(r.vervalMaanden, 1, 120, CREDITS_STANDAARD.vervalMaanden)),
   };
 }
 
@@ -2232,6 +2236,22 @@ export function snoeiAantal(teOud, aantal, maxRegels) {
   return Math.max(Math.max(0, Math.floor(Number(teOud) || 0)), overschot(aantal, maxRegels));
 }
 
+// DIR-109 AC-6 - de dagelijkse ronde langs alle saldi, aangeroepen door de cron.
+// De twee tekstjes hieronder MOETEN letterlijk gelijk zijn aan wrangler.toml; de
+// splitsing in scheduled() vergelijkt erop.
+const CRON_KOERS = "0 6 * * 1";
+const CRON_VERVAL = "0 5 * * *";
+
+async function vervalRonde(env) {
+  const cfg = await creditsConfig(env);
+  const r = await creditsStub(env).fetch("https://do/credits/vervalronde", {
+    method: "POST",
+    body: JSON.stringify({ vervalMaanden: cfg.vervalMaanden,
+      maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen }),
+  });
+  return await r.json();
+}
+
 async function creditsConfig(env) {
   try {
     if (env.CLIENTS) {
@@ -2335,7 +2355,169 @@ export function hoortBijGebruiker(regel, email) {
 // nooit meer uit (die kijkt of er al iets staat) en zit die klant permanent op nul.
 export function nieuwSaldoRecord(bestaand, startsaldo, nu) {
   if (bestaand && typeof bestaand.saldo === "number") return bestaand;
-  return { saldo: Math.max(0, Math.round(Number(startsaldo) || 0)), gemaakt: nu };
+  const saldo = Math.max(0, Math.round(Number(startsaldo) || 0));
+  // DIR-109 - het startsaldo is vanaf nu een partij met een datum, net als elke
+  // aankoop. `saldo` BLIJFT daarnaast een getal op het record: acht plekken lezen
+  // eruit, en saldoVan keurt records af waar het geen getal is. Werd het een lijst,
+  // dan zag elke bestaande klant eruit als "nog geen record" en kreeg hij het
+  // startsaldo terwijl zijn echte saldo verdween - onherstelbaar zonder back-up.
+  return { saldo, gemaakt: nu, schuld: 0,
+    partijen: saldo > 0 ? [{ tijd: nu, credits: saldo, rest: saldo, soort: "start" }] : [] };
+}
+
+// ============================================================================
+// DIR-109 - CREDITS VERVALLEN NA TWAALF MAANDEN
+// ============================================================================
+// Een saldo bestaat voortaan uit partijen: elke bijboeking (startsaldo, aankoop,
+// correctie) is er een, met zijn eigen datum. Verbruik gaat van de partij die het
+// EERST vervalt (niet "de oudste": een onbeperkte partij zou anders als eerste
+// opgaan terwijl de partij die wel verloopt ongebruikt verdampt). Een partij die
+// twaalf maanden oud is, vervalt; het restant telt niet meer mee.
+//
+// Alles hieronder is puur rekenwerk op het record, zonder await. Dat is een eis,
+// geen stijl: /credits/reserveer past dit toe in de sectie waar de input gate van
+// de Durable Object dicht moet blijven.
+//
+// Schuld is een eigen veld en geen negatieve partij. DIR-92 laat een saldo bewust
+// onder nul zakken als een antwoord duurder uitvalt dan wat er stond; die schuld
+// mag niet vervallen (dan was hij vanzelf weg) en niet stil kwijtgescholden worden
+// (dan klopt het grootboek niet). Het saldo-getal is som van de resten min de
+// schuld, dus negatief kan nog steeds.
+
+// Twaalf maanden is geen 365 dagen: er wordt in KALENDERMAANDEN geteld, op de klok
+// van de zaak (Amsterdam, dezelfde als het factuurnummer uit DIR-95). De dag wordt
+// vastgeklemd op de laatste dag van de doelmaand: 29 februari plus twaalf maanden
+// is 28 februari, niet 1 maart - twaalf maanden na aankoop hoort geen extra dag te
+// geven. Teruggegeven als "jjjj-mm-dd", zodat vergelijken gewoon tekstvergelijken is.
+export function maandenLater(tijd, maanden, tijdzone) {
+  const stuk = dagSleutel(tijd, tijdzone).split("-").map(Number);
+  let jaar = stuk[0];
+  let maand = stuk[1] + Math.max(0, Math.round(Number(maanden) || 0));
+  jaar += Math.floor((maand - 1) / 12);
+  maand = ((maand - 1) % 12) + 1;
+  const laatste = new Date(Date.UTC(jaar, maand, 0)).getUTCDate();
+  const dag = Math.min(stuk[2], laatste);
+  const tw = (n) => (n < 10 ? "0" : "") + n;
+  return jaar + "-" + tw(maand) + "-" + tw(dag);
+}
+
+// Op welke dag vervalt deze partij? null = nooit (AC-9, onbeperkt gemarkeerd).
+// De termijn wordt hier pas toegepast, niet bij het boeken vastgelegd: verlaagt
+// Dirk de termijn, dan geldt dat ook voor bestaande partijen - precies waarom AC-7
+// daar een bevestiging voor eist.
+export function partijVervalDag(partij, maanden, tijdzone) {
+  if (!partij || partij.onbeperkt === true) return null;
+  return maandenLater(partij.tijd, maanden, tijdzone);
+}
+
+// Het saldo-getal is altijd een AFGELEIDE, maar hij wordt wel opgeslagen: zie de
+// waarschuwing bij nieuwSaldoRecord.
+export function herrekenSaldo(rec) {
+  let som = 0;
+  for (const p of (rec && rec.partijen) || []) som += Math.max(0, Math.round(Number(p.rest) || 0));
+  rec.saldo = som - Math.max(0, Math.round(Number(rec && rec.schuld) || 0));
+  return rec.saldo;
+}
+
+// AC-8 - een record van voor dit issue heeft geen partijen. Het hele saldo wordt
+// dan een partij met NU als datum, zodat niemand met terugwerkende kracht credits
+// kwijtraakt: de klok begint pas te lopen op het moment dat dit live staat (de
+// dagelijkse ronde komt binnen een dag bij iedereen langs). Een negatief saldo
+// wordt schuld, geen partij.
+export function migreerPartijen(rec, nu) {
+  if (!rec || Array.isArray(rec.partijen)) return rec;
+  const saldo = Math.round(Number(rec.saldo) || 0);
+  rec.partijen = saldo > 0 ? [{ tijd: nu, credits: saldo, rest: saldo, soort: "start" }] : [];
+  rec.schuld = saldo < 0 ? -saldo : 0;
+  herrekenSaldo(rec);
+  return rec;
+}
+
+// AC-3/AC-6 - de partijen die op deze dag verlopen zijn, op nul zetten. Geeft terug
+// wat er verviel, zodat de aanroeper er grootboekregels van maakt (AC-4): dit is de
+// ENE plek die bepaalt wat vervalt; elke lezer schrijft het resultaat weg in plaats
+// van zelf te rekenen, anders hangt het saldo af van wie er kijkt.
+// Op de verjaardag zelf is de partij vervallen: "precies twaalf maanden oud" telt.
+export function pasVervalToe(rec, maanden, nu, tijdzone) {
+  const uit = [];
+  if (!rec || !Array.isArray(rec.partijen)) return uit;
+  const m = Math.round(Number(maanden) || 0);
+  if (m <= 0) return uit;                                  // geen termijn meegekregen: niets doen
+  const vandaag = dagSleutel(nu, tijdzone);
+  for (const p of rec.partijen) {
+    const rest = Math.max(0, Math.round(Number(p.rest) || 0));
+    if (!rest) continue;
+    const dag = partijVervalDag(p, m, tijdzone);
+    if (dag !== null && vandaag >= dag) {
+      p.rest = 0;
+      uit.push({ tijd: p.tijd, credits: Math.round(Number(p.credits) || 0), vervallen: rest, soort: p.soort || "" });
+    }
+  }
+  // Opgebruikte partijen blijven NIET eeuwig staan: alles wat leeg is en vervallen
+  // of opgemaakt, mag weg zodra het verwerkt is. De vervalregel in het grootboek
+  // draagt datum en omvang van de aankoop zelf, dus er gaat geen uitleg verloren.
+  rec.partijen = rec.partijen.filter((p) => Math.max(0, Math.round(Number(p.rest) || 0)) > 0);
+  herrekenSaldo(rec);
+  return uit;
+}
+
+// AC-2 - verbruik gaat van de partij die het eerst vervalt; onbeperkte partijen
+// komen achteraan (op datum). Wat de partijen overstijgt wordt schuld.
+export function boekAfPartijen(rec, credits, maanden, tijdzone) {
+  let nodig = Math.max(0, Math.round(Number(credits) || 0));
+  const lijst = ((rec && rec.partijen) || []).slice().sort((a, b) => {
+    const da = partijVervalDag(a, maanden, tijdzone);
+    const db = partijVervalDag(b, maanden, tijdzone);
+    if (da !== null && db !== null && da !== db) return da < db ? -1 : 1;
+    if ((da === null) !== (db === null)) return da === null ? 1 : -1;
+    return (Number(a.tijd) || 0) - (Number(b.tijd) || 0);
+  });
+  for (const p of lijst) {
+    if (!nodig) break;
+    const rest = Math.max(0, Math.round(Number(p.rest) || 0));
+    const eraf = Math.min(rest, nodig);
+    p.rest = rest - eraf;
+    nodig -= eraf;
+  }
+  if (nodig > 0) rec.schuld = Math.max(0, Math.round(Number(rec.schuld) || 0)) + nodig;
+  rec.partijen = (rec.partijen || []).filter((p) => Math.max(0, Math.round(Number(p.rest) || 0)) > 0);
+  herrekenSaldo(rec);
+  return rec.saldo;
+}
+
+// Bijboeken: eerst de schuld dekken, het restant wordt een partij. Kopen bij een
+// negatief saldo telde er ook voor dit issue al eerst tegenaan; dat gedrag blijft.
+export function boekBijPartijen(rec, credits, nu, soort, onbeperkt) {
+  let erbij = Math.max(0, Math.round(Number(credits) || 0));
+  const schuld = Math.max(0, Math.round(Number(rec.schuld) || 0));
+  const afgelost = Math.min(schuld, erbij);
+  rec.schuld = schuld - afgelost;
+  erbij -= afgelost;
+  if (!Array.isArray(rec.partijen)) rec.partijen = [];
+  if (erbij > 0) {
+    const partij = { tijd: nu, credits: erbij, rest: erbij, soort: String(soort || "aankoop") };
+    if (onbeperkt === true) partij.onbeperkt = true;       // AC-9
+    rec.partijen.push(partij);
+  }
+  herrekenSaldo(rec);
+  return rec.saldo;
+}
+
+// AC-5 - wat vervalt er het eerst, en hoeveel? Voor het dashboard: een feit, geen
+// waarschuwing. null als er niets te vervallen valt.
+export function eerstvolgendVerval(rec, maanden, tijdzone) {
+  let uit = null;
+  const m = Math.round(Number(maanden) || 0);
+  if (m <= 0) return null;
+  for (const p of (rec && rec.partijen) || []) {
+    const rest = Math.max(0, Math.round(Number(p.rest) || 0));
+    if (!rest) continue;
+    const dag = partijVervalDag(p, m, tijdzone);
+    if (dag === null) continue;
+    if (!uit || dag < uit.dag) uit = { dag, credits: rest };
+    else if (dag === uit.dag) uit.credits += rest;
+  }
+  return uit;
 }
 
 // Wat de klant van een grootboekregel te zien krijgt. Een witte lijst, geen
@@ -2346,11 +2528,13 @@ export function nieuwSaldoRecord(bestaand, startsaldo, nu) {
 export function klantRegel(regel) {
   const r = regel || {};
   const getal = (v) => Math.round(Number(v) || 0);
-  return {
+  const uit = {
     tijd: getal(r.tijd),
     // DIR-94 - een aankoop is geen verbruik en geen correctie; zou hij als "verbruik"
     // doorgaan, dan stond er in de tabel van de klant een agent bij een bijboeking.
-    soort: (r.soort === "correctie" || r.soort === "aankoop") ? r.soort : "verbruik",
+    // DIR-109 - "verval" hoort er ook doorheen: de klant moet kunnen zien waarom
+    // zijn saldo daalde zonder dat hij iets vroeg (AC-4).
+    soort: (r.soort === "correctie" || r.soort === "aankoop" || r.soort === "verval") ? r.soort : "verbruik",
     agent: String(r.agent || ""),
     model: String(r.model || ""),
     invoer: getal(r.invoer),
@@ -2360,6 +2544,13 @@ export function klantRegel(regel) {
     credits: getal(r.credits),
     saldoNa: getal(r.saldoNa),
   };
+  // DIR-109 - datum en omvang van de aankoop waarvan iets verviel, IN de regel
+  // zelf. De aankoopregel waar je naar zou verwijzen is tegen die tijd door de
+  // bewaartermijn opgeruimd, precies wanneer de klant wil nagaan wat er gebeurde.
+  if (uit.soort === "verval" && r.vervalVan) {
+    uit.vervalVan = { tijd: getal(r.vervalVan.tijd), credits: getal(r.vervalVan.credits) };
+  }
+  return uit;
 }
 
 // Hoeveel regels de klant per keer ziet (AC-4); de rest komt met 'meer laden'.
@@ -3350,6 +3541,49 @@ export class CreditsDO {
     return rec && typeof rec.saldo === "number" ? rec : null;
   }
 
+  // DIR-109 - partijen migreren (AC-8) en het verval van vandaag toepassen en
+  // WEGSCHRIJVEN (AC-6), met een grootboekregel per vervallen partij (AC-4). Dit is
+  // de ene plek die bepaalt wat vervalt; elke route die een record aanraakt gaat
+  // hierdoorheen, zodat het saldo niet afhangt van wie er kijkt.
+  //
+  // Alles hier loopt via de eigen opslag. Geen fetch, geen KV: /credits/reserveer
+  // roept dit aan in de sectie waar de input gate dicht moet blijven, en de termijn
+  // komt daarom als `vervalMaanden` uit het verzoek mee (net als startsaldo, koers
+  // en marge daar al deden). Ontbreekt de termijn, dan vervalt er niets - liever een
+  // dag te laat via de nachtelijke ronde dan te vroeg met een verzonnen termijn.
+  //
+  // LET OP: er is bewust GEEN alarm() op deze klasse. De enige alarm() in dit
+  // bestand hoort bij SessionDO en doet deleteAll(); dat patroon hoort niet op het
+  // object dat alle saldi, het grootboek en de facturen draagt. Het dagelijkse
+  // vervallen komt binnen via de cron in de Worker (/credits/vervalronde).
+  async verwerkVerval(email, rec, inv, now) {
+    if (!rec) return { rec, vervallen: [] };
+    const hadPartijen = Array.isArray(rec.partijen);
+    migreerPartijen(rec, now);
+    const vervallen = pasVervalToe(rec, Number(inv && inv.vervalMaanden) || 0, now);
+    if (!hadPartijen || vervallen.length) await this.state.storage.put("s:" + email, rec);
+    // saldoNa per regel stapsgewijs, zodat twee partijen die dezelfde dag vervallen
+    // elk hun eigen tussenstand tonen.
+    let lopend = rec.saldo + vervallen.reduce((a, v) => a + v.vervallen, 0);
+    for (const v of vervallen) {
+      lopend -= v.vervallen;
+      await this.schrijfRegel({
+        tijd: now, soort: "verval", email, agent: "", model: "",
+        invoer: 0, uitvoer: 0, cacheLees: 0, cacheSchrijf: 0,
+        credits: v.vervallen, saldoNa: lopend,
+        vervalVan: { tijd: v.tijd, credits: v.credits },
+        reden: "vervallen na " + (Number(inv && inv.vervalMaanden) || 0) + " maanden",
+      }, { maxRegels: inv && inv.maxRegels, bewaardagen: inv && inv.bewaardagen });
+    }
+    return { rec, vervallen };
+  }
+
+  async saldoMetVerval(email, inv, now) {
+    const rec = await this.saldoVan(email);
+    if (!rec) return null;
+    return (await this.verwerkVerval(email, rec, inv, now)).rec;
+  }
+
   // Een boeking schrijven, met een indexsleutel per klant erbij, en daarna snoeien
   // binnen de historie van DIE klant (AC-1/AC-3). Er wordt nergens meer over het hele
   // boek gelezen: een teller zegt hoeveel regels deze klant heeft, en de twee list()
@@ -3433,11 +3667,12 @@ export class CreditsDO {
       const bestaand = await this.saldoVan(email);
       const rec = nieuwSaldoRecord(bestaand, inv.startsaldo, now);
       if (!bestaand) await this.state.storage.put("s:" + email, rec);
+      else await this.verwerkVerval(email, rec, inv, now);
       return json({ saldo: rec.saldo, model: rec.model || "" });
     }
 
     if (url.pathname === "/credits/saldo") {
-      const rec = await this.saldoVan(email);
+      const rec = await this.saldoMetVerval(email, inv, now);
       return json({ saldo: rec ? rec.saldo : null, model: (rec && rec.model) || "" });
     }
 
@@ -3448,7 +3683,7 @@ export class CreditsDO {
     // die dragen hun eigen kopie (AC-9).
     if (url.pathname === "/credits/factuurgegevens") {
       if (!email) return json({ error: "geen adres" }, 400);
-      const rec = nieuwSaldoRecord(await this.saldoVan(email), inv.startsaldo, now);
+      const rec = nieuwSaldoRecord(await this.saldoMetVerval(email, inv, now), inv.startsaldo, now);
       if (inv.gegevens) {
         rec.factuur = schoneKlantFactuur(inv.gegevens);
         await this.state.storage.put("s:" + email, rec);
@@ -3463,7 +3698,7 @@ export class CreditsDO {
       // Kiest iemand zijn model voordat zijn saldo ooit is uitgedeeld, dan krijgt hij
       // het startsaldo hier alsnog. Een record op 0 wegschrijven zou hem permanent op
       // nul zetten, want /credits/start deelt alleen uit als er nog niets staat.
-      const rec = nieuwSaldoRecord(await this.saldoVan(email), inv.startsaldo, now);
+      const rec = nieuwSaldoRecord(await this.saldoMetVerval(email, inv, now), inv.startsaldo, now);
       rec.model = geldigKlantModel(inv.model);
       await this.state.storage.put("s:" + email, rec);
       return json({ saldo: rec.saldo, model: rec.model });
@@ -3480,7 +3715,7 @@ export class CreditsDO {
     // geziene sleutel is de cursor naar de volgende pagina.
     if (url.pathname === "/credits/klant") {
       if (!email) return json({ error: "geen adres" }, 400);
-      const rec = await this.saldoVan(email);
+      const rec = await this.saldoMetVerval(email, inv, now);
       const regels = [];
       let cursor = String(inv.cursor || "");
       let uitgelezen = false;
@@ -3504,6 +3739,9 @@ export class CreditsDO {
         // DIR-95 - de factuurgegevens van deze klant gaan mee, zodat het formulier in
         // het dashboard meteen gevuld is (AC-3).
         factuur: (rec && rec.factuur) || null,
+        // AC-5 - wanneer vervalt het eerstvolgende deel, en hoeveel. Een feit voor
+        // het dashboard, geen waarschuwing.
+        verval: rec ? eerstvolgendVerval(rec, Number(inv.vervalMaanden) || 0) : null,
         regels,
         cursor,
         meer: !uitgelezen,
@@ -3532,9 +3770,13 @@ export class CreditsDO {
       // het niet tegelijk probeert. Vandaar deze regels in plaats van alleen een test.
       // Alles wat van buiten nodig is (startsaldo, koers, marge) wordt daarom door de
       // Worker meegegeven in het verzoek, niet hier opgehaald.
+      // DIR-109 - het verval hoort bij het saldo dat de poort beoordeelt, anders
+      // chat iemand op credits die vandaag verlopen zijn. verwerkVerval gebruikt
+      // uitsluitend de eigen opslag, dus de input gate blijft dicht.
       const bestaand = await this.saldoVan(email);
       const rec = nieuwSaldoRecord(bestaand, inv.startsaldo, now);
       if (!bestaand) await this.state.storage.put("s:" + email, rec);
+      else await this.verwerkVerval(email, rec, inv, now);
       const model = modelVoorKlant(rec.model);
       const { prefix, open } = await this.reserveringenVan(email, now);
       // De grens blijft die van DIR-92: op nul of lager gaat de deur dicht. De
@@ -3590,8 +3832,12 @@ export class CreditsDO {
       // (AC-5). Vanaf dit moment telt alleen nog het afgeboekte bedrag mee.
       const id = String(inv.reservering || "");
       if (id) await this.state.storage.delete(reserveringPrefix(email) + id);
-      const rec = (await this.saldoVan(email)) || { saldo: 0, gemaakt: now };
-      rec.saldo -= credits;
+      // DIR-109 - het verval wordt hier OPNIEUW toegepast, met de now van deze
+      // aanroep: verloopt een partij tussen reserveren en boeken, dan mag er niet
+      // afgeboekt worden van een partij die er niet meer is. Daarna gaat het
+      // verbruik van de partij die het eerst vervalt; wat overblijft wordt schuld.
+      const rec = (await this.saldoMetVerval(email, inv, now)) || nieuwSaldoRecord(null, 0, now);
+      boekAfPartijen(rec, credits, Number(inv.vervalMaanden) || 0);
       await this.state.storage.put("s:" + email, rec);
       // Wat hier NIET in staat: de vraag, het antwoord of de opgehaalde cijfers.
       // Alleen wie, wanneer, welke agent, welk model en hoeveel tokens.
@@ -3690,8 +3936,10 @@ export class CreditsDO {
       // geen knop om er alsnog een te maken; dat vraagt een keuze over welk adres er
       // dan op komt te staan. Tot die tijd meldt /admin het geval met zoveel woorden.
       if (status === "paid" && !alGeboekt && credits > 0 && adres) {
-        const rec = (await this.saldoVan(adres)) || { saldo: 0, gemaakt: now };
-        rec.saldo += credits;
+        // DIR-109 - de aankoop wordt een partij met deze datum. Eerst dekt hij een
+        // eventuele schuld; dat deed een aankoop bij een negatief saldo altijd al.
+        const rec = (await this.saldoMetVerval(adres, inv, now)) || nieuwSaldoRecord(null, 0, now);
+        boekBijPartijen(rec, credits, now, "aankoop");
         await this.state.storage.put("s:" + adres, rec);
         saldo = rec.saldo;
         nuGeboekt = true;
@@ -3812,8 +4060,15 @@ export class CreditsDO {
     if (url.pathname === "/credits/correctie") {
       if (!email) return json({ error: "geen adres" }, 400);
       const bij = Math.round(Number(inv.credits) || 0);
-      const rec = (await this.saldoVan(email)) || { saldo: 0, gemaakt: now };
-      rec.saldo += bij;
+      const rec = (await this.saldoMetVerval(email, inv, now)) || nieuwSaldoRecord(null, 0, now);
+      // DIR-109 AC-9 - bijboeken wordt een partij die net zo vervalt als een aankoop,
+      // tenzij Dirk hem als onbeperkt geldig markeert. Afboeken loopt langs dezelfde
+      // weg als verbruik: van de partij die het eerst vervalt, restant wordt schuld.
+      // Een testdatum mag mee (alleen uit /admin): zo is "dertien maanden geleden
+      // gekocht" na te spelen zonder een jaar te wachten.
+      const wanneer = Number(inv.datum) > 0 ? Number(inv.datum) : now;
+      if (bij >= 0) boekBijPartijen(rec, bij, wanneer, "correctie", inv.onbeperkt === true);
+      else boekAfPartijen(rec, -bij, Number(inv.vervalMaanden) || 0);
       await this.state.storage.put("s:" + email, rec);
       await this.schrijfRegel({
         tijd: now, soort: "correctie", email, agent: "", model: "",
@@ -3823,10 +4078,42 @@ export class CreditsDO {
       return json({ saldo: rec.saldo });
     }
 
+    // DIR-109 AC-6 - de dagelijkse ronde: bij iedereen langs, ook bij wie een jaar
+    // wegblijft. Wie terugkomt ziet het juiste saldo, niet een oud getal dat pas bij
+    // zijn volgende vraag gecorrigeerd wordt.
+    if (url.pathname === "/credits/vervalronde") {
+      let klanten = 0, regels = 0;
+      for (const [sleutel, waarde] of await this.state.storage.list({ prefix: "s:" })) {
+        const adres = sleutel.slice(2);
+        const uit = await this.verwerkVerval(adres, waarde, inv, now);
+        if (uit.vervallen.length) { klanten += 1; regels += uit.vervallen.length; }
+      }
+      return json({ klanten, regels });
+    }
+
+    // DIR-109 AC-7 - hoeveel credits zou deze termijn NU laten vervallen? Alleen
+    // tellen, niets wijzigen: dit voedt de bevestiging in /admin, zoals snoeitest
+    // dat voor de bewaartermijn doet. Er wordt op een kopie gerekend, zodat ook de
+    // migratie van een oud record hier niets wegschrijft.
+    if (url.pathname === "/credits/vervaltest") {
+      let credits = 0, klanten = 0;
+      for (const [, waarde] of await this.state.storage.list({ prefix: "s:" })) {
+        const kopie = migreerPartijen(JSON.parse(JSON.stringify(waarde || {})), now);
+        const weg = pasVervalToe(kopie, Number(inv.vervalMaanden) || 0, now);
+        const som = weg.reduce((a, v) => a + v.vervallen, 0);
+        if (som > 0) { credits += som; klanten += 1; }
+      }
+      return json({ credits, klanten });
+    }
+
     if (url.pathname === "/credits/overzicht") {
       const saldi = [];
       for (const [sleutel, waarde] of await this.state.storage.list({ prefix: "s:" })) {
-        saldi.push({ email: sleutel.slice(2), saldo: (waarde && waarde.saldo) || 0 });
+        // DIR-109 - admin kijkt naar hetzelfde vastgelegde verval als de klant, niet
+        // naar een eigen berekening; anders tonen twee schermen twee saldi.
+        const adres = sleutel.slice(2);
+        const uit = await this.verwerkVerval(adres, waarde, inv, now);
+        saldi.push({ email: adres, saldo: (uit.rec && uit.rec.saldo) || 0 });
       }
       saldi.sort((a, b) => a.email.localeCompare(b.email));
       const regels = [];
@@ -3886,7 +4173,8 @@ async function saldoStart(env, email) {
   const cfg = await creditsConfig(env);
   const resp = await creditsStub(env).fetch("https://do/credits/start", {
     method: "POST",
-    body: JSON.stringify({ email, startsaldo: cfg.startsaldo }),
+    body: JSON.stringify({ email, startsaldo: cfg.startsaldo,
+      vervalMaanden: cfg.vervalMaanden, maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen }),
   });
   const j = await resp.json();
   return typeof j.saldo === "number" ? j.saldo : null;
@@ -3927,6 +4215,7 @@ function verrekenKrediet(env, ctx, krediet, agent, meter) {
           cacheLees: meter.cacheLees, cacheSchrijf: meter.cacheSchrijf,
           credits: meterCredits(meter, cfg.koers, cfg.marge),
           reservering: krediet.reservering,
+          vervalMaanden: cfg.vervalMaanden,
           maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen,
         }),
       });
@@ -3960,6 +4249,9 @@ async function creditsReserveer(request, env) {
       body: JSON.stringify({
         email: sessie.email, startsaldo: cfg.startsaldo,
         koers: cfg.koers, marge: cfg.marge,
+        // DIR-109 - de termijn gaat mee het verzoek in, net als de rest: de DO mag
+        // hem niet zelf uit KV halen, want dan gaat de input gate open.
+        vervalMaanden: cfg.vervalMaanden, maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen,
       }),
     });
     const j = await resp.json();
@@ -5653,6 +5945,8 @@ const OFFICE_HTML = `<!doctype html>
         <span class="dash-klein" id="dash-credits">0 credits</span>
       </div>
       <p class="dash-melding" id="dash-wie"></p>
+      <!-- DIR-109 AC-5: een feit, geen waarschuwing. Leeg als er niets vervalt. -->
+      <p class="dash-melding" id="dash-verval"></p>
       <h3>Credits bijkopen</h3>
       <div class="dash-koop">
         <label for="dash-euro">Bedrag in hele euro's</label>
@@ -6199,6 +6493,12 @@ const OFFICE_HTML = `<!doctype html>
   // adres in de ondertekende sessie en negeert alles wat het verzoek zelf meestuurt.
   var dashOverlay=document.getElementById('dash-overlay');
   var dashCursor='', dashKeuzes=[], dashModel='', dashBezig=false;
+  // "2027-09-03" wordt "03-09-2027": de vorm die de rest van het dashboard ook
+  // gebruikt. Geen Date ervan maken, dan kan een tijdzone er niets aan verschuiven.
+  function dashDag(dag){
+    var d=String(dag||'').split('-');
+    return d.length===3 ? d[2]+'-'+d[1]+'-'+d[0] : String(dag||'');
+  }
   function dashEuro(credits){ return '\u20ac ' + (Number(credits||0)/100).toFixed(2).replace('.',','); }
   function dashTijd(ms){
     var d=new Date(ms||0);
@@ -6239,6 +6539,14 @@ const OFFICE_HTML = `<!doctype html>
   function dashSaldoTonen(j){
     dashSaldoBedrag(Number(j.saldo||0));
     document.getElementById('dash-wie').textContent='Ingelogd als '+(j.naam?(j.naam+' ('+j.email+')'):j.email);
+    // DIR-109 AC-5 - wanneer het eerstvolgende deel vervalt, als feit bij het saldo.
+    var vv=document.getElementById('dash-verval');
+    if(vv){
+      vv.textContent = (j.verval && j.verval.credits > 0)
+        ? ('Op '+dashDag(j.verval.dag)+' '+(j.verval.credits===1?'vervalt':'vervallen')+' hiervan '
+           +j.verval.credits+' credit'+(j.verval.credits===1?'':'s')+'. Credits blijven twaalf maanden na aankoop geldig.')
+        : '';
+    }
   }
   // DIR-94 - wat er te kopen valt, en of het uberhaupt kan (AC-9).
   var dashKopen={ kan:false, min:10, max:500, btw:21 };
@@ -6394,6 +6702,11 @@ const OFFICE_HTML = `<!doctype html>
       cel('\u2014');
     } else if(r.soort==='correctie'){
       cel('Handmatige correctie');
+      cel('\u2014');
+    } else if(r.soort==='verval'){
+      // DIR-109 AC-4 - datum en omvang van de aankoop staan IN de regel; de
+      // aankoopregel zelf kan tegen die tijd al opgeruimd zijn.
+      cel('Credits vervallen'+(r.vervalVan ? ' (aankoop van '+dashTijd(r.vervalVan.tijd).split(' ')[0]+')' : ''));
       cel('\u2014');
     } else {
       cel(dashCollega(r.agent));
@@ -7129,6 +7442,7 @@ const ADMIN_HTML = `<!doctype html>
         <div class="veld"><label for="cMarge">Margefactor</label><input id="cMarge" type="text"></div>
         <div class="veld"><label for="cMax">Grootboekregels per klant</label><input id="cMax" type="text"><span class="hint">Elke klant houdt zijn eigen laatste regels; een drukke klant duwt die van een rustige niet weg.</span></div>
         <div class="veld"><label for="cDagen">Bewaartermijn (dagen)</label><input id="cDagen" type="text"><span class="hint">Oudere regels worden opgeruimd. Het saldo verandert daar nooit door.</span></div>
+        <div class="veld"><label for="cVerval">Vervaltermijn credits (maanden)</label><input id="cVerval" type="text"><span class="hint">Zo lang blijven gekochte credits geldig; de voorwaarden beloven twaalf maanden. Verlagen laat credits van klanten vervallen en vraagt daarom eerst om bevestiging, met het aantal erbij.</span></div>
         <div class="veld"><label for="cKoopMin">Laagste bedrag dat een klant kan kopen (euro)</label><input id="cKoopMin" type="text"></div>
         <div class="veld"><label for="cKoopMax">Hoogste bedrag dat een klant kan kopen (euro)</label><input id="cKoopMax" type="text"><span class="hint">Bedragen zijn exclusief btw; de klant betaalt 21% meer en krijgt 100 credits per euro.</span></div>
         <div class="knoppen"><button id="cBewaar">Instellingen bewaren</button><span class="melding" id="cMelding"></span></div>
@@ -7139,6 +7453,10 @@ const ADMIN_HTML = `<!doctype html>
         <div class="veld"><label for="cEmail">Handmatig boeken &mdash; e-mailadres</label><input id="cEmail" type="text" placeholder="naam@bedrijf.nl"></div>
         <div class="veld"><label for="cAantal">Aantal credits (negatief = afboeken)</label><input id="cAantal" type="text"></div>
         <div class="veld"><label for="cReden">Reden</label><input id="cReden" type="text" placeholder="Bijv. gecompenseerd na storing"></div>
+        <div class="veld"><label for="cOnbeperkt"><input id="cOnbeperkt" type="checkbox"> Onbeperkt geldig</label>
+          <span class="hint">Alleen voor bijboeken: deze credits vervallen nooit. Zonder vinkje vervallen ze na de gewone termijn, net als een aankoop.</span></div>
+        <div class="veld"><label for="cDatum">Aankoopdatum (leeg = vandaag)</label><input id="cDatum" type="text" placeholder="jjjj-mm-dd">
+          <span class="hint">Om het vervallen te controleren: boek met een datum van dertien maanden geleden en de credits zijn bij de eerstvolgende ronde vervallen.</span></div>
         <div class="knoppen"><button id="cBoek">Boeken</button></div>
       </div>
       <h2>Saldo per klant</h2>
@@ -7886,6 +8204,8 @@ const ADMIN_HTML = `<!doctype html>
       document.getElementById('cMarge').value=cfg.marge;
       document.getElementById('cMax').value=cfg.maxRegels;
       document.getElementById('cDagen').value=cfg.bewaardagen;
+      document.getElementById('cVerval').value=cfg.vervalMaanden;
+      huidigVerval=cfg.vervalMaanden;
       document.getElementById('cKoopMin').value=cfg.koopMin;
       document.getElementById('cKoopMax').value=cfg.koopMax;
       renderSaldi((res.j&&res.j.saldi)||[]);
@@ -8054,6 +8374,10 @@ const ADMIN_HTML = `<!doctype html>
           +' \u2014 '+(r.betaalId||'');
       } else if(r.soort==='correctie'){
         wat='handmatige correctie \u2014 '+(r.reden||'');
+      } else if(r.soort==='verval'){
+        wat='credits vervallen \u2014 '+(r.credits||0)
+          +(r.vervalVan ? (' van de partij van '+tijdTekst(r.vervalVan.tijd).split(' ')[0]
+            +' (oorspronkelijk '+(r.vervalVan.credits||0)+')') : '');
       } else {
         wat=(AGENTNAAM[r.agent]||r.agent||'agent')+' \u2014 '+(r.model||'onbekend model')
           +' \u2014 '+(r.invoer||0)+' in / '+(r.uitvoer||0)+' uit';
@@ -8113,9 +8437,14 @@ const ADMIN_HTML = `<!doctype html>
   // DIR-104 - verlagen van de bewaartermijn of het maximum ruimt regels op die niet
   // terugkomen. De server weigert zo'n wijziging tot er bevestigd is en stuurt het
   // aantal mee, zodat er een getal in de vraag staat en geen algemene waarschuwing.
+  var huidigVerval=null;   // DIR-109: de termijn waartegen de meting is getoond
   function bewaarCredits(bevestigd){
     document.getElementById('cMelding').textContent='';
     api('POST','/api/admin/credits/config',{
+      vervalMaanden:Number(document.getElementById('cVerval').value),
+      // De vergrendeling van AC-7: de server weigert als de termijn intussen door
+      // een ander tabblad is veranderd, in plaats van "laatste schrijver wint".
+      verwachtVerval:huidigVerval,
       startsaldo:Number(document.getElementById('cStart').value),
       koers:Number(document.getElementById('cKoers').value),
       koersAuto:document.getElementById('cKoersAuto').checked,
@@ -8129,6 +8458,21 @@ const ADMIN_HTML = `<!doctype html>
       koopMax:Number(document.getElementById('cKoopMax').value),
       bevestigd: !!bevestigd
     }).then(function(res){
+      // DIR-109 AC-7 - een kortere vervaltermijn: eigen vraag, met wat het NU zou
+      // laten vervallen. Dit is geld van klanten, geen historie.
+      if(res.status===409 && res.j && res.j.bevestigingNodig && res.j.huidigVerval!==undefined){
+        var v=res.j.verval;
+        var zin=(v && typeof v.credits==='number')
+          ? ('Dit laat NU '+v.credits+' credit'+(v.credits===1?'':'s')+' vervallen bij '
+             +v.klanten+' klant'+(v.klanten===1?'':'en')+'.')
+          : 'Dit laat credits van klanten vervallen (aantal onbekend: het was even niet te tellen).';
+        if(confirm(zin+' Die komen niet terug, en klanten hebben ervoor betaald. Doorgaan?')){
+          huidigVerval=res.j.huidigVerval; bewaarCredits(true);
+        } else {
+          meld(''); document.getElementById('cMelding').textContent='Niets gewijzigd.'; laadCredits();
+        }
+        return;
+      }
       if(res.status===409 && res.j && res.j.bevestigingNodig){
         var n=res.j.aantal;
         // "Uiteindelijk", niet "nu": het opruimen loopt gefaseerd en begint pas bij de
@@ -8164,6 +8508,8 @@ const ADMIN_HTML = `<!doctype html>
     api('POST','/api/admin/credits/correctie',{
       email:document.getElementById('cEmail').value,
       credits:Number(document.getElementById('cAantal').value),
+      onbeperkt:document.getElementById('cOnbeperkt').checked,
+      datum:document.getElementById('cDatum').value||'',
       reden:document.getElementById('cReden').value
     }).then(function(res){
       if(!res.ok){ meld((res.j&&res.j.error)||'Boeken mislukt.'); return; }
@@ -9288,7 +9634,8 @@ export default {
         const cfg = await creditsConfig(env);
         const resp = await creditsStub(env).fetch("https://do/credits/klant", {
           method: "POST",
-          body: JSON.stringify({ email: sessie.email, cursor }),
+          body: JSON.stringify({ email: sessie.email, cursor,
+            vervalMaanden: cfg.vervalMaanden, maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen }),
         });
         const j = await resp.json();
         const klant = sessie.key ? await kvGetClient(env, sessie.key) : null;
@@ -9306,6 +9653,8 @@ export default {
           kopen: { kan: !!env.MOLLIE_API_KEY, min: cfg.koopMin, max: cfg.koopMax, btw: BTW_PERCENT },
           // DIR-95 AC-3 - meteen mee, zodat het formulier gevuld is zonder extra verzoek.
           factuurGegevens: schoneKlantFactuur(j.factuur),
+          // DIR-109 AC-5 - wanneer vervalt het eerstvolgende deel, en hoeveel.
+          verval: j.verval || null,
         });
       } catch (e) {
         return json({ error: "Kon je gegevens niet laden. Probeer het zo opnieuw." }, 502);
@@ -9326,7 +9675,8 @@ export default {
         const cfg = await creditsConfig(env);
         const resp = await creditsStub(env).fetch("https://do/credits/model", {
           method: "POST",
-          body: JSON.stringify({ email: sessie.email, model: gekozen, startsaldo: cfg.startsaldo }),
+          body: JSON.stringify({ email: sessie.email, model: gekozen, startsaldo: cfg.startsaldo,
+            vervalMaanden: cfg.vervalMaanden, maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen }),
         });
         const j = await resp.json();
         return json({ ok: true, model: j.model });
@@ -9432,6 +9782,7 @@ export default {
             email: bet.email, betaalId: bet.betaalId, status: bet.status, ref: bet.ref,
             bedragCent: bet.bedragCent || 0, btwCent, credits, methode: bet.methode,
             bedrijf, klant,
+            vervalMaanden: cfg.vervalMaanden,
             maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen,
           }),
         });
@@ -9472,7 +9823,8 @@ export default {
         const cfg = await creditsConfig(env);
         const r = await creditsStub(env).fetch("https://do/credits/factuurgegevens", {
           method: "POST",
-          body: JSON.stringify({ email: sessie.email, startsaldo: cfg.startsaldo, gegevens: b }),
+          body: JSON.stringify({ email: sessie.email, startsaldo: cfg.startsaldo, gegevens: b,
+            vervalMaanden: cfg.vervalMaanden, maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen }),
         });
         const j = await r.json();
         return json({ gegevens: j.gegevens, ontbreekt: klantFactuurOntbreekt(j.gegevens) });
@@ -9569,7 +9921,14 @@ export default {
     if (path === "/api/admin/credits" && request.method === "GET") {
       if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
       try {
-        const r = await creditsStub(env).fetch("https://do/credits/overzicht");
+        // DIR-109 - de termijn gaat mee, zodat admin hetzelfde vastgelegde verval
+        // ziet als de klant.
+        const cfgO = await creditsConfig(env);
+        const r = await creditsStub(env).fetch("https://do/credits/overzicht", {
+          method: "POST",
+          body: JSON.stringify({ vervalMaanden: cfgO.vervalMaanden,
+            maxRegels: cfgO.maxRegels, bewaardagen: cfgO.bewaardagen }),
+        });
         const j = await r.json();
         return json({
           config: await creditsConfig(env), koers: await koersStand(env),
@@ -9594,6 +9953,28 @@ export default {
       // bevestiging. Het aantal komt uit het grootboek zelf, zodat er een getal in de
       // vraag staat en geen algemene waarschuwing.
       const huidig = await creditsConfig(env);
+      // DIR-109 AC-7 - een kortere vervaltermijn laat credits van klanten vervallen,
+      // dus die gaat niet door zonder bevestiging, met het aantal erbij. En anders
+      // dan bij de bewaartermijn is "laatste schrijver wint" hier niet goed genoeg:
+      // de bevestiging draagt de termijn waartegen de meting is getoond, en de
+      // server weigert als die intussen is veranderd. Historie kwijtraken was een
+      // aanvaardbaar restrisico; geld van klanten niet.
+      if (Number(cfg.vervalMaanden) < Number(huidig.vervalMaanden)) {
+        if (b.bevestigd !== true) {
+          let verval = null;
+          try {
+            const r = await creditsStub(env).fetch("https://do/credits/vervaltest", {
+              method: "POST", body: JSON.stringify({ vervalMaanden: cfg.vervalMaanden }),
+            });
+            verval = await r.json();
+          } catch (e) { /* zonder telling vragen we het alsnog, maar zonder getal */ }
+          return json({ bevestigingNodig: true, verval, huidigVerval: huidig.vervalMaanden, config: cfg }, 409);
+        }
+        if (Number(b.verwachtVerval) !== Number(huidig.vervalMaanden)) {
+          return json({ error: "De vervaltermijn is intussen veranderd (" + huidig.vervalMaanden
+            + " maanden). Laad de pagina opnieuw en beoordeel het opnieuw." }, 409);
+        }
+      }
       if (snoeitVerderOp(huidig, cfg) && b.bevestigd !== true) {
         let aantal = null;
         try {
@@ -9618,12 +9999,24 @@ export default {
       if (!doelEmail) return json({ error: "Geef een e-mailadres op." }, 400);
       if (!bij) return json({ error: "Geef een aantal credits op (negatief = afboeken)." }, 400);
       if (!reden) return json({ error: "Geef een reden op." }, 400);
+      // DIR-109 - een datum in het verleden mag, zodat Dirk het vervallen kan
+      // naspelen ("dertien maanden geleden gekocht") zonder een jaar te wachten. In
+      // de toekomst niet: een partij die pas later begint te bestaan is geen
+      // correctie maar een raadsel in het grootboek.
+      let datum = 0;
+      if (b && b.datum) {
+        datum = Date.parse(String(b.datum));
+        if (!(datum > 0)) return json({ error: "Die datum is niet te lezen. Gebruik jjjj-mm-dd." }, 400);
+        if (datum > Date.now()) return json({ error: "Een datum in de toekomst kan hier niet." }, 400);
+      }
       try {
         const cfg = await creditsConfig(env);
         const r = await creditsStub(env).fetch("https://do/credits/correctie", {
           method: "POST",
           body: JSON.stringify({
             email: doelEmail, credits: bij, reden,
+            onbeperkt: b.onbeperkt === true, datum,
+            vervalMaanden: cfg.vervalMaanden,
             maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen,
           }),
         });
@@ -10024,11 +10417,18 @@ export default {
     return json({ error: "Onbekende route." }, 404);
   },
 
-  // DIR-103 - de wekelijkse trigger uit wrangler.toml komt hier binnen. Verder doet
-  // deze ingang niets: geen afboekingen, geen grootboek, alleen de koers.
+  // DIR-103/DIR-109 - hier komen ALLE triggers uit wrangler.toml binnen, dus er
+  // wordt op `event.cron` gesplitst: de wekelijkse doet de koers, de dagelijkse het
+  // vervallen. Zonder die splitsing zou een tweede cron de koers dagelijks maken en
+  // het vervallen tot zes dagen te laat komen. Een onbekende cron doet NIETS -
+  // liever een vergeten koppeling die opvalt dan de verkeerde taak op het verkeerde
+  // moment.
   async scheduled(event, env, ctx) {
-    const werk = koersBijwerken(env).catch(() => null);
-    if (ctx && ctx.waitUntil) ctx.waitUntil(werk);
+    const wanneer = String(event && event.cron || "");
+    let werk = null;
+    if (wanneer === CRON_KOERS) werk = koersBijwerken(env).catch(() => null);
+    else if (wanneer === CRON_VERVAL) werk = vervalRonde(env).catch(() => null);
+    if (werk && ctx && ctx.waitUntil) ctx.waitUntil(werk);
     return werk;
   },
 };

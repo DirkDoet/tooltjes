@@ -146,6 +146,14 @@ import {
   gebruikTijdTekst,
   csvVeld,
   gebruikCsvTekst,
+  maandenLater,
+  partijVervalDag,
+  migreerPartijen,
+  pasVervalToe,
+  boekAfPartijen,
+  boekBijPartijen,
+  eerstvolgendVerval,
+  herrekenSaldo,
   dagSleutel,
   gebruikerSleutel,
   geldigSessieId,
@@ -1097,10 +1105,10 @@ test("schoneCreditsConfig: onzin uit het formulier wordt een bruikbare instellin
   // bewust worden opgeschreven en niet ongemerkt meeliften.
   assert.deepEqual(schoneCreditsConfig({}),
     { startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365, koersAuto: true,
-      koopMin: 10, koopMax: 500 });
+      koopMin: 10, koopMax: 500, vervalMaanden: 12 });
   assert.deepEqual(schoneCreditsConfig({ startsaldo: 50, koers: 0.9, marge: 3 }),
     { startsaldo: 50, koers: 0.9, marge: 3, maxRegels: 500, bewaardagen: 365, koersAuto: true,
-      koopMin: 10, koopMax: 500 });
+      koopMin: 10, koopMax: 500, vervalMaanden: 12 });
   // Geen halve credits, geen negatief startsaldo, geen marge onder 1 (dat zou
   // betekenen dat Dirk onder de kostprijs verkoopt).
   assert.equal(schoneCreditsConfig({ startsaldo: 12.7 }).startsaldo, 13);
@@ -3690,4 +3698,296 @@ test("de datum in de CSV is tekst in de tijdzone van de zaak", () => {
   assert.equal(gebruikTijdTekst(Date.UTC(2026, 11, 31, 23, 1)), "01-01-2027 00:01");
   // In juli loopt Amsterdam twee uur voor.
   assert.equal(gebruikTijdTekst(Date.UTC(2026, 6, 1, 12, 0)), "01-07-2026 14:00");
+});
+
+// -- DIR-109 - credits vervallen na twaalf maanden ---------------------------
+
+// 1 juli 2026 12:00 UTC = 14:00 in Amsterdam.
+const T0 = Date.UTC(2026, 6, 1, 12, 0);
+const MND = 12;
+
+function partij(tijd, rest, extra) {
+  return Object.assign({ tijd, credits: rest, rest, soort: "aankoop" }, extra || {});
+}
+
+test("maandenLater telt kalendermaanden op de klok van de zaak, geen 365 dagen", () => {
+  assert.equal(maandenLater(Date.UTC(2026, 6, 1, 12, 0), 12), "2027-07-01");
+  // Schrikkeljaar: 29 februari 2028 plus twaalf maanden wordt 28 februari 2029,
+  // niet 1 maart - twaalf maanden na aankoop hoort geen extra dag te geven.
+  assert.equal(maandenLater(Date.UTC(2028, 1, 29, 12, 0), 12), "2029-02-28");
+  // 31 augustus plus zes maanden klemt op de laatste dag van februari.
+  assert.equal(maandenLater(Date.UTC(2026, 7, 31, 12, 0), 6), "2027-02-28");
+  // Over de jaargrens heen.
+  assert.equal(maandenLater(Date.UTC(2026, 10, 15, 12, 0), 3), "2027-02-15");
+  // De valkuil waar het factuurnummer en de PDF-datum al eens op stukliepen: even
+  // voor middernacht Amsterdamse tijd is het hier al de volgende dag.
+  assert.equal(maandenLater(Date.UTC(2026, 6, 1, 22, 30), 12), "2027-07-02");
+});
+
+test("een partij van precies twaalf maanden oud vervalt, eentje van elf niet (AC-3)", () => {
+  const twaalf = { partijen: [partij(T0, 100)], schuld: 0, saldo: 100 };
+  // Precies op de verjaardag (zelfde datum, een jaar later in Amsterdam): vervallen.
+  const opDeDag = pasVervalToe(twaalf, MND, Date.UTC(2027, 6, 1, 12, 0));
+  assert.equal(opDeDag.length, 1);
+  assert.equal(opDeDag[0].vervallen, 100);
+  assert.equal(twaalf.saldo, 0);
+  assert.equal(twaalf.partijen.length, 0, "een lege partij blijft niet rondslingeren");
+
+  const elf = { partijen: [partij(T0, 100)], schuld: 0, saldo: 100 };
+  assert.equal(pasVervalToe(elf, MND, Date.UTC(2027, 5, 1, 12, 0)).length, 0);
+  assert.equal(elf.saldo, 100);
+
+  // De dag ERVOOR nog niet: 30 juni 2027 in Amsterdam.
+  const bijna = { partijen: [partij(T0, 100)], schuld: 0, saldo: 100 };
+  assert.equal(pasVervalToe(bijna, MND, Date.UTC(2027, 5, 30, 12, 0)).length, 0);
+});
+
+test("zonder termijn vervalt er niets - liever te laat dan met een verzonnen termijn", () => {
+  const rec = { partijen: [partij(T0, 100)], schuld: 0, saldo: 100 };
+  assert.equal(pasVervalToe(rec, 0, Date.UTC(2030, 0, 1)).length, 0);
+  assert.equal(pasVervalToe(rec, undefined, Date.UTC(2030, 0, 1)).length, 0);
+  assert.equal(rec.saldo, 100);
+});
+
+test("verbruik gaat van de partij die het EERST vervalt en schuift door (AC-2)", () => {
+  const oud = partij(T0, 100);
+  const nieuw = partij(Date.UTC(2026, 8, 1, 12, 0), 100);
+  const rec = { partijen: [nieuw, oud], schuld: 0, saldo: 200 };   // met opzet verkeerd om
+  boekAfPartijen(rec, 130, MND);
+  assert.equal(rec.saldo, 70);
+  // De oude partij is op en weg; van de nieuwe is 30 af.
+  assert.equal(rec.partijen.length, 1);
+  assert.equal(rec.partijen[0].tijd, nieuw.tijd);
+  assert.equal(rec.partijen[0].rest, 70);
+});
+
+test("een onbeperkte partij gaat als LAATSTE op, en vervalt nooit (AC-9)", () => {
+  // "Oudste eerst" zou hier fout zijn: dan ging de onbeperkte partij als eerste op
+  // en verdampte de partij die wel verloopt ongebruikt.
+  const eeuwig = partij(T0 - 1000, 100, { onbeperkt: true, soort: "correctie" });
+  const gewoon = partij(T0, 100);
+  const rec = { partijen: [eeuwig, gewoon], schuld: 0, saldo: 200 };
+  boekAfPartijen(rec, 50, MND);
+  assert.equal(rec.partijen.find((p) => p.onbeperkt).rest, 100, "de onbeperkte partij blijft staan");
+  assert.equal(rec.partijen.find((p) => !p.onbeperkt).rest, 50);
+
+  // En tien jaar later is de onbeperkte er nog steeds.
+  const weg = pasVervalToe(rec, MND, Date.UTC(2036, 6, 1, 12, 0));
+  assert.equal(weg.length, 1);
+  assert.equal(rec.saldo, 100);
+  assert.equal(partijVervalDag(eeuwig, MND), null);
+});
+
+test("schuld: verbruik boven de partijen wordt schuld, en schuld vervalt nooit (valkuil 7)", () => {
+  // DIR-92 laat het saldo bewust onder nul zakken; dat gedrag blijft.
+  const rec = { partijen: [partij(T0, 50)], schuld: 0, saldo: 50 };
+  boekAfPartijen(rec, 80, MND);
+  assert.equal(rec.saldo, -30);
+  assert.equal(rec.schuld, 30);
+  assert.equal(rec.partijen.length, 0);
+
+  // Het vervallen raakt de schuld niet aan: anders was hij vanzelf weg.
+  pasVervalToe(rec, MND, Date.UTC(2030, 0, 1));
+  assert.equal(rec.saldo, -30);
+
+  // Een nieuwe aankoop dekt eerst de schuld; het restant wordt de partij.
+  boekBijPartijen(rec, 100, Date.UTC(2026, 9, 1), "aankoop");
+  assert.equal(rec.saldo, 70);
+  assert.equal(rec.schuld, 0);
+  assert.equal(rec.partijen.length, 1);
+  assert.equal(rec.partijen[0].rest, 70);
+});
+
+test("een bestaand saldo zonder partijen wordt een partij met de invoerdatum (AC-8)", () => {
+  const rec = { saldo: 340, gemaakt: 1 };
+  migreerPartijen(rec, T0);
+  assert.equal(rec.partijen.length, 1);
+  assert.equal(rec.partijen[0].tijd, T0, "de klok begint pas te lopen als dit live staat");
+  assert.equal(rec.partijen[0].rest, 340);
+  assert.equal(rec.saldo, 340, "niemand raakt met terugwerkende kracht iets kwijt");
+
+  // Nog eens migreren doet niets: de partijen zijn er al.
+  migreerPartijen(rec, T0 + 999999);
+  assert.equal(rec.partijen.length, 1);
+  assert.equal(rec.partijen[0].tijd, T0);
+
+  // Een negatief saldo wordt schuld, geen partij.
+  const min = { saldo: -40, gemaakt: 1 };
+  migreerPartijen(min, T0);
+  assert.equal(min.partijen.length, 0);
+  assert.equal(min.schuld, 40);
+  assert.equal(min.saldo, -40);
+});
+
+test("eerstvolgendVerval: de vroegste dag, met alles wat die dag vervalt (AC-5)", () => {
+  const rec = { partijen: [
+    partij(T0, 100),
+    partij(T0, 50),                                        // zelfde dag: telt erbij op
+    partij(Date.UTC(2026, 8, 1, 12, 0), 70),
+    partij(T0 - 5000, 999, { onbeperkt: true }),
+  ], schuld: 0 };
+  herrekenSaldo(rec);
+  const uit = eerstvolgendVerval(rec, MND);
+  assert.equal(uit.dag, "2027-07-01");
+  assert.equal(uit.credits, 150);
+  // Alleen onbeperkte partijen over: niets te melden.
+  assert.equal(eerstvolgendVerval({ partijen: [partij(T0, 10, { onbeperkt: true })] }, MND), null);
+  assert.equal(eerstvolgendVerval({ partijen: [] }, MND), null);
+});
+
+// -- DIR-109 - de routes: vastleggen op een plek -----------------------------
+
+const VERVAL_INV = { vervalMaanden: 12, maxRegels: 500, bewaardagen: 3650 };
+
+async function doPost(doo, pad, body) {
+  const r = await doo.fetch(new Request("https://do" + pad, {
+    method: "POST", body: JSON.stringify(body || {}),
+  }));
+  return r.json();
+}
+
+test("de dagelijkse ronde legt het verval vast met een grootboekregel (AC-4/AC-6)", async () => {
+  const dertienMndTerug = Date.UTC(2025, 5, 1, 12, 0);
+  const opslag = nepDoOpslag({ "s:slaper@voorbeeld.nl": {
+    saldo: 300, gemaakt: 1,
+    partijen: [partij(dertienMndTerug, 300)], schuld: 0,
+  } });
+  const doo = new CreditsDO({ storage: opslag });
+
+  const uit = await doPost(doo, "/credits/vervalronde", VERVAL_INV);
+  assert.equal(uit.klanten, 1);
+  assert.equal(uit.regels, 1);
+
+  const rec = opslag.data.get("s:slaper@voorbeeld.nl");
+  assert.equal(rec.saldo, 0, "het restant telt niet meer mee");
+
+  const regel = [...opslag.data.values()].find((v) => v && v.soort === "verval");
+  assert.ok(regel, "het vervallen hoort als regel in het grootboek");
+  assert.equal(regel.credits, 300);
+  assert.equal(regel.saldoNa, 0);
+  // Valkuil 5: datum en omvang van de aankoop staan IN de regel, want de
+  // aankoopregel zelf is tegen die tijd opgeruimd door de bewaartermijn.
+  assert.equal(regel.vervalVan.tijd, dertienMndTerug);
+  assert.equal(regel.vervalVan.credits, 300);
+
+  // En de klant krijgt hem te zien, met die uitleg erbij (AC-4).
+  const voorKlant = klantRegel(regel);
+  assert.equal(voorKlant.soort, "verval");
+  assert.equal(voorKlant.vervalVan.tijd, dertienMndTerug);
+
+  // Een tweede ronde vindt niets meer: geen dubbele regels.
+  const nogEen = await doPost(doo, "/credits/vervalronde", VERVAL_INV);
+  assert.equal(nogEen.regels, 0);
+});
+
+test("boeken past het verval opnieuw toe, met zijn eigen now (valkuil 8)", async () => {
+  // Een partij die verlopen is, mag niet alsnog het verbruik dragen: het verval
+  // gaat voor, de afboeking wordt dan schuld.
+  const oud = Date.UTC(2020, 0, 1);
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": {
+    saldo: 100, gemaakt: 1, partijen: [partij(oud, 100)], schuld: 0,
+  } });
+  const doo = new CreditsDO({ storage: opslag });
+  const uit = await doPost(doo, "/credits/boek", Object.assign({
+    email: "klant@voorbeeld.nl", credits: 10, agent: "gsc", model: "claude-sonnet-5",
+  }, VERVAL_INV));
+  assert.equal(uit.saldo, -10, "eerst vervallen de 100, dan wordt 10 verbruik schuld");
+  const rec = opslag.data.get("s:klant@voorbeeld.nl");
+  assert.equal(rec.schuld, 10);
+  assert.ok([...opslag.data.values()].some((v) => v && v.soort === "verval"));
+});
+
+test("een record van voor dit issue wordt bij de eerste aanraking gemigreerd (AC-8)", async () => {
+  const opslag = nepDoOpslag({ "s:oud@voorbeeld.nl": { saldo: 250, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  const uit = await doPost(doo, "/credits/saldo", Object.assign({ email: "oud@voorbeeld.nl" }, VERVAL_INV));
+  assert.equal(uit.saldo, 250, "er verdwijnt niets");
+  const rec = opslag.data.get("s:oud@voorbeeld.nl");
+  assert.equal(rec.partijen.length, 1);
+  assert.ok(rec.partijen[0].tijd > 0);
+
+  // Valkuil 1, het rampscenario zelf. saldoVan keurt records af waar `saldo` geen
+  // getal is; zou de migratie dat veld breken, dan ziet de VOLGENDE aanraking "nog
+  // geen record", deelt het startsaldo opnieuw uit en is het echte saldo weg -
+  // terwijl overal een keurig getal staat. Onherstelbaar zonder back-up, dus hier
+  // de twee lezingen achter elkaar.
+  assert.equal(typeof rec.saldo, "number", "saldo moet een getal op het record blijven");
+  const tweede = await doPost(doo, "/credits/start", Object.assign({
+    email: "oud@voorbeeld.nl", startsaldo: 200,
+  }, VERVAL_INV));
+  assert.equal(tweede.saldo, 250, "geen tweede startsaldo, en niets kwijt");
+  assert.equal(opslag.data.get("s:oud@voorbeeld.nl").saldo, 250);
+});
+
+test("vervaltest telt wat een kortere termijn NU zou kosten, zonder iets te wijzigen (AC-7)", async () => {
+  const tienMndTerug = Date.UTC(2025, 10, 1, 12, 0);
+  const beginstand = { saldo: 500, gemaakt: 1, partijen: [partij(tienMndTerug, 500)], schuld: 0 };
+  const opslag = nepDoOpslag({ "s:k@voorbeeld.nl": beginstand });
+  const doo = new CreditsDO({ storage: opslag });
+
+  // Op 12 maanden is er nog niets aan de hand; op 6 zou alles vervallen.
+  // (nepDoOpslag draait op Date.now(); deze partij is ~10 maanden oud.)
+  const zes = await doPost(doo, "/credits/vervaltest", { vervalMaanden: 6 });
+  assert.equal(zes.credits, 500);
+  assert.equal(zes.klanten, 1);
+
+  const rec = opslag.data.get("s:k@voorbeeld.nl");
+  assert.equal(rec.saldo, 500, "tellen is geen wijzigen");
+  assert.equal(Array.isArray(rec.partijen) && rec.partijen[0].rest, 500);
+  assert.equal([...opslag.data.values()].some((v) => v && v.soort === "verval"), false);
+});
+
+test("de correctie van Dirk: met datum, en onbeperkt als hij dat zegt (AC-1/AC-9)", async () => {
+  const opslag = nepDoOpslag({});
+  const doo = new CreditsDO({ storage: opslag });
+  const dertienMndTerug = Date.now() - 396 * 24 * 3600 * 1000;
+
+  await doPost(doo, "/credits/correctie", Object.assign({
+    email: "k@voorbeeld.nl", credits: 100, reden: "test", datum: dertienMndTerug,
+  }, VERVAL_INV));
+  let rec = opslag.data.get("s:k@voorbeeld.nl");
+  assert.equal(rec.partijen.length, 1);
+  assert.equal(rec.partijen[0].tijd, dertienMndTerug, "de opgegeven datum is de aankoopdatum");
+  assert.equal(rec.saldo, 100);
+
+  // De volgende aanraking - welke dan ook - past het verval toe: de partij van
+  // dertien maanden terug is dan meteen weg, precies zoals de controle-stap in het
+  // issue het beschrijft. De onbeperkte partij die hier bij komt, blijft.
+  await doPost(doo, "/credits/correctie", Object.assign({
+    email: "k@voorbeeld.nl", credits: 40, reden: "cadeau", onbeperkt: true,
+  }, VERVAL_INV));
+  rec = opslag.data.get("s:k@voorbeeld.nl");
+  assert.equal(rec.partijen.length, 1);
+  assert.equal(rec.partijen[0].onbeperkt, true);
+  assert.equal(rec.saldo, 40);
+  assert.ok([...opslag.data.values()].some((v) => v && v.soort === "verval"),
+    "het vervallen van de oude partij staat in het grootboek");
+
+  // De ronde daarna vindt niets meer.
+  const ronde = await doPost(doo, "/credits/vervalronde", VERVAL_INV);
+  assert.equal(ronde.regels, 0);
+  assert.equal(opslag.data.get("s:k@voorbeeld.nl").saldo, 40);
+});
+
+test("het dashboard krijgt het eerstvolgende verval mee (AC-5)", async () => {
+  const opslag = nepDoOpslag({ "s:k@voorbeeld.nl": {
+    saldo: 120, gemaakt: 1, partijen: [partij(T0, 120)], schuld: 0,
+  } });
+  const doo = new CreditsDO({ storage: opslag });
+  const uit = await doPost(doo, "/credits/klant", Object.assign({ email: "k@voorbeeld.nl" }, VERVAL_INV));
+  assert.equal(uit.verval.dag, "2027-07-01");
+  assert.equal(uit.verval.credits, 120);
+});
+
+test("reserveren ziet het saldo NA verval, niet ervoor", async () => {
+  const oud = Date.UTC(2020, 0, 1);
+  const opslag = nepDoOpslag({ "s:k@voorbeeld.nl": {
+    saldo: 100, gemaakt: 1, partijen: [partij(oud, 100)], schuld: 0,
+  } });
+  const doo = new CreditsDO({ storage: opslag });
+  const uit = await doPost(doo, "/credits/reserveer", Object.assign({
+    email: "k@voorbeeld.nl", startsaldo: 0, koers: 0.92, marge: 2,
+  }, VERVAL_INV));
+  assert.equal(uit.toegestaan, false, "chatten op vervallen credits hoort niet te kunnen");
+  assert.equal(uit.saldo, 0);
 });

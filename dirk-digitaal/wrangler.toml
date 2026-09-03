@@ -36,7 +36,10 @@ new_sqlite_classes = ["CreditsDO"]
 # vaker hoeft niet, want de koers beweegt per week een paar tienden van een procent.
 # Cron-triggers werken op het gratis plan.
 [triggers]
-crons = ["0 6 * * 1"]
+# DIR-103: maandag 06:00 UTC de koers; DIR-109: elke dag 05:00 UTC het vervallen.
+# De twee tekstjes moeten letterlijk gelijk zijn aan CRON_KOERS en CRON_VERVAL in
+# src/index.js; scheduled() splitst erop.
+crons = ["0 6 * * 1", "0 5 * * *"]
 
 # KV voor klant-config (DIR-30): sleutel -> { naam, adAccountId }. Alleen config, geen klantdata.
 [[kv_namespaces]]
