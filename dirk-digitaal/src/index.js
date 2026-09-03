@@ -2598,6 +2598,14 @@ function tijdSleutel(tijd) {
 // Het adres wordt ge-encodeerd, zodat een adres met een dubbele punt erin niet in de
 // prefix van een ander adres kan vallen. Dat kan bij Google niet, maar een
 // sleutelindeling waarbij dat wél zou uitmaken hoort niet in een geldadministratie.
+// DIR-97 - is er ooit iets verbruikt? "Nieuw" betekent: nog nooit een vraag
+// gesteld, dus geen enkele verbruiksregel. Niet de leeftijd van het account: wie
+// een jaar geleden inlogde en nooit iets vroeg, verdient dezelfde uitleg als
+// iemand van vandaag. Aankopen en correcties tellen niet als gebruik.
+export function heeftVerbruik(regels) {
+  return (regels || []).some((r) => r && r.soort === "verbruik");
+}
+
 export function boekIndexPrefix(email) {
   return "i:" + encodeURIComponent(normaliseerEmail(email)) + ":";
 }
@@ -3662,6 +3670,25 @@ export class CreditsDO {
 
   // Openstaande reserveringen van deze klant. Verlopen reserveringen worden meteen
   // opgeruimd, zodat een afgebroken verzoek niemand blijft blokkeren.
+  // DIR-97 - nieuwste eerst door de eigen index van deze klant: bij een actieve
+  // klant is de eerste treffer meteen raak, bij een nieuwe zijn er hooguit een
+  // paar regels. Stopt zodra er een verbruiksregel gevonden is.
+  async klantHeeftVerbruik(email) {
+    let cursor = "";
+    for (;;) {
+      const opties = { prefix: boekIndexPrefix(email), reverse: true, limit: 50 };
+      if (cursor) opties.end = cursor;
+      const brok = await this.state.storage.list(opties);
+      if (!brok.size) return false;
+      for (const [indexSleutel, regelSleutel] of brok) {
+        cursor = indexSleutel;
+        const regel = await this.state.storage.get(regelSleutel);
+        if (heeftVerbruik([regel])) return true;
+      }
+      if (brok.size < 50) return false;
+    }
+  }
+
   async reserveringenVan(email, nu) {
     const prefix = reserveringPrefix(email);
     const open = [];
@@ -3688,7 +3715,11 @@ export class CreditsDO {
       const rec = nieuwSaldoRecord(bestaand, inv.startsaldo, now);
       if (!bestaand) await this.state.storage.put("s:" + email, rec);
       else await this.verwerkVerval(email, rec, inv, now);
-      return json({ saldo: rec.saldo, model: rec.model || "" });
+      // DIR-97 - de inlog-route wil in dezelfde aanroep weten of dit een nieuwe
+      // klant is; alleen dan wordt de index doorzocht.
+      const uit = { saldo: rec.saldo, model: rec.model || "" };
+      if (inv.metStand === true) uit.nieuw = !(await this.klantHeeftVerbruik(email));
+      return json(uit);
     }
 
     if (url.pathname === "/credits/saldo") {
@@ -3762,6 +3793,8 @@ export class CreditsDO {
         // AC-5 - wanneer vervalt het eerstvolgende deel, en hoeveel. Een feit voor
         // het dashboard, geen waarschuwing.
         verval: rec ? eerstvolgendVerval(rec, Number(inv.vervalMaanden) || 0) : null,
+        // DIR-97 AC-5 - het welkomstblok hangt hieraan: weg na het eerste gesprek.
+        nieuw: !(await this.klantHeeftVerbruik(email)),
         regels,
         cursor,
         meer: !uitgelezen,
@@ -4185,6 +4218,42 @@ async function logGebruik(env, regel) {
 // bezoeker kan deze instantie niet adresseren.
 function creditsStub(env) {
   return env.CREDITS.get(env.CREDITS.idFromName("credits:hoofdboek"));
+}
+
+// DIR-97 AC-3 (should-fix) - het kostenvoorbeeld in het welkomstblok rekent met de
+// ECHTE koers en marge, want die zet Dirk om zonder deploy; een vast "2 tot 5" zou
+// dan stil gaan liegen zodra de marge omhoog gaat. De twee profielen zijn de
+// definitie van "een gewone vraag": kort 3.000 tokens in / 400 uit, flink 8.000 in
+// / 800 uit, op het standaardmodel.
+export function kostenVoorbeeld(koers, marge) {
+  return {
+    laag: kostenNaarCredits(tokenKosten(ANTHROPIC_MODEL, { input_tokens: 3000, output_tokens: 400 }), koers, marge),
+    hoog: kostenNaarCredits(tokenKosten(ANTHROPIC_MODEL, { input_tokens: 8000, output_tokens: 800 }), koers, marge),
+  };
+}
+
+// DIR-97 - waar hoort iemand na het inloggen terecht te komen? Nieuw (nog nooit
+// iets gevraagd) of een leeg saldo: het dashboard, met de uitleg respectievelijk de
+// koopknop (AC-1, AC-7). Anders het kantoor, zoals altijd (AC-6). Een onbekend
+// saldo telt als "gewoon doorlaten": een storing in de administratie mag niemand
+// de toegang inruilen voor een leeg dashboard.
+export function onboardingDoel(stand) {
+  const st = stand || {};
+  if (st.nieuw === true) return "/dashboard";
+  if (typeof st.saldo === "number" && st.saldo <= 0) return "/dashboard";
+  return "/";
+}
+
+// DIR-97 - saldo (zo nodig aanmaken) plus of dit een nieuwe klant is, in een
+// aanroep. De callback beslist hiermee waar iemand na het inloggen terechtkomt.
+async function onboardingStand(env, email) {
+  const cfg = await creditsConfig(env);
+  const resp = await creditsStub(env).fetch("https://do/credits/start", {
+    method: "POST",
+    body: JSON.stringify({ email, startsaldo: cfg.startsaldo, metStand: true }),
+  });
+  const j = await resp.json();
+  return { saldo: typeof j.saldo === "number" ? j.saldo : null, nieuw: j.nieuw === true };
 }
 
 // Het saldo van dit adres, en meteen aanmaken met het gratis startsaldo als het er
@@ -5707,6 +5776,13 @@ const OFFICE_HTML = `<!doctype html>
     padding:.55rem .75rem; font-size:.98rem; line-height:1.45; }
   .dash-knoppen{ display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-top:.8rem; }
   .dash-melding{ margin:.45rem 0 0; font-size:.9rem; color:#45505b; }
+  /* DIR-97 - het welkomstblok en het "Hoe werkt dit?"-linkje. */
+  .dash-welkom{ margin:.8rem 0; border:2px solid var(--ink); background:#e8f3ec;
+    padding:.65rem .8rem; }
+  .dash-welkom h3{ margin:0 0 .35rem; }
+  .dash-welkom p{ margin:0 0 .6rem; font-size:.96rem; line-height:1.5; }
+  .dash-hoe{ background:none; border:0; color:#015092; cursor:pointer; padding:0;
+    font:inherit; font-size:.9rem; text-decoration:underline; }
   /* DIR-94 - het koopblok. Bewust smal: een bedrag in hele euro's is drie tekens. */
   .dash-koop{ display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; margin-top:.5rem; }
   .dash-koop label{ font-size:.95rem; }
@@ -5967,6 +6043,14 @@ const OFFICE_HTML = `<!doctype html>
       <p class="dash-melding" id="dash-wie"></p>
       <!-- DIR-109 AC-5: een feit, geen waarschuwing. Leeg als er niets vervalt. -->
       <p class="dash-melding" id="dash-verval"></p>
+      <!-- DIR-97: het welkomstblok. Alleen zichtbaar voor wie nog nooit iets heeft
+           gevraagd (AC-2); daarna verstopt achter "Hoe werkt dit?" (AC-5). -->
+      <div class="dash-welkom dash-uit" id="dash-welkom">
+        <h3>Welkom bij Dirk Digitaal</h3>
+        <p id="dash-welkom-tekst"></p>
+        <button class="knop" id="dash-kantoor" type="button">Naar het kantoor</button>
+      </div>
+      <p class="dash-melding"><button class="dash-hoe dash-uit" id="dash-hoe" type="button">Hoe werkt dit?</button></p>
       <h3>Credits bijkopen</h3>
       <div class="dash-koop">
         <label for="dash-euro">Bedrag in hele euro's</label>
@@ -5975,6 +6059,8 @@ const OFFICE_HTML = `<!doctype html>
       </div>
       <p class="dash-melding" id="dash-koopsom"></p>
       <p class="dash-melding" id="dash-koopmelding"></p>
+      <!-- DIR-97 AC-8: verschijnt zodra een betaling rond is. -->
+      <button class="knop dash-uit" id="dash-verder" type="button">Naar het kantoor</button>
       <h3>Je factuurgegevens</h3>
       <p class="dash-melding">Deze komen op je factuur te staan. Zonder deze gegevens kunnen we
         geen geldige factuur maken, dus vul ze in voordat je credits koopt.</p>
@@ -6533,7 +6619,13 @@ const OFFICE_HTML = `<!doctype html>
     for(var i=0;i<dashKeuzes.length;i++) if(dashKeuzes[i].id===id) return dashKeuzes[i].label;
     return id||'';
   }
-  function dashDicht(){ dashOverlay.style.display='none'; }
+  function dashDicht(){
+    dashOverlay.style.display='none';
+    // DIR-97 should-fix - ELKE sluitweg zet de URL terug, ook de X en een klik
+    // naast het paneel. Anders bleef /dashboard staan en zette elke verversing de
+    // klant terug in het paneel - juist die met saldo nul, die geen knop heeft.
+    if(location.pathname!=='/') history.replaceState(null,'','/');
+  }
   function dashOpen(){
     dashOverlay.style.display='flex';
     dashCursor='';
@@ -6555,6 +6647,29 @@ const OFFICE_HTML = `<!doctype html>
     } else {
       op.textContent=''; op.classList.add('dash-uit');
     }
+  }
+  // DIR-97 AC-2/AC-3 - maximaal vijf zinnen, jij-vorm. Het startsaldo-getal komt
+  // uit de instelling; de kostenzin is met een test aan de prijstabel geklonken,
+  // zodat hij omvalt als de tarieven veranderen.
+  function dashWelkomTekst(startsaldo, kosten){
+    // Het bereik komt van de server, gerekend met de koers en marge van dit moment;
+    // de getallen hieronder zijn alleen de terugval als het veld ontbreekt.
+    var laag=(kosten&&kosten.laag)||2, hoog=(kosten&&kosten.hoog)||5;
+    return 'Dirk Digitaal is het online kantoor van Dirk Doet. '
+      + 'Je praat er met vier AI-collega\u2019s over je eigen cijfers: vindbaarheid, bezoekers, advertenties en teksten. '
+      + 'Je hebt '+startsaldo+' gratis credits gekregen, en 1 credit is een cent. '
+      + 'Elke vraag kost er een paar: een gewone vraag zo\u2019n '+laag+' tot '+hoog+' credits. '
+      + 'Genoeg om rustig uit te proberen dus \u2014 en bijkopen kan hieronder.';
+  }
+  function dashWelkomTonen(j){
+    var blok=document.getElementById('dash-welkom'), hoe=document.getElementById('dash-hoe');
+    if(!blok) return;
+    document.getElementById('dash-welkom-tekst').textContent=dashWelkomTekst(j.startsaldo||0, j.kosten);
+    var nieuw = j.nieuw===true;
+    // LET OP: .verborgen werkt alleen onder .zijmenu; hier is .dash-uit de
+    // verbergklasse (zie de CSS-comment erbij).
+    blok.classList[nieuw?'remove':'add']('dash-uit');
+    hoe.classList[nieuw?'add':'remove']('dash-uit');
   }
   function dashSaldoTonen(j){
     dashSaldoBedrag(Number(j.saldo||0));
@@ -6759,7 +6874,7 @@ const OFFICE_HTML = `<!doctype html>
           return;
         }
         var j=res.j;
-        if(!bijwerken){ dashSaldoTonen(j); dashModellenTonen(j); }
+        if(!bijwerken){ dashSaldoTonen(j); dashModellenTonen(j); dashWelkomTonen(j); }
         var regels=j.regels||[];
         dashRegelsTonen(regels, bijwerken && regels.length>0);
         dashCursor=j.cursor||'';
@@ -6835,7 +6950,10 @@ const OFFICE_HTML = `<!doctype html>
       .then(function(j){
         if(j.status==='paid' && j.geboekt){
           melding.className='dash-melding';
-          melding.textContent='Betaald \u2014 er zijn '+(j.credits||0)+' credits bijgeschreven.';
+          melding.textContent='Betaald \u2014 er zijn '+(j.credits||0)+' credits bijgeschreven. '
+            + 'Je kunt nu verder praten met je collega\u2019s.';
+          var verder=document.getElementById('dash-verder');
+          if(verder) verder.classList.remove('dash-uit');
           dashLaad(false);
           return;
         }
@@ -6860,6 +6978,18 @@ const OFFICE_HTML = `<!doctype html>
         melding.textContent='We konden de betaling even niet opzoeken. Ververs de pagina zo nog eens.';
       });
   }
+  // DIR-97 AC-4 - naar het kantoor: gewoon het paneel dicht; dashDicht zet zelf de
+  // URL terug, langs elke sluitweg. Het kantoor stond er al die tijd al achter (NG-3).
+  var dashKantoorKnop=document.getElementById('dash-kantoor');
+  if(dashKantoorKnop) dashKantoorKnop.addEventListener('click',dashDicht);
+  var dashVerderKnop=document.getElementById('dash-verder');
+  if(dashVerderKnop) dashVerderKnop.addEventListener('click',dashDicht);
+  // AC-5 - de uitleg blijft bereikbaar: het linkje klapt het blok gewoon weer open.
+  var dashHoeKnop=document.getElementById('dash-hoe');
+  if(dashHoeKnop) dashHoeKnop.addEventListener('click',function(){
+    document.getElementById('dash-welkom').classList.remove('dash-uit');
+    dashHoeKnop.classList.add('dash-uit');
+  });
   dashOverlay.addEventListener('click',function(e){ if(e.target===dashOverlay) dashDicht(); });
   var dashKnop=document.getElementById('zm-dashboard');
   if(dashKnop) dashKnop.addEventListener('click',dashOpen);
@@ -9687,6 +9817,10 @@ export default {
           factuurGegevens: schoneKlantFactuur(j.factuur),
           // DIR-109 AC-5 - wanneer vervalt het eerstvolgende deel, en hoeveel.
           verval: j.verval || null,
+          // DIR-97 - stuurt het welkomstblok aan; het kostenbereik rekent met de
+          // instellingen van dit moment.
+          nieuw: j.nieuw === true,
+          kosten: kostenVoorbeeld(cfg.koers, cfg.marge),
         });
       } catch (e) {
         return json({ error: "Kon je gegevens niet laden. Probeer het zo opnieuw." }, 502);
@@ -10227,14 +10361,28 @@ export default {
       ctx.waitUntil(logGebruik(env, { wat: "login", email, naam: (klant && klant.rec.naam) || "" }));
 
       // DIR-92: de eerste keer inloggen maakt het saldo aan met het gratis
-      // startsaldo. Elke volgende keer vindt het bestaande saldo en laat het staan
-      // (AC-1). Mislukt het, dan maakt de chat-poort het alsnog aan.
-      ctx.waitUntil(saldoStart(env, email).catch(() => {}));
+      // startsaldo; die aanmaak zit nu in de stand-aanroep hieronder.
+      //
+      // DIR-97 - wie voor het eerst komt (nog nooit iets gevraagd) of met een leeg
+      // saldo, gaat naar zijn dashboard: daar staat de uitleg, respectievelijk de
+      // koopknop. Wie gewoon saldo heeft gaat rechtstreeks het kantoor in, zoals
+      // altijd. Is de administratie even onbereikbaar, dan geldt het oude gedrag -
+      // het kantoor - want een storing mag niemand de toegang inruilen voor een
+      // leeg dashboard.
+      let doel = "/";
+      try {
+        doel = onboardingDoel(await onboardingStand(env, email));
+      } catch (e) {
+        // Terugval naar het kantoor, zoals voorheen - maar niet stil: een nieuwe
+        // klant mist dan zijn uitleg, en zonder deze regel weet niemand waarom.
+        // Zelfde vorm als de Ads-foutregel; terug te vinden met wrangler tail.
+        console.log("DIR-97: onboarding-stand niet op te halen, terugval naar het kantoor", String(e));
+      }
 
       // Sessie-cookies zetten, state- en PKCE-cookie wissen, terug naar de scène.
       // De sessie draagt het geverifieerde adres; de klantsleutel gaat mee als Dirk
       // een record op dit adres heeft (dan staat de databron vast).
-      const headers = new Headers({ Location: origin + "/" });
+      const headers = new Headers({ Location: origin + doel });
       headers.append("Set-Cookie", sessionCookie(sessionId, Math.floor(SESSION_TTL_MS / 1000)));
       headers.append("Set-Cookie", `${STATE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
       headers.append("Set-Cookie", `${PKCE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);

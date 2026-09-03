@@ -142,6 +142,9 @@ import {
   magLoggen,
   snoeiGebruik,
   telOnbekendVandaag,
+  heeftVerbruik,
+  kostenVoorbeeld,
+  onboardingDoel,
   sorteerGebruik,
   gebeurtenisTekst,
   gebruikTijdTekst,
@@ -2506,14 +2509,18 @@ function nepDoOpslag(begin) {
     async get(k) { return data.has(k) ? data.get(k) : undefined; },
     async put(k, v) { geschreven.push(k); data.set(k, v); },
     async delete(k) { data.delete(k); },
-    // prefix, end en limit doen er allemaal toe: het snoeien in CreditsDO begrenst
-    // zijn list() met `end` en `limit`, en een nabootsing die dat negeert wist regels
-    // die de echte opslag laat staan.
+    // prefix, start, end, limit EN reverse doen er allemaal toe: het snoeien
+    // begrenst zijn list() met `end` en `limit`, en klantHeeftVerbruik (DIR-97)
+    // leunt op `reverse` om nieuwste-eerst te bladeren. Een nabootsing die reverse
+    // negeert zei "geen verbruik" tegen een klant met 120 regels waarvan alleen
+    // nummer 110 verbruik was, terwijl de echte opslag hem meteen vond.
     async list(opties) {
       const o = opties || {};
       const prefix = o.prefix || "";
+      const sleutels = [...data.keys()].sort();
+      if (o.reverse) sleutels.reverse();
       const uit = new Map();
-      for (const k of [...data.keys()].sort()) {
+      for (const k of sleutels) {
         if (!k.startsWith(prefix)) continue;
         if (o.start && k < o.start) continue;
         if (o.end && k >= o.end) continue;            // `end` is exclusief
@@ -4086,4 +4093,123 @@ test("twee verlagingen in een opslagactie: BEIDE vragen worden apart gesteld (mu
   // Verhogen vraagt niets.
   assert.deepEqual(configPoortBesluit(huidig,
     { vervalMaanden: 24, bewaardagen: 730, maxRegels: 500 }, {}), { ok: true });
+});
+
+// -- DIR-97 - onboarding: nieuw is wie nog nooit iets vroeg ------------------
+
+test("nieuw hangt aan de afwezigheid van afboekingen, niet aan de leeftijd", () => {
+  // Een stokoud account dat alleen ooit kocht en gecorrigeerd werd, is nog steeds
+  // nieuw: er is nooit een vraag gesteld. Een enkel verbruik maakt het oud.
+  const stokoud = [
+    { tijd: Date.UTC(2024, 0, 1), soort: "aankoop", credits: -1000 },
+    { tijd: Date.UTC(2024, 5, 1), soort: "correctie", credits: -50 },
+  ];
+  assert.equal(heeftVerbruik(stokoud), false);
+  assert.equal(heeftVerbruik([]), false);
+  assert.equal(heeftVerbruik(null), false);
+  assert.equal(heeftVerbruik(stokoud.concat([{ tijd: 1, soort: "verbruik", credits: 3 }])), true);
+});
+
+test("de inlogroute krijgt de stand mee, en alleen als hij erom vraagt", async () => {
+  const opslag = nepDoOpslag({});
+  const doo = new CreditsDO({ storage: opslag });
+  const start = (body) => doo.fetch(new Request("https://do/credits/start", {
+    method: "POST", body: JSON.stringify(body),
+  })).then((r) => r.json());
+
+  // Eerste keer: record aangemaakt met startsaldo, en nieuw.
+  const eerste = await start({ email: "vers@voorbeeld.nl", startsaldo: 200, metStand: true });
+  assert.equal(eerste.saldo, 200);
+  assert.equal(eerste.nieuw, true);
+
+  // Zonder metStand blijft het antwoord zoals het was: geen veld, geen indexwerk.
+  const stil = await start({ email: "vers@voorbeeld.nl", startsaldo: 200 });
+  assert.equal(stil.nieuw, undefined);
+
+  // Na een boeking is de klant niet nieuw meer.
+  await doo.fetch(new Request("https://do/credits/boek", {
+    method: "POST", body: JSON.stringify({
+      email: "vers@voorbeeld.nl", credits: 3, agent: "gsc", model: "claude-sonnet-5",
+      maxRegels: 500, bewaardagen: 365,
+    }),
+  }));
+  const daarna = await start({ email: "vers@voorbeeld.nl", startsaldo: 200, metStand: true });
+  assert.equal(daarna.nieuw, false);
+  assert.equal(daarna.saldo, 197, "en het startsaldo wordt niet opnieuw uitgedeeld");
+});
+
+test("verbruik diep in een lange historie wordt gevonden (should-fix 1)", async () => {
+  // De meting van de reviewer: 120 regels, alleen nummer 110 is verbruik. Met een
+  // dubbel dat reverse negeerde zei de test "geen verbruik" terwijl de echte opslag
+  // hem vond; nu bladert het dubbel net als de echte opslag nieuwste-eerst.
+  const begin = { "s:diep@voorbeeld.nl": { saldo: 100, gemaakt: 1 } };
+  for (let i = 0; i < 120; i++) {
+    const soort = i === 109 ? "verbruik" : "aankoop";
+    const sleutel = boekSleutel(1000000 + i * 1000, "r" + i);
+    begin[sleutel] = { tijd: 1000000 + i * 1000, soort, email: "diep@voorbeeld.nl", credits: 1 };
+    begin[boekIndexSleutel("diep@voorbeeld.nl", 1000000 + i * 1000, "r" + i)] = sleutel;
+  }
+  const doo = new CreditsDO({ storage: nepDoOpslag(begin) });
+  const uit = await doo.fetch(new Request("https://do/credits/start", {
+    method: "POST", body: JSON.stringify({ email: "diep@voorbeeld.nl", startsaldo: 200, metStand: true }),
+  })).then((r) => r.json());
+  assert.equal(uit.nieuw, false, "regel 110 van 120 is verbruik en moet gevonden worden");
+});
+
+test("het dashboard weet of het welkomstblok moet staan (AC-5)", async () => {
+  const opslag = nepDoOpslag({ "s:k@voorbeeld.nl": { saldo: 200, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  const klant = () => doo.fetch(new Request("https://do/credits/klant", {
+    method: "POST", body: JSON.stringify({ email: "k@voorbeeld.nl" }),
+  })).then((r) => r.json());
+
+  assert.equal((await klant()).nieuw, true);
+  await doo.fetch(new Request("https://do/credits/boek", {
+    method: "POST", body: JSON.stringify({
+      email: "k@voorbeeld.nl", credits: 2, agent: "gsc", model: "claude-sonnet-5",
+      maxRegels: 500, bewaardagen: 365,
+    }),
+  }));
+  assert.equal((await klant()).nieuw, false);
+});
+
+test("het kostenbereik beweegt mee met koers en marge (should-fix 2)", () => {
+  // De zin op het scherm komt uit kostenVoorbeeld met de instellingen van dat
+  // moment. Bij de standaardinstellingen is dat "2 tot 5"; gaat de marge omhoog,
+  // dan gaan de getallen mee in plaats van dat het blok stil gaat liegen.
+  const std = schoneCreditsConfig({});
+  const gewoon = kostenVoorbeeld(std.koers, std.marge);
+  assert.equal(gewoon.laag, 2);
+  assert.equal(gewoon.hoog, 5);
+  const duurder = kostenVoorbeeld(std.koers, 4);
+  assert.ok(duurder.hoog > gewoon.hoog, "marge 4 hoort meer te kosten: " + duurder.hoog);
+  assert.ok(duurder.laag >= gewoon.laag);
+});
+
+test("de kostenzin in het welkomstblok klopt met de prijstabel (AC-3)", () => {
+  // Het blok zegt: "een gewone vraag zo'n 2 tot 5 credits". Dat is geen slag in de
+  // lucht maar een uitkomst van de tabel: een korte vraag (3.000 tokens in, 400
+  // uit) en een flinke (8.000 in, 800 uit) op het standaardmodel, tegen de
+  // standaardkoers en -marge. Verandert een tarief, dan valt deze test om en moet
+  // de zin mee.
+  const std = schoneCreditsConfig({});
+  const kort = kostenNaarCredits(tokenKosten("claude-sonnet-5",
+    { input_tokens: 3000, output_tokens: 400 }), std.koers, std.marge);
+  const flink = kostenNaarCredits(tokenKosten("claude-sonnet-5",
+    { input_tokens: 8000, output_tokens: 800 }), std.koers, std.marge);
+  assert.ok(kort >= 2, "korte vraag: " + kort);
+  assert.ok(flink <= 5, "flinke vraag: " + flink);
+});
+
+
+test("waar kom je na het inloggen terecht (AC-1/AC-6/AC-7)", () => {
+  // Nieuw: naar het dashboard, met de uitleg. Saldo op: ook, met de koopknop.
+  assert.equal(onboardingDoel({ nieuw: true, saldo: 200 }), "/dashboard");
+  assert.equal(onboardingDoel({ nieuw: false, saldo: 0 }), "/dashboard");
+  assert.equal(onboardingDoel({ nieuw: false, saldo: -5 }), "/dashboard");
+  // Gewoon saldo: rechtstreeks het kantoor in, zoals altijd.
+  assert.equal(onboardingDoel({ nieuw: false, saldo: 120 }), "/");
+  // Onbekend saldo (administratie hapert): doorlaten, niet blokkeren.
+  assert.equal(onboardingDoel({ nieuw: false, saldo: null }), "/");
+  assert.equal(onboardingDoel(null), "/");
 });
