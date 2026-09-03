@@ -3819,6 +3819,40 @@ test("een bestaand saldo zonder partijen wordt een partij met de invoerdatum (AC
   assert.equal(min.saldo, -40);
 });
 
+test("een bestaand saldo vervalt op zijn vroegst twaalf maanden NA de migratie (AC-8)", () => {
+  // Wie zijn credits elf maanden voor de livegang kocht, mag op de dag van de
+  // deploy niets verliezen: tot die dag was er geen vervaltermijn en de voorwaarden
+  // zijn pas per 2 september 2026 aangepast. De partij krijgt daarom het
+  // migratiemoment als datum, nooit iets ouders - de klok begint bij livegang.
+  const rec = { saldo: 500, gemaakt: Date.UTC(2024, 0, 1) };    // stokoud record
+  migreerPartijen(rec, T0);
+
+  // Direct na de migratie: niets vervalt, hoe oud het record ook is.
+  assert.equal(pasVervalToe(rec, MND, T0).length, 0);
+  // Elf maanden later nog steeds niets.
+  assert.equal(pasVervalToe(rec, MND, Date.UTC(2027, 5, 1, 12, 0)).length, 0);
+  assert.equal(rec.saldo, 500);
+  // Pas twaalf maanden na de MIGRATIE is het om.
+  const weg = pasVervalToe(rec, MND, Date.UTC(2027, 6, 1, 12, 0));
+  assert.equal(weg.length, 1);
+  assert.equal(weg[0].vervallen, 500);
+});
+
+test("het gratis startsaldo is ook een partij en vervalt na dezelfde termijn", () => {
+  // Geen aankoop, wel dezelfde regel: anders blijft een euro gratis credits eeuwig
+  // staan bij iemand die nooit iets koopt, en dat is niet de bedoeling van een
+  // proefbedrag.
+  const rec = nieuwSaldoRecord(null, 200, T0);
+  assert.equal(rec.partijen.length, 1);
+  assert.equal(rec.partijen[0].soort, "start");
+  assert.equal(rec.partijen[0].tijd, T0, "de aanmaakdatum van het record");
+  assert.equal(rec.partijen[0].onbeperkt, undefined, "niet stiekem eeuwig");
+
+  const weg = pasVervalToe(rec, MND, Date.UTC(2027, 6, 1, 12, 0));
+  assert.equal(weg.length, 1);
+  assert.equal(rec.saldo, 0);
+});
+
 test("eerstvolgendVerval: de vroegste dag, met alles wat die dag vervalt (AC-5)", () => {
   const rec = { partijen: [
     partij(T0, 100),
