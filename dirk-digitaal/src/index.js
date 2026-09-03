@@ -2929,12 +2929,19 @@ export class CreditsDO {
     // Mollie NIET hier maar in de Worker: die haalt de betaling op en geeft het
     // resultaat als parameter mee.
     if (url.pathname === "/credits/betaling") {
-      if (!email) return json({ error: "geen adres" }, 400);
       const betaalId = String(inv.betaalId || "");
       if (!betaalId) return json({ error: "geen betaal-id" }, 400);
       const status = String(inv.status || "");
       const sleutel = "p:" + betaalId;
       const bestaand = (await this.state.storage.get(sleutel)) || null;
+
+      // Het adres hoeft niet in de melding te staan. Mollie stuurt metadata niet
+      // gegarandeerd mee, en bij het aanmaken hebben we het adres al vastgelegd. Zou
+      // een melding zonder adres hier stranden, dan blijft de betaling op 'open'
+      // staan terwijl er wel betaald is - en dan zwijgt ook de waarschuwing in
+      // /admin, want die kijkt naar status 'paid'. Precies het geval dat je niet stil
+      // wilt hebben.
+      const adres = email || normaliseerEmail(bestaand && bestaand.email) || "";
 
       // AC-6 - de sleutel voor "al gedaan" is de boeking zelf, niet het bestaan van de
       // regel: een betaling die eerst 'open' was en later 'paid' wordt moet nog wel
@@ -2944,17 +2951,20 @@ export class CreditsDO {
       let saldo = bestaand && typeof bestaand.saldoNa === "number" ? bestaand.saldoNa : null;
       let nuGeboekt = false;
 
-      if (status === "paid" && !alGeboekt && credits > 0) {
-        const rec = (await this.saldoVan(email)) || { saldo: 0, gemaakt: now };
+      // Zonder adres valt er niets bij te boeken - een saldo hangt aan een adres.
+      // De melding wordt dan wel vastgelegd, zodat /admin hem laat zien met de
+      // waarschuwing eronder in plaats van dat hij nergens opduikt.
+      if (status === "paid" && !alGeboekt && credits > 0 && adres) {
+        const rec = (await this.saldoVan(adres)) || { saldo: 0, gemaakt: now };
         rec.saldo += credits;
-        await this.state.storage.put("s:" + email, rec);
+        await this.state.storage.put("s:" + adres, rec);
         saldo = rec.saldo;
         nuGeboekt = true;
         // AC-7 - in het grootboek, met alles erbij wat je later nodig hebt om een
         // bedrag terug te vinden bij Mollie. Net als bij een correctie staat het
         // AFgeschreven bedrag in `credits`, dus met een minteken bij een bijboeking.
         await this.schrijfRegel({
-          tijd: now, soort: "aankoop", email, agent: "", model: "",
+          tijd: now, soort: "aankoop", email: adres, agent: "", model: "",
           invoer: 0, uitvoer: 0, cacheLees: 0, cacheSchrijf: 0,
           credits: -credits, saldoNa: rec.saldo,
           bedragCent: Math.max(0, Math.round(Number(inv.bedragCent) || 0)),
@@ -2964,11 +2974,21 @@ export class CreditsDO {
         }, { maxRegels: inv.maxRegels, bewaardagen: inv.bewaardagen });
       }
 
+      // Een later bericht mag een al vastgelegd bedrag niet op nul zetten. Kan het
+      // bedrag niet gelezen worden, dan sturen we hier 0 mee, en zonder terugval zou
+      // dat het bedrag van een AL GEBOEKTE betaling wissen - het saldo blijft dan
+      // kloppen maar de administratie van ontvangen geld niet, en het alarm gaat niet
+      // af omdat `geboekt` waar is. Nul euro is geen echt bedrag, dus 0 telt hier als
+      // "niets meegekregen". Zelfde terugval als bij `credits` en `methode`.
+      const houdVast = (nieuw, oud) => {
+        const n = Math.max(0, Math.round(Number(nieuw) || 0));
+        return n > 0 ? n : Math.max(0, Math.round(Number(oud) || 0));
+      };
       const regel = {
-        betaalId, email, status,
+        betaalId, email: adres, status,
         ref: String(inv.ref || (bestaand && bestaand.ref) || ""),
-        bedragCent: Math.max(0, Math.round(Number(inv.bedragCent) || 0)),
-        btwCent: Math.max(0, Math.round(Number(inv.btwCent) || 0)),
+        bedragCent: houdVast(inv.bedragCent, bestaand && bestaand.bedragCent),
+        btwCent: houdVast(inv.btwCent, bestaand && bestaand.btwCent),
         credits: nuGeboekt ? credits : ((bestaand && bestaand.credits) || 0),
         methode: String(inv.methode || (bestaand && bestaand.methode) || ""),
         geboekt: alGeboekt || nuGeboekt,
@@ -8163,7 +8183,9 @@ export default {
       // Kunnen we het niet ophalen, dan geven we GEEN 200 terug: Mollie probeert het
       // dan later opnieuw. Stilzwijgend ok zeggen zou de melding voorgoed weggooien.
       if (!bet.bruikbaar || bet.betaalId !== betaalId) return new Response("later", { status: 503 });
-      if (!bet.email) return new Response("ok", { status: 200 });
+      // Geen adres in de metadata is geen reden om te stoppen: de DO kent het adres
+      // nog van het aanmaken. Wat er niet meer gebeurt is stilzwijgend "ok" zeggen
+      // en de melding weggooien.
 
       // AC-5 - het aantal credits volgt uit wat Mollie zegt te hebben ontvangen, niet
       // uit wat de klant in het formulier koos en niet uit de metadata.

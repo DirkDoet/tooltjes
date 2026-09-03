@@ -2808,3 +2808,54 @@ test("de koopgrenzen zijn instelbaar en blijven bruikbaar (AC-11)", () => {
   assert.match(keurCreditsConfig({ koopMin: 100, koopMax: 50 }), /niet hoger zijn dan/);
   assert.equal(keurCreditsConfig({ koopMin: 10, koopMax: 500 }), "");
 });
+
+test("een latere melding zonder adres strandt niet, maar valt terug op de betaling (AC-4)", async () => {
+  // Mollie stuurt metadata niet gegarandeerd mee. Zou zo'n melding hier stranden, dan
+  // blijft de betaling op 'open' staan terwijl er wel betaald is - en dan zwijgt ook
+  // de waarschuwing in /admin, want die kijkt naar status 'paid'.
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 0, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  await betaal(doo, { ...BETAALD, status: "open", credits: 0 });
+
+  const uit = await betaal(doo, { ...BETAALD, email: "" });
+  assert.equal(uit.nuGeboekt, true, "de melding zonder adres werd niet verwerkt");
+  assert.equal(opslag.data.get("s:klant@voorbeeld.nl").saldo, 1000);
+  assert.equal(opslag.data.get("p:tr_abc").email, "klant@voorbeeld.nl");
+  assert.equal(opslag.data.get("p:tr_abc").status, "paid");
+  // En in het grootboek staat de aankoop op het juiste adres.
+  const aankoop = [...opslag.data.values()].find((v) => v && v.soort === "aankoop");
+  assert.equal(aankoop.email, "klant@voorbeeld.nl");
+});
+
+test("een betaling die we helemaal niet kennen komt wel in de lijst (AC-10)", async () => {
+  // Geen adres in de melding en geen eerdere regel: dan valt er niets bij te boeken,
+  // want een saldo hangt aan een adres. Maar de melding moet wel zichtbaar worden,
+  // anders is er geld binnen zonder dat het ergens opduikt.
+  const opslag = nepDoOpslag({});
+  const doo = new CreditsDO({ storage: opslag });
+  const uit = await betaal(doo, { ...BETAALD, email: "" });
+  assert.equal(uit.nuGeboekt, false);
+  const regel = opslag.data.get("p:tr_abc");
+  assert.ok(regel, "de betaling is nergens vastgelegd");
+  assert.equal(regel.status, "paid");
+  assert.equal(regel.geboekt, false, "paid + niet geboekt is precies wat /admin moet opmerken");
+});
+
+test("een later bericht met een onleesbaar bedrag wist het bedrag niet (AC-7/AC-10)", async () => {
+  const opslag = nepDoOpslag({ "s:klant@voorbeeld.nl": { saldo: 0, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  await betaal(doo, BETAALD);
+  assert.equal(opslag.data.get("p:tr_abc").bedragCent, 1210);
+
+  // Mollie meldt nogmaals, maar het bedrag is niet te lezen: dan sturen we 0 mee.
+  // Zonder terugval zou dat het bedrag van een AL GEBOEKTE betaling op nul zetten.
+  // Het saldo blijft dan kloppen, de administratie van ontvangen geld niet, en het
+  // alarm gaat niet af omdat `geboekt` waar is.
+  await betaal(doo, { ...BETAALD, bedragCent: 0, btwCent: 0 });
+  assert.equal(opslag.data.get("p:tr_abc").bedragCent, 1210, "het bedrag is gewist");
+  assert.equal(opslag.data.get("p:tr_abc").btwCent, 210, "de btw is gewist");
+  assert.equal(opslag.data.get("p:tr_abc").credits, 1000);
+  assert.equal(opslag.data.get("p:tr_abc").methode, "ideal");
+  // En het saldo is niet nog eens opgehoogd.
+  assert.equal(opslag.data.get("s:klant@voorbeeld.nl").saldo, 1000);
+});
