@@ -1515,8 +1515,12 @@ const BETAALMETHODE_NAAM = {
   banktransfer: "bankoverschrijving", applepay: "Apple Pay", bancontact: "Bancontact",
 };
 export function betaalmethodeNaam(code) {
-  const c = String(code || "").trim().toLowerCase();
-  return BETAALMETHODE_NAAM[c] || c;
+  const ruw = String(code || "").trim();
+  // Kleingeschreven om OP TE ZOEKEN, maar bij een misser gaat de oorspronkelijke
+  // schrijfwijze terug. Anders komt een methode die wij nog niet kennen als "riverty"
+  // op een factuur te staan terwijl de aanbieder hem als Riverty schrijft - en een
+  // factuur is na het uitgeven niet meer te wijzigen.
+  return BETAALMETHODE_NAAM[ruw.toLowerCase()] || ruw;
 }
 
 // Een bedrag in centen als "1.234,56". Zonder muntteken; dat zet de opmaak erbij.

@@ -3460,9 +3460,13 @@ test("de betaalmethode staat op de factuur zoals mensen hem kennen", () => {
   assert.equal(betaalmethodeNaam("IDEAL"), "iDEAL");
   assert.equal(betaalmethodeNaam("paypal"), "PayPal");
   assert.equal(betaalmethodeNaam("banktransfer"), "bankoverschrijving");
-  // Een methode die we niet kennen blijft staan zoals hij is; een lege regel op een
-  // factuur is erger dan een code.
+  // Een methode die we niet kennen blijft staan zoals hij is, MET zijn eigen
+  // hoofdletters. Kleingeschreven teruggeven zou "Riverty" tot "riverty" maken op een
+  // document dat na het uitgeven niet meer te wijzigen is.
   assert.equal(betaalmethodeNaam("iets_nieuws"), "iets_nieuws");
+  assert.equal(betaalmethodeNaam("Riverty"), "Riverty");
+  assert.equal(betaalmethodeNaam("Trustly"), "Trustly");
+  assert.equal(betaalmethodeNaam("  Riverty  "), "Riverty", "alleen de spaties eromheen gaan weg");
   assert.equal(betaalmethodeNaam(""), "");
   assert.equal(betaalmethodeNaam(null), "");
 
