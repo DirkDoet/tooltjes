@@ -2220,6 +2220,26 @@ async function koersStand(env) {
 
 // DIR-104 - verlaagt deze wijziging een van de twee snoei-instellingen? Alleen dan
 // hoort er een bevestiging aan te pas te komen; hoger of gelijk is niet destructief.
+// DIR-109 must-fix - de twee poorten in /api/admin/credits/config delen GEEN vlag.
+// Wie in een opslagactie zowel de vervaltermijn als de bewaartermijn verlaagt, moet
+// BEIDE vragen apart te zien krijgen; met een gedeelde vlag gold het antwoord op de
+// vervalvraag ook als antwoord op de snoeivraag en werd die tweede nooit gesteld
+// (dat brak DIR-104 AC-1). Dit is de enige plek waar die volgorde ligt; de route
+// voert alleen uit wat hier besloten is.
+export function configPoortBesluit(huidig, cfg, b) {
+  const o = huidig || {};
+  const n = cfg || {};
+  const inv = b || {};
+  if (Number(n.vervalMaanden) < Number(o.vervalMaanden)) {
+    if (inv.bevestigdVerval !== true) return { vraag: "verval" };
+    // De vergrendeling van AC-7: bevestigd tegen een termijn die intussen veranderd
+    // is telt niet.
+    if (Number(inv.verwachtVerval) !== Number(o.vervalMaanden)) return { fout: "verouderd" };
+  }
+  if (snoeitVerderOp(o, n) && inv.bevestigdSnoei !== true) return { vraag: "snoei" };
+  return { ok: true };
+}
+
 export function snoeitVerderOp(oud, nieuw) {
   const o = oud || {};
   const n = nieuw || {};
@@ -8442,7 +8462,12 @@ const ADMIN_HTML = `<!doctype html>
   // terugkomen. De server weigert zo'n wijziging tot er bevestigd is en stuurt het
   // aantal mee, zodat er een getal in de vraag staat en geen algemene waarschuwing.
   var huidigVerval=null;   // DIR-109: de termijn waartegen de meting is getoond
-  function bewaarCredits(bevestigd){
+  // Elke poort zijn eigen vlag, en de vlaggen STAPELEN: wie beide termijnen tegelijk
+  // verlaagt, beantwoordt eerst de vervalvraag en daarna de snoeivraag, en het
+  // tweede verzoek draagt het eerste antwoord mee. Een gedeelde vlag liet de
+  // snoeivraag overslaan zodra de vervalvraag beantwoord was.
+  function bewaarCredits(vlaggen){
+    vlaggen = vlaggen || {};
     document.getElementById('cMelding').textContent='';
     api('POST','/api/admin/credits/config',{
       vervalMaanden:Number(document.getElementById('cVerval').value),
@@ -8460,7 +8485,8 @@ const ADMIN_HTML = `<!doctype html>
       // koopgrenzen terugzetten.
       koopMin:Number(document.getElementById('cKoopMin').value),
       koopMax:Number(document.getElementById('cKoopMax').value),
-      bevestigd: !!bevestigd
+      bevestigdVerval: vlaggen.bevestigdVerval===true,
+      bevestigdSnoei: vlaggen.bevestigdSnoei===true
     }).then(function(res){
       // DIR-109 AC-7 - een kortere vervaltermijn: eigen vraag, met wat het NU zou
       // laten vervallen. Dit is geld van klanten, geen historie.
@@ -8471,7 +8497,8 @@ const ADMIN_HTML = `<!doctype html>
              +v.klanten+' klant'+(v.klanten===1?'':'en')+'.')
           : 'Dit laat credits van klanten vervallen (aantal onbekend: het was even niet te tellen).';
         if(confirm(zin+' Die komen niet terug, en klanten hebben ervoor betaald. Doorgaan?')){
-          huidigVerval=res.j.huidigVerval; bewaarCredits(true);
+          huidigVerval=res.j.huidigVerval;
+          bewaarCredits(Object.assign({}, vlaggen, { bevestigdVerval: true }));
         } else {
           meld(''); document.getElementById('cMelding').textContent='Niets gewijzigd.'; laadCredits();
         }
@@ -8486,8 +8513,9 @@ const ADMIN_HTML = `<!doctype html>
           ? ('Dit ruimt uiteindelijk ' + n + ' grootboekregel' + (n===1?'':'s') + ' op, '
              + 'verspreid over de eerstvolgende boekingen van die klanten.')
           : 'Dit ruimt grootboekregels op (aantal onbekend: het grootboek was even niet te lezen).';
-        if(confirm(wat + ' Die komen niet terug. Doorgaan?')){ bewaarCredits(true); }
-        else {
+        if(confirm(wat + ' Die komen niet terug. Doorgaan?')){
+          bewaarCredits(Object.assign({}, vlaggen, { bevestigdSnoei: true }));
+        } else {
           // AC-3: niets veranderd. Terug naar wat er echt is opgeslagen.
           meld(''); document.getElementById('cMelding').textContent='Niets gewijzigd.'; laadCredits();
         }
@@ -8507,7 +8535,7 @@ const ADMIN_HTML = `<!doctype html>
       toonBedrijf(res.j.bedrijf||{}, res.j.ontbreekt||[]);
     });
   });
-  document.getElementById('cBewaar').addEventListener('click',function(){ bewaarCredits(false); });
+  document.getElementById('cBewaar').addEventListener('click',function(){ bewaarCredits(null); });
   document.getElementById('cBoek').addEventListener('click',function(){
     api('POST','/api/admin/credits/correctie',{
       email:document.getElementById('cEmail').value,
@@ -9963,23 +9991,26 @@ export default {
       // de bevestiging draagt de termijn waartegen de meting is getoond, en de
       // server weigert als die intussen is veranderd. Historie kwijtraken was een
       // aanvaardbaar restrisico; geld van klanten niet.
-      if (Number(cfg.vervalMaanden) < Number(huidig.vervalMaanden)) {
-        if (b.bevestigd !== true) {
-          let verval = null;
-          try {
-            const r = await creditsStub(env).fetch("https://do/credits/vervaltest", {
-              method: "POST", body: JSON.stringify({ vervalMaanden: cfg.vervalMaanden }),
-            });
-            verval = await r.json();
-          } catch (e) { /* zonder telling vragen we het alsnog, maar zonder getal */ }
-          return json({ bevestigingNodig: true, verval, huidigVerval: huidig.vervalMaanden, config: cfg }, 409);
-        }
-        if (Number(b.verwachtVerval) !== Number(huidig.vervalMaanden)) {
-          return json({ error: "De vervaltermijn is intussen veranderd (" + huidig.vervalMaanden
-            + " maanden). Laad de pagina opnieuw en beoordeel het opnieuw." }, 409);
-        }
+      //
+      // Elke poort heeft zijn EIGEN vlag (bevestigdVerval, bevestigdSnoei): wie
+      // beide termijnen tegelijk verlaagt krijgt beide vragen, na elkaar. De
+      // volgorde en de vlaggen liggen vast in configPoortBesluit.
+      const besluit = configPoortBesluit(huidig, cfg, b);
+      if (besluit.vraag === "verval") {
+        let verval = null;
+        try {
+          const r = await creditsStub(env).fetch("https://do/credits/vervaltest", {
+            method: "POST", body: JSON.stringify({ vervalMaanden: cfg.vervalMaanden }),
+          });
+          verval = await r.json();
+        } catch (e) { /* zonder telling vragen we het alsnog, maar zonder getal */ }
+        return json({ bevestigingNodig: true, verval, huidigVerval: huidig.vervalMaanden, config: cfg }, 409);
       }
-      if (snoeitVerderOp(huidig, cfg) && b.bevestigd !== true) {
+      if (besluit.fout === "verouderd") {
+        return json({ error: "De vervaltermijn is intussen veranderd (" + huidig.vervalMaanden
+          + " maanden). Laad de pagina opnieuw en beoordeel het opnieuw." }, 409);
+      }
+      if (besluit.vraag === "snoei") {
         let aantal = null;
         try {
           const r = await creditsStub(env).fetch("https://do/credits/snoeitest", {

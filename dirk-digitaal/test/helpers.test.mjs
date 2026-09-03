@@ -75,6 +75,7 @@ import {
   saldoVeld,
   keurCreditsConfig,
   snoeitVerderOp,
+  configPoortBesluit,
   snoeiAantal,
   koersUitAntwoord,
   bruikbareKoers,
@@ -1751,9 +1752,34 @@ test("route: een onbevestigde verlaging schrijft NIETS weg (AC-3)", async () => 
 
 test("route: met bevestiging gaat dezelfde verlaging wel door", async () => {
   const { zetConfig, opgeslagen } = await adminOmgeving(7);
-  const resp = await zetConfig({ ...START_CONFIG, bewaardagen: 200, bevestigd: true });
+  const resp = await zetConfig({ ...START_CONFIG, bewaardagen: 200, bevestigdSnoei: true });
   assert.equal(resp.status, 200);
   assert.equal(opgeslagen().bewaardagen, 200);
+});
+
+test("route: verval en snoei tegelijk verlaagd geeft BEIDE vragen, na elkaar (must-fix)", async () => {
+  // De reviewer mat het met een gedeelde vlag: het antwoord op de vervalvraag gold
+  // ook als antwoord op de snoeivraag, en er stonden honderd bewaardagen in KV
+  // zonder dat het aantal regels ooit getoond was. Dit is dezelfde meting, nu tegen
+  // de gescheiden vlaggen.
+  const { zetConfig, opgeslagen } = await adminOmgeving(7);
+  const beide = { ...START_CONFIG, vervalMaanden: 6, bewaardagen: 100 };
+
+  const een = await zetConfig(beide);
+  assert.equal(een.status, 409);
+  assert.equal((await een.json()).huidigVerval, 12, "eerst de vervalvraag");
+
+  const twee = await zetConfig({ ...beide, bevestigdVerval: true, verwachtVerval: 12 });
+  assert.equal(twee.status, 409, "de snoeivraag wordt ALSNOG gesteld");
+  const j2 = await twee.json();
+  assert.equal(j2.bevestigingNodig, true);
+  assert.equal(j2.aantal, 7, "met het getelde aantal erbij");
+  assert.equal(opgeslagen().bewaardagen, 365, "en er is nog niets weggeschreven");
+
+  const drie = await zetConfig({ ...beide, bevestigdVerval: true, verwachtVerval: 12, bevestigdSnoei: true });
+  assert.equal(drie.status, 200);
+  assert.equal(opgeslagen().bewaardagen, 100);
+  assert.equal(opgeslagen().vervalMaanden, 6);
 });
 
 test("route: verhogen gaat direct door, zonder bevestiging (AC-1)", async () => {
@@ -4024,4 +4050,40 @@ test("reserveren ziet het saldo NA verval, niet ervoor", async () => {
   }, VERVAL_INV));
   assert.equal(uit.toegestaan, false, "chatten op vervallen credits hoort niet te kunnen");
   assert.equal(uit.saldo, 0);
+});
+
+
+test("twee verlagingen in een opslagactie: BEIDE vragen worden apart gesteld (must-fix)", () => {
+  // De vervalpoort en de snoeipoort delen geen vlag. Met een gedeelde vlag gold het
+  // antwoord op de vervalvraag ook als antwoord op de snoeivraag en werd die tweede
+  // nooit gesteld - dan verdwenen er grootboekregels zonder dat het aantal ooit
+  // getoond was (DIR-104 AC-1).
+  const huidig = { vervalMaanden: 12, bewaardagen: 365, maxRegels: 500 };
+  const beide = { vervalMaanden: 6, bewaardagen: 100, maxRegels: 500 };
+
+  // Stap 1: zonder vlaggen komt eerst de vervalvraag.
+  assert.deepEqual(configPoortBesluit(huidig, beide, {}), { vraag: "verval" });
+  // Stap 2: de vervalvraag beantwoord - en dan komt de SNOEIVRAAG, niet een ok.
+  assert.deepEqual(configPoortBesluit(huidig, beide,
+    { bevestigdVerval: true, verwachtVerval: 12 }), { vraag: "snoei" });
+  // Stap 3: allebei beantwoord - pas dan door.
+  assert.deepEqual(configPoortBesluit(huidig, beide,
+    { bevestigdVerval: true, verwachtVerval: 12, bevestigdSnoei: true }), { ok: true });
+
+  // Het antwoord op de ene vraag opent de andere poort niet.
+  assert.deepEqual(configPoortBesluit(huidig, beide, { bevestigdSnoei: true }), { vraag: "verval" });
+
+  // Los verlagen blijft een vraag per poort.
+  assert.deepEqual(configPoortBesluit(huidig, { vervalMaanden: 6, bewaardagen: 365, maxRegels: 500 },
+    { bevestigdVerval: true, verwachtVerval: 12 }), { ok: true });
+  assert.deepEqual(configPoortBesluit(huidig, { vervalMaanden: 12, bewaardagen: 100, maxRegels: 500 },
+    { bevestigdSnoei: true }), { ok: true });
+
+  // De vergrendeling blijft: bevestigd tegen een verouderde termijn telt niet.
+  assert.deepEqual(configPoortBesluit(huidig, beide,
+    { bevestigdVerval: true, verwachtVerval: 18, bevestigdSnoei: true }), { fout: "verouderd" });
+
+  // Verhogen vraagt niets.
+  assert.deepEqual(configPoortBesluit(huidig,
+    { vervalMaanden: 24, bewaardagen: 730, maxRegels: 500 }, {}), { ok: true });
 });
