@@ -1015,6 +1015,13 @@ const PDF_CONVERSIE_OPDRACHT = [
 // Ruim boven wat er in een kennisbron past (BRON_MAX_TEKENS), zodat "de uitvoergrens
 // geraakt" altijd betekent: dit document is te lang, en nooit: onze grens was te krap.
 // Sonnet 5 kan tot 128.000 tokens uitvoer aan, dus hier is nog volop ruimte.
+//
+// Dit getal staat los van CHAT_MAX_TOKENS (4096), en dat is geen slordigheid: die
+// constante wordt ook gebruikt door reserveringSchatting, die vóór een chatantwoord
+// credits vastzet op een klantsaldo. Een omzetting loopt daar niet langs. Zij komt
+// alleen binnen via /api/admin/bronnen/omzetten, achter isAdmin, en boekt met
+// /credits/kosten - een regel zonder e-mailadres en zonder saldo. Er wordt hier dus
+// nooit een klantsaldo gereserveerd dat een factor acht te laag zou zijn.
 const PDF_CONVERSIE_MAX_TOKENS = 32000;
 
 // Geeft { tekst } of { fout }. De meter gaat mee zodat de kosten daarna op de eigen
@@ -1069,7 +1076,7 @@ async function tekstUitPdf(env, bytes, meter) {
 
 // AC-8 - wat de omzetting kostte, op de eigen rekening van Dirk. Geen enkel
 // klantsaldo wordt hier aangeraakt; de regel staat er zodat hij ziet wat het kost.
-function boekConversiekosten(env, ctx, meter, naam) {
+function boekConversiekosten(env, ctx, meter, naam, mislukt) {
   if (!meter || !meter.aanroepen) return;
   const werk = (async () => {
     try {
@@ -1081,7 +1088,9 @@ function boekConversiekosten(env, ctx, meter, naam) {
           invoer: meter.invoer, uitvoer: meter.uitvoer,
           cacheLees: meter.cacheLees, cacheSchrijf: meter.cacheSchrijf,
           credits: meterCredits(meter, cfg.koers, cfg.marge),
-          reden: "omzetten van " + String(naam || "een document"),
+          // Mislukte pogingen kosten net zo goed geld, dus die horen erin - maar dan
+          // wel als mislukt, anders suggereert het grootboek een omzetting die er niet is.
+          reden: "omzetten van " + String(naam || "een document") + (mislukt ? " (mislukt)" : ""),
           maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen,
         }),
       });
@@ -7527,7 +7536,10 @@ export default {
         uit = await tekstUitDocx(ruw);
       } else {
         uit = await tekstUitPdf(env, ruw, meter);
-        boekConversiekosten(env, ctx, meter, naam);      // AC-8: kosten van Dirk
+        // AC-8 - de kosten van Dirk, ook als de omzetting mislukte: die tokens zijn dan
+        // echt verbruikt en worden ook echt gefactureerd. Weigert de API het verzoek,
+        // dan staat de meter op nul en wordt er niets geboekt.
+        boekConversiekosten(env, ctx, meter, naam, !!uit.fout);
       }
       if (uit.fout) return json({ error: uit.fout }, 400);
 
