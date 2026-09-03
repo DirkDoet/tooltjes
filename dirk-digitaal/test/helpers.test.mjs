@@ -142,6 +142,8 @@ import {
   magLoggen,
   snoeiGebruik,
   telOnbekendVandaag,
+  heeftVerbruik,
+  onboardingDoel,
   sorteerGebruik,
   gebeurtenisTekst,
   gebruikTijdTekst,
@@ -4086,4 +4088,92 @@ test("twee verlagingen in een opslagactie: BEIDE vragen worden apart gesteld (mu
   // Verhogen vraagt niets.
   assert.deepEqual(configPoortBesluit(huidig,
     { vervalMaanden: 24, bewaardagen: 730, maxRegels: 500 }, {}), { ok: true });
+});
+
+// -- DIR-97 - onboarding: nieuw is wie nog nooit iets vroeg ------------------
+
+test("nieuw hangt aan de afwezigheid van afboekingen, niet aan de leeftijd", () => {
+  // Een stokoud account dat alleen ooit kocht en gecorrigeerd werd, is nog steeds
+  // nieuw: er is nooit een vraag gesteld. Een enkel verbruik maakt het oud.
+  const stokoud = [
+    { tijd: Date.UTC(2024, 0, 1), soort: "aankoop", credits: -1000 },
+    { tijd: Date.UTC(2024, 5, 1), soort: "correctie", credits: -50 },
+  ];
+  assert.equal(heeftVerbruik(stokoud), false);
+  assert.equal(heeftVerbruik([]), false);
+  assert.equal(heeftVerbruik(null), false);
+  assert.equal(heeftVerbruik(stokoud.concat([{ tijd: 1, soort: "verbruik", credits: 3 }])), true);
+});
+
+test("de inlogroute krijgt de stand mee, en alleen als hij erom vraagt", async () => {
+  const opslag = nepDoOpslag({});
+  const doo = new CreditsDO({ storage: opslag });
+  const start = (body) => doo.fetch(new Request("https://do/credits/start", {
+    method: "POST", body: JSON.stringify(body),
+  })).then((r) => r.json());
+
+  // Eerste keer: record aangemaakt met startsaldo, en nieuw.
+  const eerste = await start({ email: "vers@voorbeeld.nl", startsaldo: 200, metStand: true });
+  assert.equal(eerste.saldo, 200);
+  assert.equal(eerste.nieuw, true);
+
+  // Zonder metStand blijft het antwoord zoals het was: geen veld, geen indexwerk.
+  const stil = await start({ email: "vers@voorbeeld.nl", startsaldo: 200 });
+  assert.equal(stil.nieuw, undefined);
+
+  // Na een boeking is de klant niet nieuw meer.
+  await doo.fetch(new Request("https://do/credits/boek", {
+    method: "POST", body: JSON.stringify({
+      email: "vers@voorbeeld.nl", credits: 3, agent: "gsc", model: "claude-sonnet-5",
+      maxRegels: 500, bewaardagen: 365,
+    }),
+  }));
+  const daarna = await start({ email: "vers@voorbeeld.nl", startsaldo: 200, metStand: true });
+  assert.equal(daarna.nieuw, false);
+  assert.equal(daarna.saldo, 197, "en het startsaldo wordt niet opnieuw uitgedeeld");
+});
+
+test("het dashboard weet of het welkomstblok moet staan (AC-5)", async () => {
+  const opslag = nepDoOpslag({ "s:k@voorbeeld.nl": { saldo: 200, gemaakt: 1 } });
+  const doo = new CreditsDO({ storage: opslag });
+  const klant = () => doo.fetch(new Request("https://do/credits/klant", {
+    method: "POST", body: JSON.stringify({ email: "k@voorbeeld.nl" }),
+  })).then((r) => r.json());
+
+  assert.equal((await klant()).nieuw, true);
+  await doo.fetch(new Request("https://do/credits/boek", {
+    method: "POST", body: JSON.stringify({
+      email: "k@voorbeeld.nl", credits: 2, agent: "gsc", model: "claude-sonnet-5",
+      maxRegels: 500, bewaardagen: 365,
+    }),
+  }));
+  assert.equal((await klant()).nieuw, false);
+});
+
+test("de kostenzin in het welkomstblok klopt met de prijstabel (AC-3)", () => {
+  // Het blok zegt: "een gewone vraag zo'n 2 tot 5 credits". Dat is geen slag in de
+  // lucht maar een uitkomst van de tabel: een korte vraag (3.000 tokens in, 400
+  // uit) en een flinke (8.000 in, 800 uit) op het standaardmodel, tegen de
+  // standaardkoers en -marge. Verandert een tarief, dan valt deze test om en moet
+  // de zin mee.
+  const std = schoneCreditsConfig({});
+  const kort = kostenNaarCredits(tokenKosten("claude-sonnet-5",
+    { input_tokens: 3000, output_tokens: 400 }), std.koers, std.marge);
+  const flink = kostenNaarCredits(tokenKosten("claude-sonnet-5",
+    { input_tokens: 8000, output_tokens: 800 }), std.koers, std.marge);
+  assert.ok(kort >= 2, "korte vraag: " + kort);
+  assert.ok(flink <= 5, "flinke vraag: " + flink);
+});
+
+
+test("waar kom je na het inloggen terecht (AC-1/AC-6/AC-7)", () => {
+  // Nieuw: naar het dashboard, met de uitleg. Saldo op: ook, met de koopknop.
+  assert.equal(onboardingDoel({ nieuw: true, saldo: 200 }), "/dashboard");
+  assert.equal(onboardingDoel({ nieuw: false, saldo: 0 }), "/dashboard");
+  assert.equal(onboardingDoel({ nieuw: false, saldo: -5 }), "/dashboard");
+  // Gewoon saldo: rechtstreeks het kantoor in, zoals altijd.
+  assert.equal(onboardingDoel({ nieuw: false, saldo: 120 }), "/");
+  // Onbekend saldo (administratie hapert): doorlaten, niet blokkeren.
+  assert.equal(onboardingDoel({ nieuw: false, saldo: null }), "/");
+  assert.equal(onboardingDoel(null), "/");
 });
