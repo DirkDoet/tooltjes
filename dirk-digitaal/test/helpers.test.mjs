@@ -4399,3 +4399,52 @@ test("de factuurknop draagt het blauw van Dirk Doet, met lucht ervoor (AC-2/AC-3
   assert.match(html, /\.dash-factuurrij a\{[^}]*margin-top:\.7rem/, "de knop hoort lucht boven zich te hebben");
   assert.match(html, /--teal:#015092/, "de variabele hoort het blauw van Dirk Doet te zijn");
 });
+
+
+// -- DIR-115 - de klant kiest zijn model ook in het zijmenu ------------------
+
+test("het menu krijgt model en keuzes mee, en een gast niet (AC-1/AC-5)", () => {
+  const klant = toegangAntwoord(false, true, "Klant B.V.", 200, "claude-opus-5");
+  assert.equal(klant.model, "claude-opus-5");
+  assert.equal(klant.modelKeuzes.length, 3);
+  // AC-1 - dezelfde naamgeving als in het dashboard, uit dezelfde functie.
+  assert.equal(klant.modelKeuzes[0].weergave, klantModelWeergave(klantModelKeuzes()[0]));
+  assert.match(klant.modelKeuzes[0].weergave, /^Standaard \(claude-/);
+
+  // AC-5 - zonder klantsessie valt er niets te kiezen; het blok van de beheerder is
+  // iets anders en staat los (AC-4).
+  const gast = toegangAntwoord(false, false, "", null, "");
+  assert.equal(gast.model, "");
+  assert.deepEqual(gast.modelKeuzes, []);
+  const beheerder = toegangAntwoord(true, false, "", null, "claude-opus-5");
+  assert.equal(beheerder.model, "", "de beheerder heeft geen KLANTkeuze");
+  assert.deepEqual(beheerder.modelKeuzes, []);
+
+  // Wie allebei is, krijgt de klantkeuze - de voorrang van DIR-113.
+  const beide = toegangAntwoord(true, true, "Dirk", 200, "claude-opus-4-8");
+  assert.equal(beide.model, "claude-opus-4-8");
+  assert.equal(beide.modelKeuzes.length, 3);
+});
+
+test("een onbekende of lege keuze wordt Standaard, niet iets willekeurigs", () => {
+  // Zelfde poort als overal: een oude of geknoeide waarde mag nooit doorgegeven
+  // worden aan de API (DIR-101).
+  const standaard = klantModelKeuzes()[0].id;      // "Standaard" staat voorop
+  assert.equal(toegangAntwoord(false, true, "x", 1, "verzonnen-model").model, standaard);
+  assert.equal(toegangAntwoord(false, true, "x", 1, "").model, standaard);
+  assert.equal(toegangAntwoord(false, true, "x", 1, undefined).model, standaard);
+});
+
+test("menu en dashboard schrijven naar dezelfde route (AC-3)", async () => {
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+  // Er is maar EEN plek waar een klantmodel wordt opgeslagen; het menu gebruikt hem
+  // net zo goed als het dashboard.
+  const opslag = html.match(/'\/api\/klant\/model'/g) || [];
+  assert.equal(opslag.length, 2, "menu en dashboard, en verder niets: " + opslag.length);
+  // En het menu stelt de naam niet zelf samen maar leest wat de server stuurt.
+  assert.match(html, /o.textContent=k.weergave\|\|k.label\|\|k.id/);
+  // De twee schermen seinen elkaar in, zodat er geen oude keuze blijft staan.
+  assert.match(html, /window.ddMenuModel = function/);
+  assert.match(html, /window.ddDashboardModel=function/);
+});
