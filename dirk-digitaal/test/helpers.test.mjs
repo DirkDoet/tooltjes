@@ -4311,3 +4311,31 @@ test("zonder enige sessie verandert er niets", async () => {
   assert.equal(uit.krediet.verrekend, true);
   assert.equal(credits.gevraagd.length, 0);
 });
+// -- DIR-116 - de Meta Ads-knop staat uit -----------------------------------
+
+test("de uitgeserveerde pagina toont de Meta Ads-knop bij niemand (AC-1/AC-2)", async () => {
+  const env = await nepEnv();
+  const resp = await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} });
+  assert.equal(resp.status, 200);
+  const html = await resp.text();
+
+  // De knop en zijn afhandeling staan er nog (AC-2): dit is verbergen, geen slopen.
+  assert.match(html, /id="chat-meta"/, "de knop hoort te blijven bestaan");
+  assert.match(html, /\/api\/meta\/status/, "de statusroute-aanroep hoort te blijven staan");
+
+  // Maar er is geen pad waarlangs hij zichtbaar wordt: de schakelaar staat uit en
+  // de zichtbaarheidsregel hangt eraan.
+  assert.match(html, /var META_KNOP_AAN=false;/, "de schakelaar hoort uit te staan");
+  assert.match(html, /META_KNOP_AAN && key==='ads'/, "de zichtbaarheid hoort aan de schakelaar te hangen");
+  assert.doesNotMatch(html, /metaBtn.style.display=\(key==='ads'\)/, "de oude regel zonder schakelaar hoort weg te zijn");
+});
+
+test("Ilona belooft geen Meta zolang die koppeling er niet is (AC-4)", () => {
+  // Via agentStandaard, dus langs dezelfde weg als de echte systeemprompt.
+  const ilona = agentStandaard("ads");
+  assert.doesNotMatch(ilona.persona, /Meta/, "haar eigen omschrijving hoort te kloppen met wat ze kan");
+  // AC-3 - Google Ads blijft gewoon staan, inclusief haar live-tool.
+  assert.match(ilona.persona, /Google Ads/);
+  assert.match(ilona.persona, /ads_report/);
+  assert.equal(ilona.bron, "Google Ads");
+});
