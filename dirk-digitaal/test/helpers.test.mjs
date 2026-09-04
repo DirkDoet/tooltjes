@@ -4448,3 +4448,24 @@ test("menu en dashboard schrijven naar dezelfde route (AC-3)", async () => {
   assert.match(html, /window.ddMenuModel = function/);
   assert.match(html, /window.ddDashboardModel=function/);
 });
+
+test("het inseinen werkt alleen het scherm bij en slaat niets op", async () => {
+  // Twee kanten die elkaar aanroepen kunnen elkaar blijven aanroepen. Dat kan hier
+  // niet: ddMenuModel zet alleen de waarde van het keuzeveld (en `.value` zetten
+  // vuurt geen change-event), en ddDashboardModel stapt eruit als de keuze al staat
+  // en tekent daarna hooguit opnieuw. Geen van beide schrijft.
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+
+  const menuKant = html.match(/window\.ddMenuModel = function[\s\S]*?\n  \};/);
+  assert.ok(menuKant, "ddMenuModel hoort te bestaan");
+  assert.doesNotMatch(menuKant[0], /api\(|fetch\(|dispatchEvent/,
+    "het inseinen vanuit het dashboard mag niets opslaan en geen event uitlokken");
+
+  const dashKant = html.match(/window\.ddDashboardModel=function[\s\S]*?\n  \};/);
+  assert.ok(dashKant, "ddDashboardModel hoort te bestaan");
+  assert.doesNotMatch(dashKant[0], /api\(|fetch\(|dispatchEvent/,
+    "het inseinen vanuit het menu mag niets opslaan en geen event uitlokken");
+  assert.match(dashKant[0], /id===dashModel\) return;/,
+    "een keuze die al staat hoort er meteen uit te stappen");
+});
