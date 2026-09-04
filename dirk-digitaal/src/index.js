@@ -2343,8 +2343,25 @@ export function klantModelInleiding() {
     + "Een zwaardere keuze kost meer credits per vraag, en je kunt altijd wisselen.";
 }
 
+// DIR-114 AC-4 - hoe een model heet waar de klant zijn keuze maakt: de trede plus
+// de technische naam, "Standaard (claude-sonnet-5)".
+//
+// Dit staat HIER en niet in `label`, want datzelfde label gaat ook naar de
+// Model-kolom van de verbruikstabel, en daar hoort geen jargon (DIR-101, met een
+// test erop). Zet de technische naam dus niet alsnog in het label.
+//
+// En het staat server-side in plaats van in de client, omdat DIR-115 dezelfde
+// naamgeving in het zijmenu van het kantoor vraagt. Twee keer hetzelfde opbouwen is
+// precies hoe die twee uit elkaar gaan lopen; nu lezen beide schermen `weergave`.
+export function klantModelWeergave(model) {
+  const m = model || {};
+  const label = String(m.label || "");
+  const id = String(m.id || "");
+  return id ? (label + " (" + id + ")") : label;
+}
+
 export function klantModelKeuzes() {
-  return KLANT_MODELLEN.map((m) => Object.assign({}, m));
+  return KLANT_MODELLEN.map((m) => Object.assign({}, m, { weergave: klantModelWeergave(m) }));
 }
 // Alleen een keuze uit dat lijstje telt; al het andere is 'niets gekozen'.
 export function geldigKlantModel(id) {
@@ -6827,10 +6844,10 @@ const OFFICE_HTML = `<!doctype html>
     dashKeuzes.forEach(function(k){
       var b=document.createElement('button');
       b.type='button'; b.className='dash-keuze'+(k.id===dashModel?' aan':'');
-      // DIR-114 AC-4 - de technische naam erachter, hier en niet in het label zelf:
-      // datzelfde label staat ook in de Model-kolom van de verbruikstabel, en daar
-      // hoort geen jargon (DIR-101).
-      var t=document.createElement('b'); t.textContent=k.label + ' (' + k.id + ')'; b.appendChild(t);
+      // DIR-114 AC-4 - de weergavenaam komt van de server (klantModelWeergave), zodat
+      // het zijmenu straks hetzelfde leest. Niet hier samenstellen en niet in het
+      // label zetten: dat label gaat ook naar de Model-kolom van de verbruikstabel.
+      var t=document.createElement('b'); t.textContent=k.weergave||k.label; b.appendChild(t);
       var u=document.createElement('span'); u.textContent=k.uitleg; b.appendChild(u);
       b.addEventListener('click',function(){ dashKiesModel(k.id); });
       doel.appendChild(b);

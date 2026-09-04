@@ -56,6 +56,7 @@ import {
   hoortBijGebruiker,
   modelVoorKlant,
   klantModelKeuzes,
+  klantModelWeergave,
   geldigKlantModel,
   klantModelKop,
   klantModelInleiding,
@@ -4358,19 +4359,26 @@ test("vijf euro mag, vier niet (AC-1)", () => {
 });
 
 test("de modelkiezer in het dashboard noemt de technische naam (AC-4)", async () => {
-  // De haakjes worden in de kiezer samengesteld uit label en id. Het LABEL zelf
-  // blijft schoon, want datzelfde label staat in de Model-kolom van de
-  // verbruikstabel en daar hoort geen jargon (DIR-101).
-  const env = await nepEnv();
-  const resp = await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} });
-  const html = await resp.text();
-  assert.match(html, /t.textContent=k.label \+ ' \(' \+ k.id \+ '\)'/,
-    "de kiezer hoort de technische naam erachter te zetten");
+  // De weergavenaam wordt op EEN plek gemaakt, server-side, zodat het zijmenu van
+  // DIR-115 hetzelfde kan lezen. Het LABEL blijft schoon, want datzelfde label staat
+  // in de Model-kolom van de verbruikstabel en daar hoort geen jargon (DIR-101).
+  assert.equal(klantModelWeergave({ label: "Standaard", id: "claude-sonnet-5" }),
+    "Standaard (claude-sonnet-5)");
+  // Zonder id geen lege haakjes.
+  assert.equal(klantModelWeergave({ label: "Standaard" }), "Standaard");
+  assert.equal(klantModelWeergave(null), "");
 
   for (const k of klantModelKeuzes()) {
     assert.doesNotMatch(k.label, /claude|sonnet|opus/i, "technische naam in het label: " + k.label);
     assert.match(k.id, /^claude-/, "de id levert de technische naam: " + k.id);
+    assert.equal(k.weergave, k.label + " (" + k.id + ")");
   }
+
+  // En de kiezer LEEST dat veld, in plaats van het zelf op te bouwen.
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+  assert.match(html, /t.textContent=k.weergave\|\|k.label/,
+    "de kiezer hoort de weergavenaam van de server te lezen");
 });
 
 test("de weg terug naar het kantoor is overal dezelfde oranje knop (AC-5)", async () => {
