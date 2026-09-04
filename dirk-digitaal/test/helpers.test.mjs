@@ -1109,10 +1109,10 @@ test("schoneCreditsConfig: onzin uit het formulier wordt een bruikbare instellin
   // bewust worden opgeschreven en niet ongemerkt meeliften.
   assert.deepEqual(schoneCreditsConfig({}),
     { startsaldo: 200, koers: 0.92, marge: 2, maxRegels: 500, bewaardagen: 365, koersAuto: true,
-      koopMin: 10, koopMax: 500, vervalMaanden: 12 });
+      koopMin: 5, koopMax: 500, vervalMaanden: 12 });
   assert.deepEqual(schoneCreditsConfig({ startsaldo: 50, koers: 0.9, marge: 3 }),
     { startsaldo: 50, koers: 0.9, marge: 3, maxRegels: 500, bewaardagen: 365, koersAuto: true,
-      koopMin: 10, koopMax: 500, vervalMaanden: 12 });
+      koopMin: 5, koopMax: 500, vervalMaanden: 12 });
   // Geen halve credits, geen negatief startsaldo, geen marge onder 1 (dat zou
   // betekenen dat Dirk onder de kostprijs verkoopt).
   assert.equal(schoneCreditsConfig({ startsaldo: 12.7 }).startsaldo, 13);
@@ -2984,7 +2984,7 @@ test("de koopgrenzen zijn instelbaar en blijven bruikbaar (AC-11)", () => {
   // Nul of negatief zou een betaling van niets toestaan.
   assert.equal(schoneCreditsConfig({ koopMin: 0 }).koopMin, 1);
   assert.equal(schoneCreditsConfig({ koopMin: -5 }).koopMin, 1);
-  assert.equal(schoneCreditsConfig({ koopMin: "geen getal" }).koopMin, 10);
+  assert.equal(schoneCreditsConfig({ koopMin: "geen getal" }).koopMin, 5);   // DIR-114
   // Een minimum boven het maximum maakt kopen onmogelijk; dat wordt geweigerd met
   // uitleg in plaats van stil rechtgeknepen.
   assert.match(keurCreditsConfig({ koopMin: 100, koopMax: 50 }), /niet hoger zijn dan/);
@@ -4212,4 +4212,58 @@ test("waar kom je na het inloggen terecht (AC-1/AC-6/AC-7)", () => {
   // Onbekend saldo (administratie hapert): doorlaten, niet blokkeren.
   assert.equal(onboardingDoel({ nieuw: false, saldo: null }), "/");
   assert.equal(onboardingDoel(null), "/");
+});
+
+
+// -- DIR-114 - dashboard-afwerking ------------------------------------------
+
+test("vijf euro mag, vier niet (AC-1)", () => {
+  // De standaard staat op vijf; met de standaardgrenzen (geen min/max meegegeven)
+  // hoort vijf er gewoon doorheen te komen.
+  const vijf = koopBedrag(5);
+  assert.equal(vijf.fout, undefined, JSON.stringify(vijf));
+  assert.equal(vijf.credits, 500);
+
+  const vier = koopBedrag(4);
+  assert.match(vier.fout, /laagste bedrag is/);
+  assert.match(vier.fout, /5/, "de melding hoort het nieuwe minimum te noemen: " + vier.fout);
+
+  // En het blijft instelbaar: zet Dirk hem op tien, dan valt vijf er weer buiten.
+  assert.match(koopBedrag(5, 10, 500).fout, /laagste bedrag is/);
+  assert.equal(koopBedrag(25, 10, 500).credits, 2500);
+});
+
+test("de modelkiezer in het dashboard noemt de technische naam (AC-4)", async () => {
+  // De haakjes worden in de kiezer samengesteld uit label en id. Het LABEL zelf
+  // blijft schoon, want datzelfde label staat in de Model-kolom van de
+  // verbruikstabel en daar hoort geen jargon (DIR-101).
+  const env = await nepEnv();
+  const resp = await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} });
+  const html = await resp.text();
+  assert.match(html, /t.textContent=k.label \+ ' \(' \+ k.id \+ '\)'/,
+    "de kiezer hoort de technische naam erachter te zetten");
+
+  for (const k of klantModelKeuzes()) {
+    assert.doesNotMatch(k.label, /claude|sonnet|opus/i, "technische naam in het label: " + k.label);
+    assert.match(k.id, /^claude-/, "de id levert de technische naam: " + k.id);
+  }
+});
+
+test("de weg terug naar het kantoor is overal dezelfde oranje knop (AC-5)", async () => {
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+  // Beide knoppen dragen de klasse, en die klasse draagt het oranje uit de huisstijl.
+  const metKlasse = html.match(/class="knop dash-kantoor[^"]*" id="dash-(kantoor|verder)"/g) || [];
+  assert.equal(metKlasse.length, 2, "beide kantoorknoppen horen de klasse te dragen");
+  assert.match(html, /\.knop\.dash-kantoor\{ background:var\(--accent\)/);
+  assert.match(html, /--accent:#F18E02/, "de variabele hoort het oranje van Dirk Doet te zijn");
+});
+
+test("de factuurknop draagt het blauw van Dirk Doet, met lucht ervoor (AC-2/AC-3)", async () => {
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+  assert.match(html, /\.dash-factuurrij a\{[^}]*background:var\(--teal\)/);
+  assert.match(html, /\.dash-factuurrij a\{[^}]*color:#fff/);
+  assert.match(html, /\.dash-factuurrij a\{[^}]*margin-top:\.7rem/, "de knop hoort lucht boven zich te hebben");
+  assert.match(html, /--teal:#015092/, "de variabele hoort het blauw van Dirk Doet te zijn");
 });
