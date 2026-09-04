@@ -119,10 +119,14 @@ const AGENT_INSTRUCTIES = {
       "pas als erom gevraagd wordt. Sluit af met de vraag: Wat wil je weten? " +
       "Schrijf in het Nederlands, jij-vorm.",
   },
-  // ---- Ilona — Google Ads (+ Meta voor gekoppelde klanten) ----
+  // ---- Ilona — Google Ads ----
+  // DIR-116: Meta stond hier ook genoemd, maar die koppeling werkt voor niemand en
+  // de knop is verborgen. Een agent die iets aanbiedt wat er niet is, laat de klant
+  // om iets vragen wat ze niet kan leveren. Komt de koppeling er, dan hoort deze zin
+  // mee terug.
   ilona: {
     persona: [
-      "Je bent Ilona, de advertentie-specialist van Dirk Digitaal (Google Ads en, voor gekoppelde klanten, Meta Ads).",
+      "Je bent Ilona, de advertentie-specialist van Dirk Digitaal (Google Ads).",
       "Schrijf altijd in het Nederlands en in de jij-vorm. Antwoord HELDER: korte zinnen,",
       "concrete cijfers (kosten in euro's, conversies), geen jargon-brei. Verwijs naar echte",
       "campagnes, zoekwoorden en getallen. Geef bruikbare, prioriteerbare aanbevelingen; verzin geen data.",
@@ -6155,6 +6159,13 @@ const OFFICE_HTML = `<!doctype html>
   var sendBtn=document.getElementById('chat-send');
   var connectBtn=document.getElementById('chat-connect');
   var metaBtn=document.getElementById('chat-meta');
+  // DIR-116 (4 september 2026) - de Meta Ads-knop staat bewust uit. De koppeling is
+  // niet af: hij hangt aan een systeemtoken dat per klant handmatig gezet moet
+  // worden, en er is nog geen klant voor wie het werkt. De knop beloofde dus iets
+  // wat de tool niet waarmaakt. Alles eromheen blijft staan - de knop zelf,
+  // metaKlik, /api/meta/status en de afhandeling erachter - zodat dit met deze ene
+  // regel op true terug kan zodra de koppeling er is.
+  var META_KNOP_AAN=false;
   var switchBtn=document.getElementById('chat-switch');
   var composer=document.getElementById('chat-composer');
   var agent=document.getElementById('agent-desk');
@@ -6283,7 +6294,8 @@ const OFFICE_HTML = `<!doctype html>
     pnaamEl.innerHTML='&#9679; '+cur.naam;
     input.placeholder=cur.ph; switchBtn.textContent=cur.switchLabel;
     if(connectBtn) connectBtn.textContent=cur.connectLabel||'Koppel Google';
-    if(metaBtn) metaBtn.style.display=(key==='ads')?'inline-block':'none';   // Meta-knop alleen bij Ilona (DIR-42)
+    // Meta-knop alleen bij Ilona (DIR-42), en voorlopig bij niemand (DIR-116).
+    if(metaBtn) metaBtn.style.display=(META_KNOP_AAN && key==='ads')?'inline-block':'none';
     started=false; setActive(false); msgs.innerHTML=''; addBubble('agent', cur.intro);
     bijlagen=[]; toonBijlagen(); bijFout('');   // DIR-81: bijlagen horen bij één gesprek
     if(cur.geenKoppeling){
