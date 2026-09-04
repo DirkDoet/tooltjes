@@ -4337,8 +4337,19 @@ export async function creditsReserveer(request, env) {
   // zien wat zijn klanten zien - precies waar de tool voor bedoeld is.
   //
   // Er is geen aparte beheerderscontrole meer nodig: "geen klantsessie" dekt de
-  // beheerder én de rest, en zo kan er ook geen voorrang terugsluipen. Het geld gaat
-  // in een cirkel, want het is Dirks eigen grootboek.
+  // beheerder én de rest, en zo kan er ook geen voorrang terugsluipen.
+  //
+  // TWEE GEVOLGEN die je later niet moet hoeven uitzoeken:
+  //
+  // 1. Test Dirk als klant, dan komen zijn vragen als gewone verbruiksregels op zijn
+  //    eigen adres in het grootboek. Dat ziet eruit als verbruik van een klant die
+  //    hij niet is. Het is de bedoeling: het geld gaat in een cirkel want het is zijn
+  //    eigen boek, en anders kan hij niet zien wat zijn klanten zien.
+  // 2. Het model volgt dezelfde voorrang, zonder dat daar een tweede regel voor nodig
+  //    is (AC-3). Met een klantsessie komt het model uit het antwoord van de Durable
+  //    Object en dus van de klant; `adminModel` hangt alleen aan `geenKrediet`, en dat
+  //    pad wordt met een klantsessie nooit bereikt. Wat Dirk in /admin koos raakt zijn
+  //    eigen klantsessie dus niet.
   const sessie = await huidigeSessie(request, env);
   if (!sessie || !sessie.email) return { weigering: null, krediet: geenKrediet };
 
