@@ -602,7 +602,7 @@ async function huidigeKlant(request, env) {
 //
 // `soort` blijft erin staan voor wat er al op leunde, maar `beheerder` en `klant` zijn
 // vanaf nu de waarheid: `soort` kan er maar EEN noemen, en dat was precies de fout.
-export function toegangAntwoord(beheerder, klant, naam, credits) {
+export function toegangAntwoord(beheerder, klant, naam, credits, model) {
   return {
     chatten: !!(beheerder || klant),
     soort: beheerder ? "admin" : (klant ? "klant" : null),
@@ -612,6 +612,13 @@ export function toegangAntwoord(beheerder, klant, naam, credits) {
     // geen naam om te tonen en geen saldo dat van hem is.
     naam: klant ? String(naam || "") : "",
     credits: klant ? credits : null,
+    // DIR-115 - het model van DEZE klant en de treden waaruit hij kan kiezen, zodat
+    // het zijmenu hetzelfde kan tonen als het dashboard. De namen komen uit
+    // klantModelWeergave (DIR-114): het menu drukt alleen af en stelt niets samen.
+    // Zonder klantsessie is er geen keuze te tonen - het blok van de beheerder is
+    // iets anders en staat los (AC-4, AC-5).
+    model: klant ? modelVoorKlant(model) : "",
+    modelKeuzes: klant ? klantModelKeuzes() : [],
   };
 }
 
@@ -4279,7 +4286,7 @@ async function onboardingStand(env, email) {
 
 // Het saldo van dit adres, en meteen aanmaken met het gratis startsaldo als het er
 // nog niet is (AC-1). Geeft null als het saldo niet te lezen was.
-async function saldoStart(env, email) {
+async function klantStand(env, email) {
   const cfg = await creditsConfig(env);
   const resp = await creditsStub(env).fetch("https://do/credits/start", {
     method: "POST",
@@ -4287,7 +4294,18 @@ async function saldoStart(env, email) {
       vervalMaanden: cfg.vervalMaanden, maxRegels: cfg.maxRegels, bewaardagen: cfg.bewaardagen }),
   });
   const j = await resp.json();
-  return typeof j.saldo === "number" ? j.saldo : null;
+  return {
+    saldo: typeof j.saldo === "number" ? j.saldo : null,
+    model: modelVoorKlant(j.model),
+  };
+}
+
+// DIR-115 - het zijmenu wil naast het saldo ook het model tonen, en dat zat al in
+// hetzelfde antwoord; het werd alleen weggegooid. Vandaar klantStand hierboven: een
+// aanroep, twee velden. Deze functie blijft bestaan omdat er acht plekken alleen
+// het saldo willen.
+async function saldoStart(env, email) {
+  return (await klantStand(env, email)).saldo;
 }
 
 // AC-2/AC-3/AC-4 - wat dit ene antwoord kostte, in een boeking, en de reservering
@@ -5881,6 +5899,11 @@ const OFFICE_HTML = `<!doctype html>
     <h2 class="zm-kop">Ingelogd</h2>
     <p class="zm-tekst">Je bent ingelogd als <b id="zm-klant-naam">klant</b>. Klik een collega aan om te beginnen.</p>
     <p class="zm-tekst zm-klein" id="zm-klant-credits"></p>
+    <!-- DIR-115: dezelfde keuze als in het dashboard, op de plek waar je je vragen
+         stelt. Geen prijsuitleg hier; die staat in het dashboard (NG-2). -->
+    <label class="zm-label" for="zm-klant-model">Jouw AI-model</label>
+    <select class="zm-invoer" id="zm-klant-model"></select>
+    <p class="zm-fout verborgen" id="zm-klant-model-fout" role="alert"></p>
     <button class="zm-knop" id="zm-dashboard" type="button">Mijn dashboard</button>
     <button class="zm-knop zm-sub" id="zm-klant-uitlog" type="button">Uitloggen</button>
     <!-- DIR-112 should-fix (meegenomen in DIR-98): de Beheer-ingang stond alleen in
@@ -6830,6 +6853,8 @@ const OFFICE_HTML = `<!doctype html>
         if(!res.ok){ melding.textContent=(res.j&&res.j.error)||'Opslaan mislukt.'; return; }
         dashModel=res.j.model;
         dashModellenTonen({ keuzes:dashKeuzes, model:dashModel });
+        // DIR-115 - het zijmenu toont dezelfde keuze; die hoort niet achter te lopen.
+        if(window.ddMenuModel) window.ddMenuModel(dashModel);
         melding.textContent='Bewaard. Dit geldt alleen voor jou, en blijft staan.';
       })
       .catch(function(){ melding.textContent='Opslaan mislukt \u2014 probeer het zo opnieuw.'; });
@@ -7039,6 +7064,14 @@ const OFFICE_HTML = `<!doctype html>
     // was; de status komt van de server, niet uit de URL.
     var ref=new URLSearchParams(location.search).get('betaling');
     if(ref) dashBetalingStand(ref, 10);
+  };
+  // DIR-115 - het menu roept dit aan na een wissel daar, zodat het paneel niet met een
+  // oude keuze blijft staan als het open is. Is het dicht, dan wordt het toch vers
+  // geladen bij openen.
+  window.ddDashboardModel=function(id){
+    if(!id || id===dashModel) return;
+    dashModel=id;
+    if(dashOverlay.style.display==='flex') dashModellenTonen({ keuzes:dashKeuzes, model:dashModel });
   };
   // DIR-102 - staat het paneel open terwijl er een antwoord binnenkomt, dan werkt het
   // saldo daar meteen bij en komt de nieuwe regel er bovenaan bij (AC-2). Is het
@@ -7378,6 +7411,28 @@ const OFFICE_HTML = `<!doctype html>
     klantCredits.textContent = '';
     toonKlantCredits(credits);
   }
+  // DIR-115 - de modelkiezer van de klant. De namen komen kant-en-klaar van de
+  // server (klantModelWeergave, DIR-114), zodat menu en dashboard er niet uit elkaar
+  // kunnen lopen; hier wordt alleen afgedrukt.
+  function vulKlantModel(keuzes, gekozen){
+    var kies=document.getElementById('zm-klant-model');
+    if(!kies) return;
+    kies.innerHTML='';
+    (keuzes||[]).forEach(function(k){
+      var o=document.createElement('option');
+      o.value=k.id; o.textContent=k.weergave||k.label||k.id;
+      kies.appendChild(o);
+    });
+    if(gekozen) kies.value=gekozen;
+    melding(document.getElementById('zm-klant-model-fout'),'');
+  }
+  // Het dashboard roept dit aan na een geslaagde wissel, zodat het menu meteen klopt
+  // in plaats van pas na een herlaadbeurt. Andersom doet het menu hetzelfde; de
+  // opslag is er maar een (AC-3), dit houdt alleen de twee schermen gelijk.
+  window.ddMenuModel = function(id){
+    var kies=document.getElementById('zm-klant-model');
+    if(kies && id) kies.value=id;
+  };
   // De chat roept dit aan zodra een antwoord het nieuwe saldo meestuurt.
   window.ddMenuSaldo = toonKlantCredits;
   function vulAdmin(res){
@@ -7395,7 +7450,7 @@ const OFFICE_HTML = `<!doctype html>
     return api('GET','/api/toegang').then(function(st){
       var j = (st.ok && st.j) ? st.j : {};
       var isKlant = !!j.klant;
-      if(isKlant) vulKlant(j.naam, j.credits);
+      if(isKlant){ vulKlant(j.naam, j.credits); vulKlantModel(j.modelKeuzes, j.model); }
       // Het klantblok mag NIET op de modellenlijst wachten: haperde die, dan verdween
       // vroeger ook de klantkant. Dus eerst neerzetten wat we al weten.
       toonStand(isKlant, false);
@@ -7422,6 +7477,30 @@ const OFFICE_HTML = `<!doctype html>
 
   // AC-3 - na uitloggen opnieuw vragen wie er nog is, in plaats van alles op gast
   // zetten. Wie ook beheerder is, blijft dat: dat koekje is niet aangeraakt.
+  // AC-2/AC-3 - wisselen gaat naar dezelfde route als het dashboard, dus er is geen
+  // tweede opslag. AC-6 hoeft hier niets: het model van een antwoord wordt eenmalig
+  // vastgesteld als de poort reserveert, aan het begin van het verzoek. Wat je
+  // daarna kiest geldt vanaf je volgende vraag.
+  var klantModelKies=document.getElementById('zm-klant-model');
+  if(klantModelKies) klantModelKies.addEventListener('change',function(){
+    var gekozen=klantModelKies.value;
+    var fout=document.getElementById('zm-klant-model-fout');
+    melding(fout,'');
+    api('POST','/api/klant/model',{ model:gekozen }).then(function(res){
+      if(!res.ok){
+        melding(fout,(res.j&&res.j.error)||'Opslaan mislukt \u2014 probeer het zo opnieuw.');
+        haalStatus();                       // terug naar wat er echt is opgeslagen
+        return;
+      }
+      klantModelKies.value=res.j.model||gekozen;
+      // Staat het dashboard open, dan hoort het daar meteen mee te veranderen.
+      if(window.ddDashboardModel) window.ddDashboardModel(res.j.model||gekozen);
+    }).catch(function(){
+      melding(fout,'Opslaan mislukt \u2014 probeer het zo opnieuw.');
+      haalStatus();
+    });
+  });
+
   document.getElementById('zm-klant-uitlog').addEventListener('click',function(){
     function na(){ haalStatus(); if(window.ddToegangVernieuwen) window.ddToegangVernieuwen(); }
     api('POST','/api/klant/logout').then(na).catch(na);
@@ -10500,14 +10579,21 @@ export default {
       const klant = await huidigeKlant(request, env);
       // DIR-92: het saldo als kort regeltje in het menu. Lukt het niet, dan blijft het
       // weg - het menu hoort niet om te vallen omdat het grootboek hapert.
+      // DIR-115: saldo en model komen uit dezelfde aanroep; het model zat er altijd
+      // al in en werd weggegooid.
       let credits = null;
+      let model = "";
       if (klant) {
-        try { credits = await saldoStart(env, klant.email); } catch (e) { /* saldo is bijzaak hier */ }
+        try {
+          const stand = await klantStand(env, klant.email);
+          credits = stand.saldo;
+          model = stand.model;
+        } catch (e) { /* saldo en model zijn bijzaak hier; het menu valt er niet om */ }
       }
       // DIR-88: staat er een klantrecord op dit adres, dan tonen we die naam; anders
       // het adres waarmee je bent ingelogd.
       const naam = klant ? ((klant.rec && klant.rec.naam) || klant.email || "") : "";
-      return json(toegangAntwoord(beheerder, !!klant, naam, credits));
+      return json(toegangAntwoord(beheerder, !!klant, naam, credits, model));
     }
 
     // AC-6 — GSC-sites. DIR-86: heeft de klant een vastgelegde site, dan is dat de
