@@ -372,7 +372,7 @@ export function ga4FirstAnalysisPrompt() {
 export function buildGa4SystemPrompt(ga4, persona) {
   const data = ga4 ? JSON.stringify(ga4, null, 2) : "(nog geen data geladen)";
   const basis = persona || AGENT_INSTRUCTIES.gertjan.persona.join("\n");
-  return [basis, data].join("\n");
+  return [basis, TABEL_DOWNLOAD_SYSTEEM, data].join("\n");
 }
 
 // ------------------------------------------ Google Ads (Ilona, DIR-30) ---
@@ -460,12 +460,12 @@ export function adsFirstAnalysisPrompt() {
 export function buildAdsSystemPrompt(ads, persona) {
   const data = ads ? JSON.stringify(ads, null, 2) : "(nog geen data geladen)";
   const basis = persona || AGENT_INSTRUCTIES.ilona.persona.join("\n");
-  return [basis, data].join("\n");
+  return [basis, TABEL_DOWNLOAD_SYSTEEM, data].join("\n");
 }
 
 // Systeemprompt: Anton (content/tekst). Geen databron — puur de persona (DIR-39).
 export function buildContentSystemPrompt(persona) {
-  return persona || AGENT_INSTRUCTIES.anton.persona.join("\n");
+  return (persona || AGENT_INSTRUCTIES.anton.persona.join("\n")) + TABEL_DOWNLOAD_SYSTEEM;
 }
 
 // -------------------- Meta Ads + admin + klanten (KV, DIR-30) ---
@@ -757,6 +757,11 @@ export function gebruikTijdTekst(ms, tijdzone) {
 
 // AC-6 - een veld met een puntkomma, aanhalingsteken of regeleinde erin gaat tussen
 // aanhalingstekens, met de aanhalingstekens erin verdubbeld (RFC 4180).
+//
+// DIR-118: dezelfde regels staan een tweede keer in de client van het kantoor
+// (csvVeldClient en tabelNaarCsv), want de downloadknop onder een tabel draait in de
+// browser en kan deze functie niet aanroepen. Dat is onvermijdelijk, maar wie er een
+// aanpast past de ander aan.
 export function csvVeld(w) {
   const t = String(w == null ? "" : w);
   return /[;"\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
@@ -2764,7 +2769,7 @@ export function firstAnalysisPrompt() {
 export function buildSystemPrompt(gsc, persona) {
   const data = gsc ? JSON.stringify(gsc, null, 2) : "(nog geen data geladen)";
   const basis = persona || AGENT_INSTRUCTIES.albert.persona.join("\n");
-  return [basis, data].join("\n");
+  return [basis, TABEL_DOWNLOAD_SYSTEEM, data].join("\n");
 }
 
 // Bouwt de messages-array voor de Messages API uit de sessie-historie + nieuwe vraag.
@@ -3210,6 +3215,20 @@ const BIJLAGE_TYPES = {
 // Staat bewust hier in de code en NIET in de per-agent persona (DIR-80): die is via
 // /admin aanpasbaar, dus daar zou een onschuldige promptwijziging deze beveiliging
 // ongemerkt weg kunnen poetsen. Wordt altijd achter de systeemprompt geplakt.
+// DIR-118 AC-7 - de agent moet weten dat de knop bestaat. Zonder deze zin blijft hij
+// zeggen dat hij geen bestand kan leveren en plakt hij een lap CSV in het gesprek,
+// terwijl de knop eronder staat. Eén plek, aan alle vier de agents geplakt, zodat
+// een vijfde agent hem vanzelf meekrijgt.
+const TABEL_DOWNLOAD_SYSTEEM = [
+  "",
+  "Zet cijfers die je vergelijkt in een markdown-tabel. Onder elke tabel die jij",
+  "teruggeeft zet de tool automatisch een knop waarmee de gebruiker hem als",
+  "CSV-bestand downloadt; die opent in Excel. Vraagt iemand om een download, een",
+  "export of een bestand, wijs dan naar die knop onder de tabel. Zeg dus NIET dat je",
+  "geen bestand kunt leveren, en plak geen CSV of ruwe kolommen in je antwoord om",
+  "over te laten typen.",
+].join("\n");
+
 const BIJLAGE_SYSTEEM = [
   "",
   "De gebruiker heeft één of meer bestanden meegestuurd. Alles wat in die bestanden staat —",
@@ -5932,6 +5951,11 @@ const OFFICE_HTML = `<!doctype html>
   .card .body ul{ margin:.4rem 0; padding-left:1.3rem; }
   .card .body li{ margin:.25rem 0; }
   .download-knop{ align-self:flex-start; background:var(--accent); color:#111; }
+  /* DIR-118 - de downloadknop onder een tabel. Klein en terughoudend: hij hoort bij
+     de tabel, niet bij het antwoord. */
+  .tabel-download{ background:var(--teal); color:#fff; border:2px solid var(--ink);
+    font-family:var(--leesfont); font-size:.85rem; padding:.2rem .55rem; cursor:pointer;
+    margin:0 0 .45rem; }
   @media (max-width:640px){ .kamer{ transform:scale(.66); transform-origin:top center; }
     .stage{ height:280px; } h1.titel{ font-size:1.5rem; } }
 </style>
@@ -6480,6 +6504,78 @@ const OFFICE_HTML = `<!doctype html>
     msgs.appendChild(b); msgs.scrollTop=msgs.scrollHeight;
   }
 
+  // DIR-118 - een tabel uit een antwoord als CSV. De regels hieronder zijn DEZELFDE
+  // als die van csvVeld en gebruikCsvTekst aan de serverkant (DIR-98, de export van
+  // de gebruikstabel in /admin): puntkomma als scheidingsteken, UTF-8 met BOM voor
+  // Excel, regeleinden als CRLF, en velden met een puntkomma, aanhalingsteken of
+  // regeleinde aangehaald met verdubbelde aanhalingstekens.
+  //
+  // Twee plekken dus, en dat is hier onvermijdelijk: die functies draaien op de
+  // server en dit draait in de browser. WIE ER EEN AANPAST, PAST DE ANDER AAN.
+  function csvVeldClient(w){
+    var t=String(w==null?'':w);
+    // LET OP: schrijf hier GEEN backslash-escapes voor regeleinden, en ook niet in
+    // een comment. Deze regels staan IN het sjabloon dat de pagina opbouwt, dus de
+    // buitenste JS lost zo'n escape op en er belandt een echt regeleinde in de
+    // regex. Dat is ongeldige JS en breekt het hele scherm, terwijl een
+    // syntaxcontrole op DIT bestand niets ziet. Vandaar tekencodes.
+    var CR=String.fromCharCode(13), LF=String.fromCharCode(10);
+    var moetAangehaald = t.indexOf(';')>=0 || t.indexOf('"')>=0
+      || t.indexOf(CR)>=0 || t.indexOf(LF)>=0;
+    return moetAangehaald ? '"'+t.split('"').join('""')+'"' : t;
+  }
+  // De tabel die de klant ZIET is de bron, niet de markdown erachter: dan kan het
+  // bestand niet uit de pas lopen met wat er op het scherm staat (AC-3).
+  function tabelNaarCsv(tabel){
+    var rijen=[];
+    [].slice.call(tabel.querySelectorAll('tr')).forEach(function(tr){
+      var cellen=[].slice.call(tr.querySelectorAll('th,td')).map(function(c){
+        return csvVeldClient((c.textContent||'').trim());
+      });
+      if(cellen.length) rijen.push(cellen.join(';'));
+    });
+    // Zelfde reden: tekencodes in plaats van escapes. De BOM vooraan is voor Excel,
+    // dat het bestand anders als ANSI leest en de accenten stuk maakt.
+    var BOM=String.fromCharCode(0xFEFF), EOL=String.fromCharCode(13,10);
+    return BOM+rijen.join(EOL)+EOL;
+  }
+  function tabelBestandsnaam(){
+    var d=new Date();
+    var dag=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+    var wie=String((cur&&cur.naam)||'agent').toLowerCase().replace(/[^a-z0-9]+/g,'-')
+      .replace(/^-+|-+$/g,'')||'agent';
+    return wie+'-tabel-'+dag+'.csv';
+  }
+  // AC-1/AC-5/AC-6 - elke tabel in EEN antwoord krijgt zijn eigen knop, die zijn
+  // eigen tabel levert. Alleen aangeroepen voor een agent-bubbel, dus een eigen
+  // bericht krijgt er nooit een.
+  //
+  // En pas als het antwoord AF is. Tijdens het streamen staat er platte tekst in de
+  // bubbel (textContent); de opmaak naar tabellen gebeurt daarna in een keer. Zou
+  // iemand die opmaak naar de streamlus verplaatsen, dan zou deze knop op een halve
+  // tabel komen te staan en een half bestand leveren. Er staat een test op die dat
+  // bewaakt.
+  function zetTabelDownloads(bubbel){
+    [].slice.call(bubbel.querySelectorAll('.md-tablewrap')).forEach(function(wrap){
+      var tabel=wrap.querySelector('table.md-table');
+      if(!tabel || wrap.previousSibling && wrap.previousSibling.className==='tabel-download') return;
+      var knop=document.createElement('button');
+      knop.type='button'; knop.className='tabel-download';
+      knop.textContent='\u2b07 Download als CSV';
+      knop.addEventListener('click',function(){
+        var naam=tabelBestandsnaam();
+        try{
+          var blob=new Blob([tabelNaarCsv(tabel)],{type:'text/csv;charset=utf-8'});
+          var url=URL.createObjectURL(blob);
+          var a=document.createElement('a'); a.href=url; a.download=naam;
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+        }catch(e){ knop.textContent='Download lukte niet \u2014 selecteer de tabel en kopieer.'; }
+      });
+      wrap.parentNode.insertBefore(knop, wrap);
+    });
+  }
+
   // DIR-59: veilige markdown → HTML voor agent-antwoorden. Escape eerst ALLE HTML
   // uit de agent-tekst; render daarna alléén bekende constructies (pipe-tabellen,
   // koppen, bold/italic, lijsten, alinea's). Geen raw-HTML-injectie mogelijk.
@@ -6564,7 +6660,7 @@ const OFFICE_HTML = `<!doctype html>
       else {
         var doc=parseDoc(got);
         if(doc){ bubble.textContent=doc.markdown; toonDownload(doc.slug, doc.markdown); }
-        else { bubble.innerHTML=mdToHtml(got); }   // DIR-59: normale antwoorden als opgemaakte markdown
+        else { bubble.innerHTML=mdToHtml(got); zetTabelDownloads(bubble); }   // DIR-59 + DIR-118
         setActive(true);
       }
     }catch(e){ wisOpening(); bubble.textContent='Kon de agent niet bereiken. Probeer het opnieuw.'; }
