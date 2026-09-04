@@ -133,6 +133,7 @@ import {
   magChatten,
   isAdmin,
   maakSessie,
+  creditsReserveer,
   leesSessie,
   klantOpEmail,
   emailUitUserinfo,
@@ -4212,4 +4213,101 @@ test("waar kom je na het inloggen terecht (AC-1/AC-6/AC-7)", () => {
   // Onbekend saldo (administratie hapert): doorlaten, niet blokkeren.
   assert.equal(onboardingDoel({ nieuw: false, saldo: null }), "/");
   assert.equal(onboardingDoel(null), "/");
+});
+
+
+// -- DIR-113 - de klantsessie wint van de beheerderssessie -------------------
+
+// Een CREDITS-dubbel dat NOTEERT wat er gevraagd is: de kern van dit issue is niet
+// welk antwoord eruit komt maar OF de reservering uberhaupt gedaan wordt.
+function nepCreditsMetLog(antwoord) {
+  const gevraagd = [];
+  return {
+    gevraagd,
+    binding: {
+      idFromName() { return "nep"; },
+      get() {
+        return {
+          async fetch(url, opties) {
+            let inv = {};
+            try { inv = JSON.parse((opties && opties.body) || "{}"); } catch (e) { /* leeg */ }
+            gevraagd.push({ url: String(url), inv });
+            return new Response(JSON.stringify(antwoord), { headers: { "Content-Type": "application/json" } });
+          },
+        };
+      },
+    },
+  };
+}
+
+async function poortOmgeving(antwoord) {
+  const store = {
+    "config:credits": JSON.stringify(START_CONFIG),
+    "config:model": "claude-opus-5",                  // wat Dirk in /admin koos
+  };
+  const credits = nepCreditsMetLog(antwoord || { toegestaan: true, saldo: 200, model: "claude-sonnet-5", reservering: "res-1" });
+  const env = {
+    ADMIN_PASSWORD: "geheim-voor-de-test",
+    CLIENTS: nepKv(store),
+    CREDITS: credits.binding,
+  };
+  // Echte koekjes: het adminkoekje via de echte inlogroute, de klantsessie via
+  // dezelfde ondertekening als in productie.
+  const inlog = await worker.fetch(new Request("https://dd.test/api/admin/login", {
+    method: "POST", body: JSON.stringify({ password: "geheim-voor-de-test" }),
+  }), env, { waitUntil() {} });
+  const adminKoekje = String(inlog.headers.get("Set-Cookie") || "").split(";")[0];
+  const klantKoekje = "dd_klant_sessie=" + await maakSessie(env, "dirk@voorbeeld.nl", "");
+  const vraag = (koekjes) => creditsReserveer(new Request("https://dd.test/api/chat", {
+    method: "POST", headers: koekjes ? { Cookie: koekjes } : {},
+  }), env);
+  return { env, credits, adminKoekje, klantKoekje, vraag };
+}
+
+test("beheerder EN klant: er wordt gereserveerd op het klantsaldo (AC-1/AC-3)", async () => {
+  // Dit is de melding van Dirk: zijn saldo bewoog niet omdat de beheerderstak won.
+  const { credits, adminKoekje, klantKoekje, vraag } = await poortOmgeving();
+  const uit = await vraag(adminKoekje + "; " + klantKoekje);
+
+  assert.equal(uit.weigering, null);
+  assert.equal(uit.krediet.email, "dirk@voorbeeld.nl", "er hoort op het klantadres geboekt te worden");
+  assert.equal(uit.krediet.verrekend, false, "verrekend:true zou betekenen dat er niets wordt afgeboekt");
+  assert.equal(uit.krediet.reservering, "res-1");
+  // AC-3 - het model volgt dezelfde voorrang: dat van de klant, niet dat uit /admin.
+  assert.equal(uit.krediet.model, "claude-sonnet-5");
+  assert.equal(credits.gevraagd.length, 1, "de reservering hoort echt aangevraagd te zijn");
+  assert.match(credits.gevraagd[0].url, /\/credits\/reserveer$/);
+  assert.equal(credits.gevraagd[0].inv.email, "dirk@voorbeeld.nl");
+});
+
+test("alleen beheerder: niets gereserveerd, gratis op het model uit /admin (AC-2)", async () => {
+  const { credits, adminKoekje, vraag } = await poortOmgeving();
+  const uit = await vraag(adminKoekje);
+
+  assert.equal(uit.weigering, null);
+  assert.equal(uit.krediet.email, "", "zonder adres valt er niets af te boeken");
+  assert.equal(uit.krediet.verrekend, true);
+  assert.equal(uit.krediet.reservering, "");
+  assert.equal(uit.krediet.model, "claude-opus-5", "de keuze uit /admin");
+  assert.equal(credits.gevraagd.length, 0, "er hoort geen enkele aanroep naar het grootboek te gaan");
+});
+
+test("beheerder met klantsessie en saldo nul wordt tegengehouden (AC-4)", async () => {
+  const { adminKoekje, klantKoekje, vraag } = await poortOmgeving({ toegestaan: false, saldo: 0, model: "claude-sonnet-5" });
+  const uit = await vraag(adminKoekje + "; " + klantKoekje);
+
+  assert.equal(uit.krediet, null);
+  assert.ok(uit.weigering, "op nul gaat de deur dicht, ook voor de beheerder");
+  assert.equal(uit.weigering.status, 402);
+  const j = await uit.weigering.json();
+  assert.match(j.error, /credits zijn op/);
+  assert.equal(j.credits, 0);
+});
+
+test("zonder enige sessie verandert er niets", async () => {
+  const { credits, vraag } = await poortOmgeving();
+  const uit = await vraag("");
+  assert.equal(uit.krediet.email, "");
+  assert.equal(uit.krediet.verrekend, true);
+  assert.equal(credits.gevraagd.length, 0);
 });
