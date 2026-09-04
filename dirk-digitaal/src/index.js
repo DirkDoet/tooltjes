@@ -1778,7 +1778,11 @@ function pdfBestand(inhoud) {
 // exclusief btw in centen. Dat is geen toeval maar de hele reden dat het zo gekozen
 // is: er valt niets af te ronden en dus niets zoek te raken.
 const BTW_PERCENT = 21;
-const KOOP_MIN_STANDAARD = 10;                  // onder EUR 10 eten de transactiekosten de marge op
+// DIR-114 - van tien naar vijf, op verzoek van Dirk. Bij vijf euro gaat er ongeveer
+// vijfendertig cent aan transactiekosten af: zes tot zeven procent in plaats van drie
+// bij tien euro. Dat weet hij en hij wil het toch. Instelbaar in /admin; dit is
+// alleen de standaard.
+const KOOP_MIN_STANDAARD = 5;
 const KOOP_MAX_STANDAARD = 500;
 const MOLLIE_PAYMENTS = "https://api.mollie.com/v2/payments";
 
@@ -2339,8 +2343,25 @@ export function klantModelInleiding() {
     + "Een zwaardere keuze kost meer credits per vraag, en je kunt altijd wisselen.";
 }
 
+// DIR-114 AC-4 - hoe een model heet waar de klant zijn keuze maakt: de trede plus
+// de technische naam, "Standaard (claude-sonnet-5)".
+//
+// Dit staat HIER en niet in `label`, want datzelfde label gaat ook naar de
+// Model-kolom van de verbruikstabel, en daar hoort geen jargon (DIR-101, met een
+// test erop). Zet de technische naam dus niet alsnog in het label.
+//
+// En het staat server-side in plaats van in de client, omdat DIR-115 dezelfde
+// naamgeving in het zijmenu van het kantoor vraagt. Twee keer hetzelfde opbouwen is
+// precies hoe die twee uit elkaar gaan lopen; nu lezen beide schermen `weergave`.
+export function klantModelWeergave(model) {
+  const m = model || {};
+  const label = String(m.label || "");
+  const id = String(m.id || "");
+  return id ? (label + " (" + id + ")") : label;
+}
+
 export function klantModelKeuzes() {
-  return KLANT_MODELLEN.map((m) => Object.assign({}, m));
+  return KLANT_MODELLEN.map((m) => Object.assign({}, m, { weergave: klantModelWeergave(m) }));
 }
 // Alleen een keuze uit dat lijstje telt; al het andere is 'niets gekozen'.
 export function geldigKlantModel(id) {
@@ -5823,8 +5844,14 @@ const OFFICE_HTML = `<!doctype html>
     font-family:var(--leesfont); font-size:1rem; padding:.4rem .5rem; }
   .dash-factuurrij{ border:2px solid var(--ink); background:#fff; padding:.5rem .6rem; margin:.35rem 0; }
   .dash-factuurrij b{ display:block; }
-  .dash-factuurrij a{ display:inline-block; margin-top:.35rem; background:var(--ink); color:#fff;
+  /* DIR-114 AC-2/AC-3 - de knop plakte aan de creditsregel; nu staat de tekst op een
+     eigen regel met lucht eronder, en de knop draagt het blauw van Dirk Doet. */
+  .dash-factuurrij span.dash-melding{ display:block; margin-bottom:.15rem; }
+  .dash-factuurrij a{ display:inline-block; margin-top:.7rem; background:var(--teal); color:#fff;
     text-decoration:none; font-size:.9rem; padding:.3rem .6rem; }
+  /* DIR-114 AC-5 - elke weg terug naar het kantoor draagt dezelfde oranje knop:
+     in het welkomstblok, bij een leeg saldo en na een geslaagde aankoop. */
+  .knop.dash-kantoor{ background:var(--accent); color:var(--ink); }
   .dash-keuze{ display:block; width:100%; text-align:left; border:2px solid var(--ink);
     background:#fff; color:var(--ink); font-family:var(--leesfont); font-size:1rem;
     padding:.5rem .7rem; margin:.35rem 0; cursor:pointer; }
@@ -6074,7 +6101,7 @@ const OFFICE_HTML = `<!doctype html>
       <div class="dash-welkom dash-uit" id="dash-welkom">
         <h3>Welkom bij Dirk Digitaal</h3>
         <p id="dash-welkom-tekst"></p>
-        <button class="knop" id="dash-kantoor" type="button">Naar het kantoor</button>
+        <button class="knop dash-kantoor" id="dash-kantoor" type="button">Naar het kantoor</button>
       </div>
       <p class="dash-melding"><button class="dash-hoe dash-uit" id="dash-hoe" type="button">Hoe werkt dit?</button></p>
       <h3>Credits bijkopen</h3>
@@ -6083,10 +6110,13 @@ const OFFICE_HTML = `<!doctype html>
         <input id="dash-euro" type="text" inputmode="numeric" autocomplete="off">
         <button class="knop" id="dash-koop" type="button">Betalen</button>
       </div>
+      <!-- DIR-114 AC-1: het bereik komt uit de instelling, niet uit een vaste zin,
+           zodat het meebeweegt als Dirk de grenzen in /admin omzet. -->
+      <p class="dash-melding" id="dash-koopbereik"></p>
       <p class="dash-melding" id="dash-koopsom"></p>
       <p class="dash-melding" id="dash-koopmelding"></p>
       <!-- DIR-97 AC-8: verschijnt zodra een betaling rond is. -->
-      <button class="knop dash-uit" id="dash-verder" type="button">Naar het kantoor</button>
+      <button class="knop dash-kantoor dash-uit" id="dash-verder" type="button">Naar het kantoor</button>
       <h3>Je factuurgegevens</h3>
       <p class="dash-melding">Deze komen op je factuur te staan. Zonder deze gegevens kunnen we
         geen geldige factuur maken, dus vul ze in voordat je credits koopt.</p>
@@ -6728,9 +6758,13 @@ const OFFICE_HTML = `<!doctype html>
       knop.disabled=true; veld.disabled=true;
       melding.textContent='Bijkopen kan nu even niet. Mail Dirk, dan zet hij je credits erbij.';
       document.getElementById('dash-koopsom').textContent='';
+      var uit=document.getElementById('dash-koopbereik');
+      if(uit) uit.textContent='';
       return;
     }
     knop.disabled=false; veld.disabled=false;
+    var bereik=document.getElementById('dash-koopbereik');
+    if(bereik) bereik.textContent='Je kunt tussen \u20ac '+dashKopen.min+' en \u20ac '+dashKopen.max+' kopen.';
     if(!veld.value) veld.value=String(dashKopen.min);
     dashKoopsom();
   }
@@ -6810,7 +6844,10 @@ const OFFICE_HTML = `<!doctype html>
     dashKeuzes.forEach(function(k){
       var b=document.createElement('button');
       b.type='button'; b.className='dash-keuze'+(k.id===dashModel?' aan':'');
-      var t=document.createElement('b'); t.textContent=k.label; b.appendChild(t);
+      // DIR-114 AC-4 - de weergavenaam komt van de server (klantModelWeergave), zodat
+      // het zijmenu straks hetzelfde leest. Niet hier samenstellen en niet in het
+      // label zetten: dat label gaat ook naar de Model-kolom van de verbruikstabel.
+      var t=document.createElement('b'); t.textContent=k.weergave||k.label; b.appendChild(t);
       var u=document.createElement('span'); u.textContent=k.uitleg; b.appendChild(u);
       b.addEventListener('click',function(){ dashKiesModel(k.id); });
       doel.appendChild(b);
