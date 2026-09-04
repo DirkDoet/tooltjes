@@ -44,6 +44,7 @@ import {
   schoonKlantRecord,
   normaliseerEmail,
   agentStandaard,
+  agentBelooftMeta,
   modelPrijs,
   tokenKosten,
   kostenNaarCredits,
@@ -4322,7 +4323,21 @@ test("de uitgeserveerde pagina toont de Meta Ads-knop bij niemand (AC-1/AC-2)", 
 
   // De knop en zijn afhandeling staan er nog (AC-2): dit is verbergen, geen slopen.
   assert.match(html, /id="chat-meta"/, "de knop hoort te blijven bestaan");
-  assert.match(html, /\/api\/meta\/status/, "de statusroute-aanroep hoort te blijven staan");
+
+  // De oude assertie zocht de tekst "/api/meta/status" ergens in de pagina, en die
+  // staat OOK in de comment erboven - comments worden meegeserveerd. Hij kon dus niet
+  // omvallen: de reviewer nam metaKlik zijn fetch af en alle tests bleven groen.
+  // Daarom nu de afhandeling zelf: de functie moet bestaan, hij moet die route echt
+  // ophalen, en de klik moet eraan hangen.
+  const metaKlik = html.match(/function metaKlik\(\)\{[\s\S]*?\n  \}/);
+  assert.ok(metaKlik, "metaKlik hoort te blijven bestaan");
+  assert.match(metaKlik[0], /fetch\('\/api\/meta\/status'\)/,
+    "de afhandeling hoort de statusroute echt op te halen");
+  // De hele regel, inclusief de voorwaarde ervoor: alleen de aanroep toetsen laat
+  // `if(false) metaBtn.addEventListener(...)` er ongemerkt doorheen - dezelfde
+  // soort gatenkaas als de assertie die dit issue moest repareren.
+  assert.match(html, /if\(metaBtn\) metaBtn.addEventListener\('click',metaKlik\)/,
+    "en de klik hoort er nog aan te hangen");
 
   // Maar er is geen pad waarlangs hij zichtbaar wordt: de schakelaar staat uit en
   // de zichtbaarheidsregel hangt eraan.
@@ -4468,4 +4483,95 @@ test("het inseinen werkt alleen het scherm bij en slaat niets op", async () => {
     "het inseinen vanuit het menu mag niets opslaan en geen event uitlokken");
   assert.match(dashKant[0], /id===dashModel\) return;/,
     "een keuze die al staat hoort er meteen uit te stappen");
+});
+
+
+// -- DIR-116 vervolg + DIR-114 AC-5 aanvulling ------------------------------
+
+test("de melding kijkt naar de tekst die de tool ECHT gebruikt", () => {
+  // Dit is de kern: `actieveAgent` legt Dirks opgeslagen tekst over de standaard
+  // heen. Beoordeel je de code-standaard, dan mis je precies het geval waarvoor de
+  // melding bedoeld is.
+  const standaard = agentStandaard("ads");
+  assert.equal(agentBelooftMeta(standaard), false, "de code-standaard noemt Meta niet meer");
+
+  const bewerkt = Object.assign({}, standaard, {
+    persona: "Je bent Ilona, de advertentie-specialist (Google Ads en Meta Ads).",
+  });
+  assert.equal(agentBelooftMeta(bewerkt), true, "een opgeslagen tekst met Meta hoort te melden");
+
+  // Alleen bij Ilona: de andere agents gaan niet over advertenties.
+  assert.equal(agentBelooftMeta(Object.assign({}, agentStandaard("gsc"),
+    { persona: "iets over Meta" })), false);
+  assert.equal(agentBelooftMeta(null), false);
+  assert.equal(agentBelooftMeta({ key: "ads" }), false);
+  // "metadata" is geen belofte over Meta Ads.
+  assert.equal(agentBelooftMeta(Object.assign({}, standaard,
+    { persona: "Kijk naar de metadata van de pagina." })), false);
+});
+
+test("/admin toont de melding en de route levert het oordeel", async () => {
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/admin"), env, { waitUntil() {} })).text();
+  assert.match(html, /if\(a.belooftMeta\)\{/, "het paneel hoort het veld te lezen");
+  assert.match(html, /deze tekst noemt Meta/, "met een melding die zegt wat eraan schort");
+  // We raken zijn tekst niet aan: er staat geen enkele wijziging van persona in.
+  assert.doesNotMatch(html, /persona *= *['"]/, "de tekst van Dirk wordt niet overschreven");
+});
+
+test("bij een leeg saldo staat er een weg terug naar het kantoor (DIR-114 AC-5)", async () => {
+  // AC-5 noemde drie plekken; er waren er twee. Juist de klant die op nul vastzit
+  // had geen enkele knop, alleen het kruisje rechtsboven.
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+
+  const knoppen = html.match(/class="knop dash-kantoor[^"]*" id="dash-[a-z-]+"/g) || [];
+  assert.equal(knoppen.length, 3, "drie plekken: welkomstblok, leeg saldo, na de aankoop");
+  assert.ok(knoppen.some((k) => /id="dash-kantoor-op"/.test(k)), "de knop bij een leeg saldo");
+
+  // Hij hangt aan dezelfde sluitweg als de andere twee.
+  assert.match(html, /dashOpKnop.addEventListener\('click',dashDicht\)/);
+  // En hij komt alleen tevoorschijn als het saldo op is.
+  assert.match(html, /if\(opKnop\) opKnop.classList.remove\('dash-uit'\);/);
+  assert.match(html, /if\(opKnop\) opKnop.classList.add\('dash-uit'\);/);
+});
+
+
+// -- DIR-117 - het chatvenster en de leeskolom ------------------------------
+
+test("het venster is bijna paginavullend, met de maxima mee (AC-1)", async () => {
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+  const chat = html.match(/\.chat\{[^}]*\}/);
+  assert.ok(chat, "de .chat-regel hoort te bestaan");
+  assert.match(chat[0], /width:95vw/);
+  assert.match(chat[0], /height:92vh/);
+  // Dit is de val: bleven de maxima op 96vw/88vh staan, dan klemden ze de nieuwe
+  // maat meteen weer af en leek de wijziging niet te werken.
+  assert.doesNotMatch(chat[0], /max-height:88vh/, "het oude maximum hoort mee te bewegen");
+  assert.match(chat[0], /max-height:92vh/);
+  // De rand blijft, anders leest het als pagina in plaats van als venster.
+  assert.match(chat[0], /border:4px solid/);
+});
+
+test("een antwoord mag de volle breedte, een eigen vraag niet (AC-2/AC-5)", async () => {
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+  const agent = html.match(/\.bubble\.agent\{[^}]*\}/);
+  const user = html.match(/\.bubble\.user\{[^}]*\}/);
+  assert.ok(agent && user);
+  assert.match(agent[0], /max-width:100%/);
+  assert.match(user[0], /max-width:70%/, "een eigen vraag blijft smaller");
+  assert.match(user[0], /align-self:flex-end/, "en rechts");
+  assert.notEqual(user[0].match(/max-width:[0-9]+%/)[0], agent[0].match(/max-width:[0-9]+%/)[0],
+    "alles even breed maakt het gesprek onleesbaar");
+});
+
+test("smalle schermen en de tabelschuifbalk blijven zoals ze waren (AC-3/AC-4)", async () => {
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+  // De mediaquery die het venster op smal beeld vult, staat er nog ongewijzigd.
+  assert.match(html, /\(max-width:640px\)\{ \.chat\{ width:100%; min-width:0; height:auto; max-height:92vh; \} \}/);
+  // En de tabel houdt zijn eigen schuifbalk; de pagina schuift nooit horizontaal.
+  assert.match(html, /\.bubble \.md-tablewrap\{ overflow-x:auto; max-width:100%/);
 });
