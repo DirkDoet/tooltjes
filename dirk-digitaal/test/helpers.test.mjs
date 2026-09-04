@@ -4647,3 +4647,31 @@ test("de twee CSV-plekken verwijzen naar elkaar", async () => {
   const bron = await import("node:fs").then((fs) => fs.promises.readFile("src/index.js", "utf8"));
   assert.match(bron, /csvVeldClient en tabelNaarCsv/, "en de server naar de client");
 });
+
+
+test("de knop komt pas als het antwoord af is, niet tijdens het typen", async () => {
+  // Tijdens het streamen staat er PLATTE tekst in de bubbel; de opmaak naar tabellen
+  // gebeurt daarna in een keer. Zou de opmaak naar de streamlus verhuizen, dan kwam
+  // deze knop op een halve tabel te staan en leverde hij een half bestand.
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+  assert.match(html, /got\+=evt.delta.text; bubble.textContent=got;/,
+    "tijdens het streamen hoort er platte tekst in de bubbel te staan");
+  // De opmaak en de knop staan samen, na de lus.
+  assert.match(html, /bubble.innerHTML=mdToHtml\(got\); zetTabelDownloads\(bubble\);/);
+  // En de opmaak gebeurt NERGENS tijdens het streamen.
+  const inStream = html.match(/typeof evt.delta.text==='string'\)\{[\s\S]*?\}/);
+  assert.ok(inStream);
+  assert.doesNotMatch(inStream[0], /mdToHtml|zetTabelDownloads|innerHTML/,
+    "de streamlus hoort geen opmaak te doen");
+});
+
+test("opmaak in een cel levert tekst op, geen markering (AC-3)", async () => {
+  // Een agent kan een cel vet zetten of er een link in doen. In het bestand hoort
+  // dan de tekst te staan en niet de opmaak eromheen.
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+  assert.match(html, /csvVeldClient\(\(c.textContent\|\|''\).trim\(\)\)/,
+    "de celtekst komt uit textContent, dus zonder markering");
+  assert.doesNotMatch(html, /csvVeldClient\(c.innerHTML/, "innerHTML zou de opmaak meenemen");
+});

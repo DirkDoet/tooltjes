@@ -6549,6 +6549,12 @@ const OFFICE_HTML = `<!doctype html>
   // AC-1/AC-5/AC-6 - elke tabel in EEN antwoord krijgt zijn eigen knop, die zijn
   // eigen tabel levert. Alleen aangeroepen voor een agent-bubbel, dus een eigen
   // bericht krijgt er nooit een.
+  //
+  // En pas als het antwoord AF is. Tijdens het streamen staat er platte tekst in de
+  // bubbel (textContent); de opmaak naar tabellen gebeurt daarna in een keer. Zou
+  // iemand die opmaak naar de streamlus verplaatsen, dan zou deze knop op een halve
+  // tabel komen te staan en een half bestand leveren. Er staat een test op die dat
+  // bewaakt.
   function zetTabelDownloads(bubbel){
     [].slice.call(bubbel.querySelectorAll('.md-tablewrap')).forEach(function(wrap){
       var tabel=wrap.querySelector('table.md-table');
