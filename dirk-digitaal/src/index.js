@@ -4321,13 +4321,24 @@ function verrekenKrediet(env, ctx, krediet, agent, meter) {
 // twee aanroepen naar hetzelfde record.
 //
 // Kijken, inloggen en het kantoor bekijken komen hier niet langs; alleen praten.
-async function creditsReserveer(request, env) {
+export async function creditsReserveer(request, env) {
   const adminModel = await actiefModel(env);
-  // Dirk zelf heeft geen saldo, en wie niet is ingelogd is al door de chat-poort
-  // tegengehouden. Beiden draaien op het model uit /admin en hebben niets te
-  // verrekenen.
+  // Wie niet als klant is ingelogd draait op het model uit /admin en heeft niets te
+  // verrekenen: dat is de beheerder die even zelf iets vraagt, en verder niemand,
+  // want de chat-poort houdt de rest al tegen.
   const geenKrediet = { email: "", model: adminModel, reservering: "", verrekend: true };
-  if (await isAdmin(request, env)) return { weigering: null, krediet: geenKrediet };
+
+  // DIR-113 - DE KLANTSESSIE WINT, ook als er tegelijk een beheerderssessie is.
+  //
+  // Hier stond de beheerderscontrole vóór deze regel, met de comment "Dirk zelf heeft
+  // geen saldo". Dat klopte zolang een beheerder per definitie geen klant was. Sinds
+  // DIR-112 bestaan beide sessies naast elkaar en is Dirk allebei tegelijk; de
+  // beheerderstak won dan altijd, en zijn klantsaldo bewoog nooit. Hij kon dus niet
+  // zien wat zijn klanten zien - precies waar de tool voor bedoeld is.
+  //
+  // Er is geen aparte beheerderscontrole meer nodig: "geen klantsessie" dekt de
+  // beheerder én de rest, en zo kan er ook geen voorrang terugsluipen. Het geld gaat
+  // in een cirkel, want het is Dirks eigen grootboek.
   const sessie = await huidigeSessie(request, env);
   if (!sessie || !sessie.email) return { weigering: null, krediet: geenKrediet };
 
