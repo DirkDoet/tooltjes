@@ -4575,3 +4575,103 @@ test("smalle schermen en de tabelschuifbalk blijven zoals ze waren (AC-3/AC-4)",
   // En de tabel houdt zijn eigen schuifbalk; de pagina schuift nooit horizontaal.
   assert.match(html, /\.bubble \.md-tablewrap\{ overflow-x:auto; max-width:100%/);
 });
+
+
+// -- DIR-118 - downloadknop bij elke tabel ----------------------------------
+
+test("de agents weten van de knop en plakken geen CSV meer (AC-7)", () => {
+  // Vier agents, een gedeelde zin. Zonder dit blijft de agent zeggen dat hij geen
+  // bestand kan leveren terwijl de knop eronder staat.
+  const prompts = [
+    buildSystemPrompt(null, ""),
+    buildGa4SystemPrompt(null, ""),
+    buildAdsSystemPrompt(null, ""),
+    buildContentSystemPrompt(""),
+  ];
+  for (const p of prompts) {
+    assert.match(p, /knop waarmee de gebruiker hem als/, "de agent hoort van de knop te weten");
+    assert.match(p, /wijs dan naar die knop/i, "en er naar te wijzen");
+    assert.match(p, /plak geen CSV/i, "in plaats van een lap CSV in het gesprek");
+  }
+});
+
+test("de client haalt de CSV uit de tabel die er STAAT (AC-2/AC-3)", async () => {
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+
+  // De bron is de zichtbare tabel, niet de markdown erachter: dan kan het bestand
+  // niet uit de pas lopen met wat de klant ziet.
+  assert.match(html, /function tabelNaarCsv\(tabel\)\{/);
+  assert.match(html, /tabel.querySelectorAll\('tr'\)/);
+  assert.match(html, /querySelectorAll\('th,td'\)/, "kopregel en cellen, allebei");
+
+  // AC-2 - dezelfde vorm als de server-export: puntkomma, BOM, CRLF, aanhalen.
+  assert.match(html, /cellen.join\(';'\)/, "puntkomma tussen de velden");
+  // De escapes staan hier BEWUST niet als backslash-vorm in de bron: die worden
+  // door het sjabloon opgelost en breken de uitgeserveerde JS. Vandaar tekencodes,
+  // en de test controleert precies dat.
+  assert.match(html, /String.fromCharCode\(0xFEFF\)/, "BOM vooraan, anders leest Excel de accenten stuk");
+  assert.match(html, /String.fromCharCode\(13,10\)/, "CRLF tussen de regels");
+  assert.match(html, /t.indexOf\(';'\)>=0/, "aanhalen bij een puntkomma");
+  assert.match(html, /t.indexOf\(CR\)>=0/, "en bij een regeleinde");
+  assert.match(html, /split\('"'\).join\('""'\)/, "en aanhalingstekens verdubbeld");
+  // En de val zelf: waar een escape hoorde mag geen ECHT regeleinde in de
+  // uitgeserveerde JS staan. Dit is de assertie die het hele scherm bewaakt; zonder
+  // haar liep de pagina stuk op een regex die over twee regels brak.
+  assert.doesNotMatch(html, /\[;"\r?\n/, "een echt regeleinde in de tekenklasse breekt de pagina");
+});
+
+test("elke tabel zijn eigen knop, en een eigen bericht geen (AC-1/AC-5/AC-6)", async () => {
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+
+  // AC-5 - over ALLE tabelwrappers in de bubbel, elk met zijn eigen tabel.
+  assert.match(html, /bubbel.querySelectorAll\('\.md-tablewrap'\)\)/);
+  assert.match(html, /wrap.querySelector\('table\.md-table'\)/);
+  // AC-6 - alleen aangeroepen waar een AGENT-antwoord wordt neergezet.
+  assert.match(html, /bubble.innerHTML=mdToHtml\(got\); zetTabelDownloads\(bubble\);/);
+  const aanroepen = html.match(/zetTabelDownloads\(/g) || [];
+  assert.equal(aanroepen.length, 2, "de definitie en een aanroep, en verder niets: " + aanroepen.length);
+
+  // AC-4 - de naam draagt de agent en de datum.
+  assert.match(html, /wie\+'-tabel-'\+dag\+'\.csv'/);
+});
+
+test("de twee CSV-plekken verwijzen naar elkaar", async () => {
+  // Onvermijdelijke kopie: de server-export van DIR-98 en de knop in de browser.
+  // Zonder verwijzing lopen ze uit elkaar zodra iemand er een aanpast.
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+  assert.match(html, /csvVeld en gebruikCsvTekst aan de serverkant/, "de client wijst naar de server");
+
+  const bron = await import("node:fs").then((fs) => fs.promises.readFile("src/index.js", "utf8"));
+  assert.match(bron, /csvVeldClient en tabelNaarCsv/, "en de server naar de client");
+});
+
+
+test("de knop komt pas als het antwoord af is, niet tijdens het typen", async () => {
+  // Tijdens het streamen staat er PLATTE tekst in de bubbel; de opmaak naar tabellen
+  // gebeurt daarna in een keer. Zou de opmaak naar de streamlus verhuizen, dan kwam
+  // deze knop op een halve tabel te staan en leverde hij een half bestand.
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+  assert.match(html, /got\+=evt.delta.text; bubble.textContent=got;/,
+    "tijdens het streamen hoort er platte tekst in de bubbel te staan");
+  // De opmaak en de knop staan samen, na de lus.
+  assert.match(html, /bubble.innerHTML=mdToHtml\(got\); zetTabelDownloads\(bubble\);/);
+  // En de opmaak gebeurt NERGENS tijdens het streamen.
+  const inStream = html.match(/typeof evt.delta.text==='string'\)\{[\s\S]*?\}/);
+  assert.ok(inStream);
+  assert.doesNotMatch(inStream[0], /mdToHtml|zetTabelDownloads|innerHTML/,
+    "de streamlus hoort geen opmaak te doen");
+});
+
+test("opmaak in een cel levert tekst op, geen markering (AC-3)", async () => {
+  // Een agent kan een cel vet zetten of er een link in doen. In het bestand hoort
+  // dan de tekst te staan en niet de opmaak eromheen.
+  const env = await nepEnv();
+  const html = await (await worker.fetch(new Request("https://dd.test/"), env, { waitUntil() {} })).text();
+  assert.match(html, /csvVeldClient\(\(c.textContent\|\|''\).trim\(\)\)/,
+    "de celtekst komt uit textContent, dus zonder markering");
+  assert.doesNotMatch(html, /csvVeldClient\(c.innerHTML/, "innerHTML zou de opmaak meenemen");
+});
