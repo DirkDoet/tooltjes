@@ -29,3 +29,11 @@ jobs:
       - name: Tests ai-ready-check-worker
         run: node --test
         working-directory: ai-ready-check-worker
+
+      # De Claude-migratietool is Python met alleen de standaardbibliotheek.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Tests claude-migratie
+        run: python -m unittest discover -s claude-migratie
