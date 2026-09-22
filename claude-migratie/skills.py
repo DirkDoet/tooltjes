@@ -1,0 +1,89 @@
+"""Pakt de eigen claude.ai-skills in als zip per skill en schrijft een migratiechecklist.
+
+Gebruik: python skills.py <uitvoermap>
+
+Leest de lokaal gesyncte skills onder %APPDATA%\\Claude. Werkt offline, met alleen de
+standaardbibliotheek. Uploaden naar Teams gebeurt met de hand, via de checklist.
+"""
+
+import json
+import os
+import sys
+import zipfile
+from pathlib import Path
+
+CONNECTORS = [
+    "Linear", "Zapier", "Gmail", "Microsoft 365 (Outlook/SharePoint/Teams)", "Google Calendar", "Google Drive",
+    "Figma", "Meta Ads", *(f"WordPress/Novamira (site {i} van 4)" for i in range(1, 5)), "Elementor",
+]
+
+
+def zoek_manifest(zoekmap):
+    """manifest.json onder skills-plugin/*/*/. Staan er meerdere, dan telt de laatst bijgewerkte."""
+    gevonden = sorted(zoekmap.glob("*/*/manifest.json"), key=lambda p: p.stat().st_mtime)
+    return gevonden[-1] if gevonden else None
+
+
+def pak_in(skillmap, zip_pad):
+    """Zip met de map <naam>/ erin, zoals Teams een skill verwacht. Vaste volgorde, dus herhaalbaar."""
+    zip_pad.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_pad, "w", zipfile.ZIP_DEFLATED) as z:
+        for pad in sorted(p for p in skillmap.rglob("*") if p.is_file()):
+            z.write(pad, f"{skillmap.name}/{pad.relative_to(skillmap).as_posix()}")
+
+
+def mcp_servers(config_pad):
+    if not config_pad.is_file():
+        return []
+    return sorted(json.loads(config_pad.read_text(encoding="utf-8")).get("mcpServers") or {})
+
+
+def checklist(ingepakt, servers, config_pad):
+    r = ["# Migratie naar Claude Teams", ""]
+    r += ["## (a) Skills uploaden als organisatie-skill in Teams", "",
+          "Settings > Capabilities > Skills, één zip per keer.", ""]
+    r += [f"- [ ] Skill uploaden: `skills/{naam}.zip`" for naam in ingepakt] or ["Geen eigen skills gevonden."]
+    r += ["", "## (b) Projecten opnieuw aanmaken en delen met collega's", "",
+          "- [ ] Projecten opnieuw aanmaken en delen; instructies, beschrijving en bestanden staan in `projecten/`"]
+    r += ["", "## (c) Geheugen importeren", "",
+          "- [ ] Geheugen importeren in Teams via Settings (officiële import), bron `geheugen/account-geheugen.md`"]
+    r += ["", "## (d) Connectors opnieuw koppelen", ""]
+    r += [f"- [ ] {c}" for c in CONNECTORS]
+    r += ["", "## (e) Lokale MCP-servers", ""]
+    r += [f"- [ ] MCP-server `{s}`: blijft werken, alleen opnieuw inloggen" for s in servers] \
+        or [f"Geen lokale MCP-servers gevonden in `{config_pad}` (sectie `mcpServers`)."]
+    r += ["", "## (f) Cowork-taak", "", "- [ ] Cowork-taak ochtendbriefing (08:45) opnieuw aanmaken"]
+    r += ["", "## (g) Opnieuw inloggen", "", "- [ ] Claude Code en desktop-app opnieuw inloggen met werkaccount"]
+    r += ["", "## (h) Als laatste", "", "- [ ] Pas als alles hierboven af is: persoonlijk abonnement opzeggen", ""]
+    return "\n".join(r)
+
+
+def main(argv):
+    if len(argv) != 1:
+        sys.exit("Gebruik: python skills.py <uitvoermap>")
+    uit = Path(argv[0])
+    claude = Path(os.environ["APPDATA"]) / "Claude"
+    zoekmap = claude / "local-agent-mode-sessions" / "skills-plugin"
+    manifest = zoek_manifest(zoekmap)
+    if not manifest:
+        print(f"Geen manifest.json gevonden onder {zoekmap}\\*\\*\\", file=sys.stderr)
+        sys.exit(1)
+
+    skills = json.loads(manifest.read_text(encoding="utf-8"))["skills"]
+    ingepakt = sorted(s["name"] for s in skills if s.get("creatorType") == "user")
+    overgeslagen = sorted(s["name"] for s in skills if s.get("creatorType") != "user")
+    for naam in ingepakt:
+        pak_in(manifest.parent / "skills" / naam, uit / "skills" / f"{naam}.zip")
+
+    config = claude / "claude_desktop_config.json"
+    uit.mkdir(parents=True, exist_ok=True)
+    (uit / "CHECKLIST.md").write_text(checklist(ingepakt, mcp_servers(config), config), encoding="utf-8", newline="\n")
+
+    print(f"Manifest: {manifest}")
+    print(f"Ingepakt: {len(ingepakt)} ({', '.join(ingepakt)})")
+    print(f"Overgeslagen: {len(overgeslagen)} ({', '.join(overgeslagen)})")
+    print(f"Checklist: {uit / 'CHECKLIST.md'}")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
