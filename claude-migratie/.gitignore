@@ -1,0 +1,9 @@
+# Echte exportdata en het archief horen nooit in de repo.
+*.zip
+chat-project-koppeling.json
+# Alles in deze map is uitgesloten behalve de tool zelf, dus ook elke uitvoermap.
+*
+!.gitignore
+!archief.py
+!test_archief.py
+!README.md
