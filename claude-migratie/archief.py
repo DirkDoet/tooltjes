@@ -19,14 +19,16 @@ GEEN_PROJECT = "Geen project"
 MAX_NAAM = 120
 AFZENDER = {"human": "Gebruiker", "assistant": "Claude"}
 # Namen die Windows niet als bestands- of mapnaam accepteert, ook niet met extensie.
-GERESERVEERD = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+GERESERVEERD = {"CON", "PRN", "AUX", "NUL", *(f"{p}{c}" for p in ("COM", "LPT") for c in "123456789¹²³")}
 
 
 def veilige_naam(naam, max_lengte=MAX_NAAM):
-    """Geldige Windows-naam: verboden tekens worden '-', geen punt of spatie aan het eind."""
-    naam = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", naam)[:max_lengte].rstrip(" .")
-    if naam.split(".")[0].upper() in GERESERVEERD:
-        naam = naam + "-"
+    """Geldige Windows-naam: verboden tekens worden '-', geen punt of spatie aan het eind.
+    Blijft er niets over, dan wordt het 'Naamloos'."""
+    naam = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", naam)[:max_lengte].rstrip(" .") or "Naamloos"
+    stam, punt, rest = naam.partition(".")
+    if stam.upper() in GERESERVEERD:
+        naam = stam + "-" + punt + rest  # aux.txt -> aux-.txt
     return naam
 
 
@@ -112,11 +114,12 @@ def lees_json_uit_zip(zip_pad, map_in_zip):
         return [json.loads(z.read(n)) for n in namen]
 
 
-def unieke_naam(basis, achtervoegsel, bezet):
-    """Bestandsnaam van max. 120 tekens; bij een botsing (Windows negeert hoofdletters) komt het achtervoegsel erachter."""
-    naam = veilige_naam(basis, MAX_NAAM - 3) + ".md"
+def unieke_naam(basis, ext, achtervoegsel, bezet):
+    """Bestandsnaam van max. 120 tekens; bij een botsing (Windows negeert hoofdletters) komt
+    het achtervoegsel vóór de extensie."""
+    naam = veilige_naam(basis, MAX_NAAM - len(ext)) + ext
     if naam.lower() in bezet:
-        naam = veilige_naam(basis, MAX_NAAM - 3 - len(achtervoegsel) - 1) + " " + achtervoegsel + ".md"
+        naam = veilige_naam(basis, MAX_NAAM - len(ext) - len(achtervoegsel) - 1) + " " + achtervoegsel + ext
     bezet.add(naam.lower())
     return naam
 
@@ -155,8 +158,12 @@ def main(argv):
         map_ = uit / "projecten" / projectmap[p["uuid"]][1]
         schrijf(map_ / "instructies.md", p.get("prompt_template") or "Geen instructies\n")
         schrijf(map_ / "beschrijving.md", p.get("description") or "Geen beschrijving\n")
-        for doc in p.get("docs") or []:
-            schrijf(map_ / "bestanden" / veilige_naam(doc.get("filename") or doc.get("uuid")), doc.get("content") or "")
+        # Oudste eerst: bij gelijke namen krijgt altijd hetzelfde document het uuid-achtervoegsel.
+        bezette_docs = set()
+        for doc in sorted(p.get("docs") or [], key=lambda d: (d.get("created_at") or "", d.get("uuid") or "")):
+            stam, ext = os.path.splitext(veilige_naam(doc.get("filename") or ""))
+            naam = unieke_naam(stam, ext, (doc.get("uuid") or "")[:8], bezette_docs)
+            schrijf(map_ / "bestanden" / naam, doc.get("content") or "")
             aantal_bestanden += 1
         if project_geheugen.get(p["uuid"]):
             schrijf(map_ / "geheugen.md", project_geheugen[p["uuid"]])
@@ -174,7 +181,7 @@ def main(argv):
         project, mapnaam = projectmap.get(koppeling.get(c["uuid"]), (GEEN_PROJECT, GEEN_PROJECT))
         titel = c.get("name") or "Naamloos"
         datum = (c.get("created_at") or "")[:10]
-        bestandsnaam = unieke_naam(f"{datum} {titel}", c["uuid"][:8], bezet.setdefault(mapnaam, set()))
+        bestandsnaam = unieke_naam(f"{datum} {titel}", ".md", c["uuid"][:8], bezet.setdefault(mapnaam, set()))
         schrijf(uit / "chats" / mapnaam / bestandsnaam, chat_md(c, titel, project))
         per_project[project] = per_project.get(project, 0) + 1
         index.append((c.get("created_at") or "", c["uuid"], datum, titel, project, len(c["chat_messages"]),

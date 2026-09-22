@@ -19,6 +19,7 @@ import archief
 
 P1 = "aaaaaaaa-0000-0000-0000-000000000001"
 P2 = "bbbbbbbb-0000-0000-0000-000000000002"
+P3 = "cccccccc-0000-0000-0000-000000000003"
 
 
 def bericht(uuid, sender, tijd, content=None, text="", attachments=None, files=None):
@@ -85,10 +86,20 @@ CHATS = [
 
 PROJECTEN = [
     {"uuid": P1, "name": "Klant: De Haenen", "description": "Alles voor De Haenen.", "prompt_template": "Schrijf in jij-vorm.",
-     "docs": [{"uuid": "d1", "filename": "tone-of-voice.md", "content": "TONE-INHOUD", "created_at": "2026-01-01T00:00:00Z"}],
+     "docs": [{"uuid": "d1", "filename": "tone-of-voice.md", "content": "TONE-INHOUD", "created_at": "2026-01-01T00:00:00Z"},
+              # Review-punt 1: gelijke namen, ook alleen in hoofdletters verschillend.
+              {"uuid": "d2222222-x", "filename": "notities.md", "content": "NOTITIES-EERSTE", "created_at": "2026-01-02T00:00:00Z"},
+              {"uuid": "d3333333-x", "filename": "Notities.MD", "content": "NOTITIES-TWEEDE", "created_at": "2026-01-03T00:00:00Z"},
+              # Review-punt 2: gereserveerde Windows-namen met extensie.
+              {"uuid": "d4", "filename": "aux.txt", "content": "AUX", "created_at": "2026-01-04T00:00:00Z"},
+              {"uuid": "d5", "filename": "COM¹.log", "content": "COM1", "created_at": "2026-01-05T00:00:00Z"}],
      "creator": {}, "is_private": True, "is_starter_project": False, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"},
     {"uuid": P2, "name": "Intern", "description": "", "prompt_template": "", "docs": [],
      "creator": {}, "is_private": True, "is_starter_project": False, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"},
+    # Review-punt 3: project- en documentnaam van alleen punten en spaties.
+    {"uuid": P3, "name": " . . ", "description": "", "prompt_template": "",
+     "docs": [{"uuid": "d6", "filename": "...", "content": "PUNTEN", "created_at": "2026-01-01T00:00:00Z"}],
+     "creator": {}, "is_private": True, "is_starter_project": False, "created_at": "2026-01-02T00:00:00Z", "updated_at": "2026-01-02T00:00:00Z"},
 ]
 
 GEHEUGEN = {
@@ -209,6 +220,30 @@ class ArchiefTest(unittest.TestCase):
         self.assertTrue((p2 / "beschrijving.md").is_file())
         self.assertFalse((p2 / "geheugen.md").exists())
 
+    # Review-punt 1: documenten met gelijke naam overschrijven elkaar niet; telling = schijf.
+    def test_projectdocumenten_botsen_niet(self):
+        bestanden = self.uit / "projecten/Klant- De Haenen/bestanden"
+        self.assertEqual((bestanden / "notities.md").read_text(encoding="utf-8"), "NOTITIES-EERSTE")
+        self.assertEqual((bestanden / "Notities d3333333.MD").read_text(encoding="utf-8"), "NOTITIES-TWEEDE")
+        op_schijf = len([p for p in (self.uit / "projecten").rglob("*") if p.parent.name == "bestanden" and p.is_file()])
+        self.assertIn(f"Projectbestanden: {op_schijf}", self.uitvoer)
+
+    # Review-punt 2: streepje vóór de eerste punt, ook bij COM¹²³ en LPT¹²³.
+    def test_gereserveerde_namen(self):
+        for invoer, verwacht in [("aux.txt", "aux-.txt"), ("AUX", "AUX-"), ("con.tar.gz", "con-.tar.gz"),
+                                 ("COM¹.log", "COM¹-.log"), ("lpt³", "lpt³-"), ("COM0.txt", "COM0.txt"),
+                                 ("auxiliary.txt", "auxiliary.txt")]:
+            self.assertEqual(archief.veilige_naam(invoer), verwacht, invoer)
+        bestanden = self.uit / "projecten/Klant- De Haenen/bestanden"
+        self.assertEqual(sorted(p.name for p in bestanden.iterdir() if p.suffix in (".txt", ".log")), ["COM¹-.log", "aux-.txt"])
+
+    # Review-punt 3: naam van alleen punten en spaties wordt Naamloos, geen crash, niet in de hoofdmap.
+    def test_lege_naam_wordt_naamloos(self):
+        for invoer in ["...", " . . ", "   "]:
+            self.assertEqual(archief.veilige_naam(invoer), "Naamloos", repr(invoer))
+        self.assertEqual((self.uit / "projecten/Naamloos/bestanden/Naamloos").read_text(encoding="utf-8"), "PUNTEN")
+        self.assertFalse((self.uit / "projecten/instructies.md").exists())
+
     # AC-7
     def test_account_geheugen(self):
         self.assertIn("ACCOUNT-GEHEUGEN-TEKST", (self.uit / "geheugen/account-geheugen.md").read_text(encoding="utf-8"))
@@ -216,7 +251,7 @@ class ArchiefTest(unittest.TestCase):
     # AC-8
     def test_samenvatting(self):
         for regel in ["Chats geschreven: 5", "Overgeslagen (leeg): 1", "Geen project: 2", "Intern: 2",
-                      "Klant: De Haenen: 1", "Projecten: 2", "Projectbestanden: 1"]:
+                      "Klant: De Haenen: 1", "Projecten: 3", "Projectbestanden: 6"]:
             self.assertIn(regel, self.uitvoer)
 
     # AC-9
