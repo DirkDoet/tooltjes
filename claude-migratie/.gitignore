@@ -6,4 +6,6 @@ chat-project-koppeling.json
 !.gitignore
 !archief.py
 !test_archief.py
+!skills.py
+!test_skills.py
 !README.md
