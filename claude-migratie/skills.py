@@ -48,8 +48,21 @@ def mcp_servers(config_pad):
     return gevonden
 
 
-def checklist(ingepakt, servers_per_bestand):
+def reden_niet_inpakken(skillmap):
+    """Waarom een skill niet ingepakt kan worden, of None als hij compleet is."""
+    if not skillmap.is_dir():
+        return "map ontbreekt"
+    if not (skillmap / "SKILL.md").is_file():
+        return "SKILL.md ontbreekt"
+    return None
+
+
+def checklist(ingepakt, niet_ingepakt, servers_per_bestand):
     r = ["# Migratie naar Claude Teams", ""]
+    if niet_ingepakt:
+        r += ["> **Let op: deze eigen skills zijn niet ingepakt en moeten met de hand worden overgezet.**", ">"]
+        r += [f"> - {naam}: {reden}" for naam, reden in niet_ingepakt]
+        r += [""]
     r += ["## (a) Skills uploaden als organisatie-skill in Teams", "",
           "Settings > Capabilities > Skills, één zip per keer.", ""]
     r += [f"- [ ] Skill uploaden: `skills/{naam}.zip`" for naam in ingepakt] or ["Geen eigen skills gevonden."]
@@ -83,21 +96,31 @@ def main(argv):
         sys.exit(1)
 
     skills = json.loads(manifest.read_text(encoding="utf-8"))["skills"]
-    ingepakt = sorted(s["name"] for s in skills if s.get("creatorType") == "user")
     overgeslagen = sorted(s["name"] for s in skills if s.get("creatorType") != "user")
-    for naam in ingepakt:
-        pak_in(manifest.parent / "skills" / naam, uit / "skills" / f"{naam}.zip")
+    ingepakt, niet_ingepakt = [], []
+    for naam in sorted(s["name"] for s in skills if s.get("creatorType") == "user"):
+        zip_pad = uit / "skills" / f"{naam}.zip"
+        reden = reden_niet_inpakken(manifest.parent / "skills" / naam)
+        if reden:
+            niet_ingepakt.append((naam, reden))
+            zip_pad.unlink(missing_ok=True)  # geen oude zip laten staan van een eerdere run
+        else:
+            pak_in(manifest.parent / "skills" / naam, zip_pad)
+            ingepakt.append(naam)
 
     # De desktop-app en Claude Code bewaren hun MCP-servers elk in een eigen bestand.
     configs = [claude / "claude_desktop_config.json", Path(os.environ.get("USERPROFILE") or Path.home()) / ".claude.json"]
     uit.mkdir(parents=True, exist_ok=True)
-    (uit / "CHECKLIST.md").write_text(checklist(ingepakt, [(c, mcp_servers(c)) for c in configs]),
+    (uit / "CHECKLIST.md").write_text(checklist(ingepakt, niet_ingepakt, [(c, mcp_servers(c)) for c in configs]),
                                       encoding="utf-8", newline="\n")
 
     print(f"Manifest: {manifest}")
     print(f"Ingepakt: {len(ingepakt)} ({', '.join(ingepakt)})")
     print(f"Overgeslagen: {len(overgeslagen)} ({', '.join(overgeslagen)})")
     print(f"Checklist: {uit / 'CHECKLIST.md'}")
+    if niet_ingepakt:
+        print(f"Niet ingepakt: {len(niet_ingepakt)} ({', '.join(f'{n}: {r}' for n, r in niet_ingepakt)})", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

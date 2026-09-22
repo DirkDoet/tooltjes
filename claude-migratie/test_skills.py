@@ -68,6 +68,43 @@ class SkillsTest(unittest.TestCase):
         self.assertIn("Ingepakt: 2 (dirk-doet-dna, dirkdoet-cms)", uitvoer)
         self.assertIn("Overgeslagen: 1 (docx)", uitvoer)
 
+    # Review #95: eigen skill zonder map of zonder SKILL.md wordt niet ingepakt, wel gemeld, exitcode 2.
+    def test_skill_zonder_map_of_skill_md(self):
+        maak_appdata(self.appdata, None)
+        basis = next(self.appdata.rglob("manifest.json")).parent
+        manifest = json.loads((basis / "manifest.json").read_text(encoding="utf-8"))
+        manifest["skills"] += [
+            {"skillId": "s4", "name": "zonder-map", "creatorType": "user"},
+            {"skillId": "s5", "name": "zonder-skill-md", "creatorType": "user"},
+        ]
+        (basis / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (basis / "skills" / "zonder-skill-md" / "references").mkdir(parents=True)
+        (basis / "skills" / "zonder-skill-md" / "references" / "x.md").write_text("x", encoding="utf-8")
+        # Een zip van een eerdere, nog wel complete run mag niet blijven staan.
+        (self.uit / "skills").mkdir(parents=True)
+        (self.uit / "skills" / "zonder-skill-md.zip").write_bytes(b"oud")
+
+        uit, fout = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"APPDATA": str(self.appdata), "USERPROFILE": str(self.home)}),                 contextlib.redirect_stdout(uit), contextlib.redirect_stderr(fout), self.assertRaises(SystemExit) as exit_:
+            skills.main([str(self.uit)])
+        self.assertEqual(exit_.exception.code, 2)
+        self.assertEqual(sorted(p.name for p in (self.uit / "skills").iterdir()), ["dirk-doet-dna.zip", "dirkdoet-cms.zip"])
+        self.assertIn("Ingepakt: 2 (dirk-doet-dna, dirkdoet-cms)", uit.getvalue())
+        self.assertIn("Niet ingepakt: 2 (zonder-map: map ontbreekt, zonder-skill-md: SKILL.md ontbreekt)", fout.getvalue())
+        tekst = (self.uit / "CHECKLIST.md").read_text(encoding="utf-8")
+        waarschuwing = tekst.index("> **Let op")
+        self.assertLess(waarschuwing, tekst.index("## (a)"))
+        self.assertIn("> - zonder-map: map ontbreekt", tekst)
+        self.assertIn("> - zonder-skill-md: SKILL.md ontbreekt", tekst)
+        self.assertNotIn("`skills/zonder-map.zip`", tekst)
+        self.assertNotIn("`skills/zonder-skill-md.zip`", tekst)
+
+    # Complete skills: geen waarschuwingsblok.
+    def test_geen_waarschuwing_als_alles_compleet(self):
+        maak_appdata(self.appdata, None)
+        self.draai()
+        self.assertNotIn("Let op", (self.uit / "CHECKLIST.md").read_text(encoding="utf-8"))
+
     # AC-3
     def test_manifest_ontbreekt(self):
         self.appdata.mkdir()
