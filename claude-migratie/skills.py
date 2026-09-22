@@ -15,6 +15,8 @@ from pathlib import Path
 CONNECTORS = [
     "Linear", "Zapier", "Gmail", "Microsoft 365 (Outlook/SharePoint/Teams)", "Google Calendar", "Google Drive",
     "Figma", "Meta Ads", *(f"WordPress/Novamira (site {i} van 4)" for i in range(1, 5)), "Elementor",
+    # Staan in geen enkele config, dus hier met de hand.
+    "Google Search Console, GA4, Google Ads (eigen MCP's in C:\\mcp)",
 ]
 
 
@@ -33,12 +35,20 @@ def pak_in(skillmap, zip_pad):
 
 
 def mcp_servers(config_pad):
+    """{servernaam: [bronnen]} uit mcpServers bovenin en uit projects.<pad>.mcpServers."""
     if not config_pad.is_file():
-        return []
-    return sorted(json.loads(config_pad.read_text(encoding="utf-8")).get("mcpServers") or {})
+        return {}
+    config = json.loads(config_pad.read_text(encoding="utf-8"))
+    gevonden = {}
+    for naam in config.get("mcpServers") or {}:
+        gevonden.setdefault(naam, []).append("algemeen")
+    for project, instellingen in sorted((config.get("projects") or {}).items()):
+        for naam in (instellingen or {}).get("mcpServers") or {}:
+            gevonden.setdefault(naam, []).append(f"project `{project}`")
+    return gevonden
 
 
-def checklist(ingepakt, servers, config_pad):
+def checklist(ingepakt, servers_per_bestand):
     r = ["# Migratie naar Claude Teams", ""]
     r += ["## (a) Skills uploaden als organisatie-skill in Teams", "",
           "Settings > Capabilities > Skills, één zip per keer.", ""]
@@ -50,8 +60,11 @@ def checklist(ingepakt, servers, config_pad):
     r += ["", "## (d) Connectors opnieuw koppelen", ""]
     r += [f"- [ ] {c}" for c in CONNECTORS]
     r += ["", "## (e) Lokale MCP-servers", ""]
-    r += [f"- [ ] MCP-server `{s}`: blijft werken, alleen opnieuw inloggen" for s in servers] \
-        or [f"Geen lokale MCP-servers gevonden in `{config_pad}` (sectie `mcpServers`)."]
+    for pad, servers in servers_per_bestand:
+        r += [f"Uit `{pad}`:", ""]
+        r += [f"- [ ] MCP-server `{s}` (bron: {', '.join(servers[s])}): blijft werken, alleen opnieuw inloggen"
+              for s in sorted(servers)] or ["Geen MCP-servers gevonden (bestand ontbreekt of heeft geen `mcpServers`)."]
+        r += [""]
     r += ["", "## (f) Cowork-taak", "", "- [ ] Cowork-taak ochtendbriefing (08:45) opnieuw aanmaken"]
     r += ["", "## (g) Opnieuw inloggen", "", "- [ ] Claude Code en desktop-app opnieuw inloggen met werkaccount"]
     r += ["", "## (h) Als laatste", "", "- [ ] Pas als alles hierboven af is: persoonlijk abonnement opzeggen", ""]
@@ -75,9 +88,11 @@ def main(argv):
     for naam in ingepakt:
         pak_in(manifest.parent / "skills" / naam, uit / "skills" / f"{naam}.zip")
 
-    config = claude / "claude_desktop_config.json"
+    # De desktop-app en Claude Code bewaren hun MCP-servers elk in een eigen bestand.
+    configs = [claude / "claude_desktop_config.json", Path(os.environ.get("USERPROFILE") or Path.home()) / ".claude.json"]
     uit.mkdir(parents=True, exist_ok=True)
-    (uit / "CHECKLIST.md").write_text(checklist(ingepakt, mcp_servers(config), config), encoding="utf-8", newline="\n")
+    (uit / "CHECKLIST.md").write_text(checklist(ingepakt, [(c, mcp_servers(c)) for c in configs]),
+                                      encoding="utf-8", newline="\n")
 
     print(f"Manifest: {manifest}")
     print(f"Ingepakt: {len(ingepakt)} ({', '.join(ingepakt)})")

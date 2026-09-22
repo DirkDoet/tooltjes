@@ -43,13 +43,15 @@ class SkillsTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.appdata = self.tmp / "appdata"
         self.uit = self.tmp / "uit"
+        self.home = self.tmp / "home"
+        self.home.mkdir()
 
     def tearDown(self):
         shutil.rmtree(self.tmp)
 
     def draai(self):
         buf = io.StringIO()
-        with mock.patch.dict(os.environ, {"APPDATA": str(self.appdata)}), contextlib.redirect_stdout(buf):
+        with mock.patch.dict(os.environ, {"APPDATA": str(self.appdata), "USERPROFILE": str(self.home)}), contextlib.redirect_stdout(buf):
             skills.main([str(self.uit)])
         return buf.getvalue()
 
@@ -70,7 +72,7 @@ class SkillsTest(unittest.TestCase):
     def test_manifest_ontbreekt(self):
         self.appdata.mkdir()
         buf = io.StringIO()
-        with mock.patch.dict(os.environ, {"APPDATA": str(self.appdata)}), contextlib.redirect_stderr(buf), \
+        with mock.patch.dict(os.environ, {"APPDATA": str(self.appdata), "USERPROFILE": str(self.home)}), contextlib.redirect_stderr(buf), \
                 self.assertRaises(SystemExit) as fout:
             skills.main([str(self.uit)])
         self.assertEqual(fout.exception.code, 1)
@@ -79,6 +81,11 @@ class SkillsTest(unittest.TestCase):
     # AC-4
     def test_checklist(self):
         maak_appdata(self.appdata, {"gsc": {"command": "node"}, "ga4": {"command": "node"}})
+        # Claude Code: servers bovenin en per project; een naam kan op beide plekken staan.
+        (self.home / ".claude.json").write_text(json.dumps({
+            "mcpServers": {"elementor-blink-hostess": {"command": "npx"}},
+            "projects": {"C:\p1": {"mcpServers": {"linear": {}, "elementor-blink-hostess": {}}}, "C:\p2": {}},
+        }), encoding="utf-8")
         self.draai()
         tekst = (self.uit / "CHECKLIST.md").read_text(encoding="utf-8")
         skillregels = [r for r in tekst.splitlines() if r.startswith("- [ ] Skill ")]
@@ -90,9 +97,17 @@ class SkillsTest(unittest.TestCase):
                          "Meta Ads", "Elementor", "08:45", "werkaccount", "abonnement opzeggen"]:
             self.assertIn(verwacht, tekst)
         self.assertEqual(tekst.count("WordPress/Novamira"), 4)
+        self.assertIn("- [ ] Google Search Console, GA4, Google Ads (eigen MCP's in C:\mcp)", tekst)
         mcp = [r for r in tekst.splitlines() if "blijft werken, alleen opnieuw inloggen" in r]
-        self.assertEqual(mcp, ["- [ ] MCP-server `ga4`: blijft werken, alleen opnieuw inloggen",
-                               "- [ ] MCP-server `gsc`: blijft werken, alleen opnieuw inloggen"])
+        self.assertEqual(mcp, [
+            "- [ ] MCP-server `ga4` (bron: algemeen): blijft werken, alleen opnieuw inloggen",
+            "- [ ] MCP-server `gsc` (bron: algemeen): blijft werken, alleen opnieuw inloggen",
+            "- [ ] MCP-server `elementor-blink-hostess` (bron: algemeen, project `C:\p1`): blijft werken, alleen opnieuw inloggen",
+            "- [ ] MCP-server `linear` (bron: project `C:\p1`): blijft werken, alleen opnieuw inloggen",
+        ])
+        # Per bestand staat erbij waar het vandaan komt.
+        self.assertLess(tekst.index(f"Uit `{self.appdata / 'Claude' / 'claude_desktop_config.json'}`:"), tekst.index("`ga4`"))
+        self.assertLess(tekst.index(f"Uit `{self.home / '.claude.json'}`:"), tekst.index("`linear`"))
         for sectie in "abcdefgh":
             self.assertIn(f"## ({sectie})", tekst)
         # Alles is afvinkbaar.
@@ -100,12 +115,13 @@ class SkillsTest(unittest.TestCase):
             if regel.startswith("- "):
                 self.assertTrue(regel.startswith("- [ ] "), regel)
 
-    # AC-4 (e): zo staat het nu op de pc van Albert: geen mcpServers in de config.
+    # AC-4 (e): desktop-config zonder mcpServers (zoals op de pc van Albert) en geen .claude.json.
     def test_checklist_zonder_mcp_servers(self):
         maak_appdata(self.appdata, None)
         self.draai()
         tekst = (self.uit / "CHECKLIST.md").read_text(encoding="utf-8")
-        self.assertIn("Geen lokale MCP-servers gevonden", tekst)
+        self.assertEqual(tekst.count("Geen MCP-servers gevonden (bestand ontbreekt of heeft geen `mcpServers`)."), 2)
+        self.assertNotIn("MCP-server `", tekst)
 
     # Opnieuw draaien geeft hetzelfde resultaat.
     def test_opnieuw_draaien_identiek(self):
