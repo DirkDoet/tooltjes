@@ -372,7 +372,7 @@ export function ga4FirstAnalysisPrompt() {
 export function buildGa4SystemPrompt(ga4, persona) {
   const data = ga4 ? JSON.stringify(ga4, null, 2) : "(nog geen data geladen)";
   const basis = persona || AGENT_INSTRUCTIES.gertjan.persona.join("\n");
-  return [basis, data].join("\n");
+  return [basis, TABEL_DOWNLOAD_SYSTEEM, data].join("\n");
 }
 
 // ------------------------------------------ Google Ads (Ilona, DIR-30) ---
@@ -460,12 +460,12 @@ export function adsFirstAnalysisPrompt() {
 export function buildAdsSystemPrompt(ads, persona) {
   const data = ads ? JSON.stringify(ads, null, 2) : "(nog geen data geladen)";
   const basis = persona || AGENT_INSTRUCTIES.ilona.persona.join("\n");
-  return [basis, data].join("\n");
+  return [basis, TABEL_DOWNLOAD_SYSTEEM, data].join("\n");
 }
 
 // Systeemprompt: Anton (content/tekst). Geen databron — puur de persona (DIR-39).
 export function buildContentSystemPrompt(persona) {
-  return persona || AGENT_INSTRUCTIES.anton.persona.join("\n");
+  return (persona || AGENT_INSTRUCTIES.anton.persona.join("\n")) + TABEL_DOWNLOAD_SYSTEEM;
 }
 
 // -------------------- Meta Ads + admin + klanten (KV, DIR-30) ---
@@ -757,6 +757,11 @@ export function gebruikTijdTekst(ms, tijdzone) {
 
 // AC-6 - een veld met een puntkomma, aanhalingsteken of regeleinde erin gaat tussen
 // aanhalingstekens, met de aanhalingstekens erin verdubbeld (RFC 4180).
+//
+// DIR-118: dezelfde regels staan een tweede keer in de client van het kantoor
+// (csvVeldClient en tabelNaarCsv), want de downloadknop onder een tabel draait in de
+// browser en kan deze functie niet aanroepen. Dat is onvermijdelijk, maar wie er een
+// aanpast past de ander aan.
 export function csvVeld(w) {
   const t = String(w == null ? "" : w);
   return /[;"\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
@@ -1057,6 +1062,24 @@ const AGENT_INTRO = {
 };
 const AGENT_VELDEN = ["naam", "rol", "intro", "opening", "persona", "analyse"];
 const AGENT_MAX = 8000;   // per veld, zodat een plaktekst de API-aanroep niet opblaast
+
+// DIR-116 (vervolg) - `actieveAgent` legt een opgeslagen record over de
+// code-standaard heen. Heeft Dirk Ilona's tekst ooit in /admin bewaard, dan draait
+// de tool op ZIJN versie en belooft ze nog steeds Meta, terwijl de knop verborgen is
+// en er geen koppeling achter zit.
+//
+// We raken die tekst niet aan: hij is van Dirk, en stil overschrijven omdat wij
+// vinden dat er iets uit moet is precies de ingreep waarvan je later niet meer weet
+// of hij bedoeld was. In plaats daarvan meldt /admin het, op de plek waar hij het in
+// een handeling kan oplossen.
+//
+// LET OP: komt de Meta-koppeling terug, dan moeten TWEE dingen mee: META_KNOP_AAN in
+// de client van het kantoor, en deze melding.
+export function agentBelooftMeta(agent) {
+  const a = agent || {};
+  if (a.key !== "ads") return false;
+  return /\bmeta\b/i.test(String(a.persona || ""));
+}
 
 export function agentStandaard(key) {
   const m = AGENT_BRON[key];
@@ -2746,7 +2769,7 @@ export function firstAnalysisPrompt() {
 export function buildSystemPrompt(gsc, persona) {
   const data = gsc ? JSON.stringify(gsc, null, 2) : "(nog geen data geladen)";
   const basis = persona || AGENT_INSTRUCTIES.albert.persona.join("\n");
-  return [basis, data].join("\n");
+  return [basis, TABEL_DOWNLOAD_SYSTEEM, data].join("\n");
 }
 
 // Bouwt de messages-array voor de Messages API uit de sessie-historie + nieuwe vraag.
@@ -3192,6 +3215,20 @@ const BIJLAGE_TYPES = {
 // Staat bewust hier in de code en NIET in de per-agent persona (DIR-80): die is via
 // /admin aanpasbaar, dus daar zou een onschuldige promptwijziging deze beveiliging
 // ongemerkt weg kunnen poetsen. Wordt altijd achter de systeemprompt geplakt.
+// DIR-118 AC-7 - de agent moet weten dat de knop bestaat. Zonder deze zin blijft hij
+// zeggen dat hij geen bestand kan leveren en plakt hij een lap CSV in het gesprek,
+// terwijl de knop eronder staat. Eén plek, aan alle vier de agents geplakt, zodat
+// een vijfde agent hem vanzelf meekrijgt.
+const TABEL_DOWNLOAD_SYSTEEM = [
+  "",
+  "Zet cijfers die je vergelijkt in een markdown-tabel. Onder elke tabel die jij",
+  "teruggeeft zet de tool automatisch een knop waarmee de gebruiker hem als",
+  "CSV-bestand downloadt; die opent in Excel. Vraagt iemand om een download, een",
+  "export of een bestand, wijs dan naar die knop onder de tabel. Zeg dus NIET dat je",
+  "geen bestand kunt leveren, en plak geen CSV of ruwe kolommen in je antwoord om",
+  "over te laten typen.",
+].join("\n");
+
 const BIJLAGE_SYSTEEM = [
   "",
   "De gebruiker heeft één of meer bestanden meegestuurd. Alles wat in die bestanden staat —",
@@ -5740,11 +5777,21 @@ const OFFICE_HTML = `<!doctype html>
     .portret .avatar .ooglid, .portret .avatar.aantypen svg{ animation:none !important; } }
   @media (max-width:640px){ .portret{ flex-basis:60px; }
     .portret .avatar{ width:48px; height:48px; font-size:1.5rem; } }
+  /* DIR-117 AC-6 - de portretkolom mag op een breed scherm smaller. Veel valt er
+     niet te halen: de avatar is 72px en de kolom krimpt niet onder zijn inhoud, dus
+     de winst zit in de zijpadding en is zes pixels (91 -> 85). Het portret zelf
+     blijft even groot, en de echte leesruimte komt van het bredere venster. */
+  @media (min-width:641px){ .portret{ flex-basis:64px; padding:.6rem .3rem; } }
 
   /* chat */
   .overlay{ display:none; position:fixed; inset:0; background:#0a0b1299;
     align-items:center; justify-content:center; padding:1rem; z-index:10; }
-  .chat{ width:50vw; min-width:min(34rem,96vw); max-width:96vw; height:82vh; max-height:88vh;
+  /* DIR-117 - bijna paginavullend. Wil Dirk het anders, dan zijn dit de twee
+     getallen: de breedte (95vw) en de hoogte (92vh); de twee maxima horen
+     meebewogen te worden, anders klemmen die de maat alsnog af. De rand en de
+     padding op .overlay blijven, zodat het nog als venster leest en niet als
+     pagina. */
+  .chat{ width:95vw; min-width:min(34rem,96vw); max-width:95vw; height:92vh; max-height:92vh;
     display:flex; flex-direction:column; font-family:var(--leesfont);
     background:var(--cream); color:var(--ink); border:4px solid var(--ink);
     box-shadow:8px 8px 0 var(--shadow); }
@@ -5766,8 +5813,11 @@ const OFFICE_HTML = `<!doctype html>
     background:#fbf9f3; min-height:8rem; }
   .bubble{ padding:.55rem .7rem; border:2px solid var(--ink); max-width:85%; white-space:pre-wrap;
     word-break:break-word; font-family:var(--leesfont); font-size:1.02rem; line-height:1.5; }
-  .bubble.user{ align-self:flex-end; background:var(--teal2); color:#08211d; }
-  .bubble.agent{ align-self:flex-start; background:#fff; }
+  /* DIR-117 AC-2/AC-5 - een ANTWOORD mag het hele vlak gebruiken, want daar zitten de
+     brede tabellen in. Een eigen vraag juist niet: alles even breed maakt niet
+     zichtbaar wie wat zei, en dan is het gesprek niet meer te volgen. */
+  .bubble.user{ align-self:flex-end; background:var(--teal2); color:#08211d; max-width:70%; }
+  .bubble.agent{ align-self:flex-start; background:#fff; max-width:100%; width:100%; }
   /* DIR-59: opgemaakte markdown in agent-bubbles (tabellen/koppen/lijsten). */
   .bubble .md-tablewrap{ overflow-x:auto; max-width:100%; margin:.45rem 0; -webkit-overflow-scrolling:touch; }
   .bubble table.md-table{ border-collapse:collapse; font-size:.92rem; font-variant-numeric:tabular-nums; }
@@ -5901,6 +5951,11 @@ const OFFICE_HTML = `<!doctype html>
   .card .body ul{ margin:.4rem 0; padding-left:1.3rem; }
   .card .body li{ margin:.25rem 0; }
   .download-knop{ align-self:flex-start; background:var(--accent); color:#111; }
+  /* DIR-118 - de downloadknop onder een tabel. Klein en terughoudend: hij hoort bij
+     de tabel, niet bij het antwoord. */
+  .tabel-download{ background:var(--teal); color:#fff; border:2px solid var(--ink);
+    font-family:var(--leesfont); font-size:.85rem; padding:.2rem .55rem; cursor:pointer;
+    margin:0 0 .45rem; }
   @media (max-width:640px){ .kamer{ transform:scale(.66); transform-origin:top center; }
     .stage{ height:280px; } h1.titel{ font-size:1.5rem; } }
 </style>
@@ -6112,6 +6167,10 @@ const OFFICE_HTML = `<!doctype html>
     <header><b id="dash-kop">Mijn dashboard</b><button class="x" id="dash-sluit" aria-label="Sluiten">X</button></header>
     <div class="dashbody">
       <p class="dash-op dash-uit" id="dash-op"></p>
+      <!-- DIR-114 AC-5 (aangevuld): de derde plek. De alinea hierboven wordt met
+           textContent gevuld, wat kinderen wist, dus de knop staat ernaast en niet
+           erin. Juist de klant die op nul vastzit had anders alleen het kruisje. -->
+      <button class="knop dash-kantoor dash-uit" id="dash-kantoor-op" type="button">Naar het kantoor</button>
       <div class="dash-saldo">
         <span class="dash-groot" id="dash-bedrag">&euro; 0,00</span>
         <span class="dash-klein" id="dash-credits">0 credits</span>
@@ -6445,6 +6504,78 @@ const OFFICE_HTML = `<!doctype html>
     msgs.appendChild(b); msgs.scrollTop=msgs.scrollHeight;
   }
 
+  // DIR-118 - een tabel uit een antwoord als CSV. De regels hieronder zijn DEZELFDE
+  // als die van csvVeld en gebruikCsvTekst aan de serverkant (DIR-98, de export van
+  // de gebruikstabel in /admin): puntkomma als scheidingsteken, UTF-8 met BOM voor
+  // Excel, regeleinden als CRLF, en velden met een puntkomma, aanhalingsteken of
+  // regeleinde aangehaald met verdubbelde aanhalingstekens.
+  //
+  // Twee plekken dus, en dat is hier onvermijdelijk: die functies draaien op de
+  // server en dit draait in de browser. WIE ER EEN AANPAST, PAST DE ANDER AAN.
+  function csvVeldClient(w){
+    var t=String(w==null?'':w);
+    // LET OP: schrijf hier GEEN backslash-escapes voor regeleinden, en ook niet in
+    // een comment. Deze regels staan IN het sjabloon dat de pagina opbouwt, dus de
+    // buitenste JS lost zo'n escape op en er belandt een echt regeleinde in de
+    // regex. Dat is ongeldige JS en breekt het hele scherm, terwijl een
+    // syntaxcontrole op DIT bestand niets ziet. Vandaar tekencodes.
+    var CR=String.fromCharCode(13), LF=String.fromCharCode(10);
+    var moetAangehaald = t.indexOf(';')>=0 || t.indexOf('"')>=0
+      || t.indexOf(CR)>=0 || t.indexOf(LF)>=0;
+    return moetAangehaald ? '"'+t.split('"').join('""')+'"' : t;
+  }
+  // De tabel die de klant ZIET is de bron, niet de markdown erachter: dan kan het
+  // bestand niet uit de pas lopen met wat er op het scherm staat (AC-3).
+  function tabelNaarCsv(tabel){
+    var rijen=[];
+    [].slice.call(tabel.querySelectorAll('tr')).forEach(function(tr){
+      var cellen=[].slice.call(tr.querySelectorAll('th,td')).map(function(c){
+        return csvVeldClient((c.textContent||'').trim());
+      });
+      if(cellen.length) rijen.push(cellen.join(';'));
+    });
+    // Zelfde reden: tekencodes in plaats van escapes. De BOM vooraan is voor Excel,
+    // dat het bestand anders als ANSI leest en de accenten stuk maakt.
+    var BOM=String.fromCharCode(0xFEFF), EOL=String.fromCharCode(13,10);
+    return BOM+rijen.join(EOL)+EOL;
+  }
+  function tabelBestandsnaam(){
+    var d=new Date();
+    var dag=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+    var wie=String((cur&&cur.naam)||'agent').toLowerCase().replace(/[^a-z0-9]+/g,'-')
+      .replace(/^-+|-+$/g,'')||'agent';
+    return wie+'-tabel-'+dag+'.csv';
+  }
+  // AC-1/AC-5/AC-6 - elke tabel in EEN antwoord krijgt zijn eigen knop, die zijn
+  // eigen tabel levert. Alleen aangeroepen voor een agent-bubbel, dus een eigen
+  // bericht krijgt er nooit een.
+  //
+  // En pas als het antwoord AF is. Tijdens het streamen staat er platte tekst in de
+  // bubbel (textContent); de opmaak naar tabellen gebeurt daarna in een keer. Zou
+  // iemand die opmaak naar de streamlus verplaatsen, dan zou deze knop op een halve
+  // tabel komen te staan en een half bestand leveren. Er staat een test op die dat
+  // bewaakt.
+  function zetTabelDownloads(bubbel){
+    [].slice.call(bubbel.querySelectorAll('.md-tablewrap')).forEach(function(wrap){
+      var tabel=wrap.querySelector('table.md-table');
+      if(!tabel || wrap.previousSibling && wrap.previousSibling.className==='tabel-download') return;
+      var knop=document.createElement('button');
+      knop.type='button'; knop.className='tabel-download';
+      knop.textContent='\u2b07 Download als CSV';
+      knop.addEventListener('click',function(){
+        var naam=tabelBestandsnaam();
+        try{
+          var blob=new Blob([tabelNaarCsv(tabel)],{type:'text/csv;charset=utf-8'});
+          var url=URL.createObjectURL(blob);
+          var a=document.createElement('a'); a.href=url; a.download=naam;
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+        }catch(e){ knop.textContent='Download lukte niet \u2014 selecteer de tabel en kopieer.'; }
+      });
+      wrap.parentNode.insertBefore(knop, wrap);
+    });
+  }
+
   // DIR-59: veilige markdown → HTML voor agent-antwoorden. Escape eerst ALLE HTML
   // uit de agent-tekst; render daarna alléén bekende constructies (pipe-tabellen,
   // koppen, bold/italic, lijsten, alinea's). Geen raw-HTML-injectie mogelijk.
@@ -6529,7 +6660,7 @@ const OFFICE_HTML = `<!doctype html>
       else {
         var doc=parseDoc(got);
         if(doc){ bubble.textContent=doc.markdown; toonDownload(doc.slug, doc.markdown); }
-        else { bubble.innerHTML=mdToHtml(got); }   // DIR-59: normale antwoorden als opgemaakte markdown
+        else { bubble.innerHTML=mdToHtml(got); zetTabelDownloads(bubble); }   // DIR-59 + DIR-118
         setActive(true);
       }
     }catch(e){ wisOpening(); bubble.textContent='Kon de agent niet bereiken. Probeer het opnieuw.'; }
@@ -6728,11 +6859,16 @@ const OFFICE_HTML = `<!doctype html>
     document.getElementById('dash-bedrag').textContent=dashEuro(saldo);
     document.getElementById('dash-credits').textContent=saldo+' credit'+(saldo===1?'':'s');
     var op=document.getElementById('dash-op');
+    var opKnop=document.getElementById('dash-kantoor-op');
     if(saldo<=0){
       op.textContent='Je credits zijn op. Koop bij om weer met je collega\u2019s te kunnen praten \u2014 kijken en rondlopen blijft gewoon werken.';
       op.classList.remove('dash-uit');
+      // De zin zegt dat rondkijken blijft werken; dan hoort er ook een weg terug te
+      // zijn die niet het kruisje is.
+      if(opKnop) opKnop.classList.remove('dash-uit');
     } else {
       op.textContent=''; op.classList.add('dash-uit');
+      if(opKnop) opKnop.classList.add('dash-uit');
     }
   }
   // DIR-97 AC-2/AC-3 - maximaal vijf zinnen, jij-vorm. Het startsaldo-getal komt
@@ -7080,6 +7216,8 @@ const OFFICE_HTML = `<!doctype html>
   if(dashKantoorKnop) dashKantoorKnop.addEventListener('click',dashDicht);
   var dashVerderKnop=document.getElementById('dash-verder');
   if(dashVerderKnop) dashVerderKnop.addEventListener('click',dashDicht);
+  var dashOpKnop=document.getElementById('dash-kantoor-op');
+  if(dashOpKnop) dashOpKnop.addEventListener('click',dashDicht);
   // AC-5 - de uitleg blijft bereikbaar: het linkje klapt het blok gewoon weer open.
   var dashHoeKnop=document.getElementById('dash-hoe');
   if(dashHoeKnop) dashHoeKnop.addEventListener('click',function(){
@@ -8019,6 +8157,17 @@ const ADMIN_HTML = `<!doctype html>
     var sp=document.createElement('span'); sp.className='bron';
     sp.textContent='Databron: '+a.bron+' — sleutel "'+a.key+'" (vast)'; bron.appendChild(sp);
     doel.appendChild(bron);
+    // DIR-116 (vervolg) - de tekst die nu gebruikt wordt belooft Meta, maar die
+    // koppeling staat uit en de knop is verborgen. We wijzigen zijn woorden niet;
+    // we zeggen het waar hij ze kan aanpassen.
+    if(a.belooftMeta){
+      var waar=document.createElement('p'); waar.className='modelmelding aan';
+      waar.textContent='Let op: deze tekst noemt Meta, maar die koppeling staat uit en '
+        + 'de knop is verborgen. Zoals het er nu staat belooft ze iets wat de tool niet '
+        + 'kan leveren. Haal de zin over Meta uit het veld hieronder, of zet hem terug '
+        + 'naar standaard.';
+      doel.appendChild(waar);
+    }
     var invoeren={};
     AGENTVELDEN.forEach(function(def){
       var w=document.createElement('div'); w.className='veld';
@@ -9682,7 +9831,13 @@ export default {
       if (!(await isAdmin(request, env))) return json({ error: "Alleen voor admin. Log eerst in." }, 401);
       if (request.method === "GET") {
         const agents = [];
-        for (const key of Object.keys(AGENT_BRON)) agents.push(await actieveAgent(env, key));
+        for (const key of Object.keys(AGENT_BRON)) {
+          const a = await actieveAgent(env, key);
+          // Het oordeel valt hier, op de tekst die de tool WERKELIJK gebruikt -
+          // inclusief wat Dirk zelf heeft bewaard. Zou dit de code-standaard lezen,
+          // dan zou het precies het geval missen waarvoor het bedoeld is.
+          agents.push(Object.assign({}, a, { belooftMeta: agentBelooftMeta(a) }));
+        }
         return json({ agents });
       }
       const key = url.searchParams.get("key") || "";
