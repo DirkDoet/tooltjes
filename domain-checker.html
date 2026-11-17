@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Domein Checker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --surface: #111118;
+      --accent: #00ff88;
+      --accent2: #0088ff;
+      --text: #e8e8f0;
+      --muted: #555566;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow-x: hidden;
+      padding: 2rem 1rem;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,255,136,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,136,0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+    }
+
+    .container {
+      position: relative;
+      text-align: center;
+      width: 100%;
+      max-width: 600px;
+    }
+
+    .label {
+      font-size: 0.7rem;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 1.5rem;
+    }
+
+    .title {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(2.5rem, 8vw, 5rem);
+      font-weight: 800;
+      line-height: 0.9;
+      margin-bottom: 3rem;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* Search input */
+    .search-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 4px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+      box-shadow: 0 0 60px rgba(0,255,136,0.05), inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+
+    .search-card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .input-row {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    .domain-input {
+      flex: 1;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(0,255,136,0.2);
+      border-radius: 2px;
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      font-size: 1rem;
+      padding: 0.8rem 1rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .domain-input::placeholder { color: var(--muted); }
+
+    .domain-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 20px rgba(0,255,136,0.1);
+    }
+
+    .search-btn {
+      background: rgba(0,255,136,0.12);
+      border: 1px solid rgba(0,255,136,0.4);
+      color: var(--accent);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 0.8rem 1.5rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .search-btn:hover {
+      background: rgba(0,255,136,0.2);
+      box-shadow: 0 0 20px rgba(0,255,136,0.15);
+    }
+
+    /* Result domain name */
+    .domain-display-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 4px;
+      padding: 2rem 2.5rem;
+      margin-bottom: 1px;
+      position: relative;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+      display: none;
+    }
+
+    .domain-display-card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .domain-name-display {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(1.4rem, 4vw, 2rem);
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 0.5rem;
+    }
+
+    .status-badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      padding: 0.3rem 0.8rem;
+      border-radius: 2px;
+    }
+
+    .status-active {
+      background: rgba(0,255,136,0.12);
+      border: 1px solid rgba(0,255,136,0.3);
+      color: var(--accent);
+    }
+
+    .status-inactive {
+      background: rgba(255,68,85,0.12);
+      border: 1px solid rgba(255,68,85,0.3);
+      color: #ff4455;
+    }
+
+    .status-unknown {
+      background: rgba(100,100,120,0.2);
+      border: 1px solid rgba(100,100,120,0.3);
+      color: var(--muted);
+    }
+
+    /* Meta grid */
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: rgba(0,255,136,0.08);
+      border: 1px solid rgba(0,255,136,0.08);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+      display: none;
+    }
+
+    .meta-item {
+      background: var(--surface);
+      padding: 1.2rem 1.5rem;
+      text-align: left;
+    }
+
+    .meta-key {
+      font-size: 0.6rem;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 0.4rem;
+    }
+
+    .meta-val {
+      font-size: 0.8rem;
+      color: var(--text);
+      word-break: break-word;
+    }
+
+    .meta-val.highlight { color: var(--accent); }
+
+    /* Nameservers */
+    .ns-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1px;
+      background: rgba(0,255,136,0.08);
+      border: 1px solid rgba(0,255,136,0.08);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+      display: none;
+    }
+
+    .ns-header {
+      background: rgba(0,0,0,0.3);
+      padding: 0.8rem 1.5rem;
+      font-size: 0.6rem;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+      text-transform: uppercase;
+      text-align: left;
+    }
+
+    .ns-item {
+      background: var(--surface);
+      padding: 0.8rem 1.5rem;
+      font-size: 0.8rem;
+      color: var(--text);
+      text-align: left;
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+    }
+
+    .ns-dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: var(--accent2);
+      flex-shrink: 0;
+    }
+
+    /* Loading / error */
+    .status-msg {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.1);
+      border-radius: 4px;
+      padding: 2rem;
+      font-size: 0.8rem;
+      letter-spacing: 0.15em;
+      display: none;
+    }
+
+    .status-msg.loading {
+      color: var(--muted);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    .status-msg.error { color: #ff4455; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 1; }
+    }
+
+    .fade-in { animation: fadeIn 0.5s ease forwards; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      margin-right: 8px;
+      animation: blink 2s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.2; }
+    }
+
+    .note {
+      font-size: 0.6rem;
+      color: var(--muted);
+      letter-spacing: 0.1em;
+      margin-top: 1.5rem;
+      line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+  <div class="container fade-in">
+    <div class="label">domein informatie</div>
+    <div class="title">DOMEIN<br>CHECKER</div>
+
+    <div class="search-card">
+      <div class="input-row">
+        <input
+          class="domain-input"
+          id="domainInput"
+          type="text"
+          placeholder="bijv. google.com of example.nl"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+        />
+        <button class="search-btn" onclick="checkDomain()">↳ zoeken</button>
+      </div>
+    </div>
+
+    <div class="status-msg" id="statusMsg"></div>
+
+    <div class="domain-display-card" id="domainCard">
+      <div class="domain-name-display" id="domainName"></div>
+      <span class="status-badge" id="statusBadge"></span>
+    </div>
+
+    <div class="meta-grid" id="metaGrid">
+      <div class="meta-item">
+        <div class="meta-key">registrar</div>
+        <div class="meta-val" id="metaRegistrar">—</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">geregistreerd op</div>
+        <div class="meta-val" id="metaCreated">—</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">verloopt op</div>
+        <div class="meta-val highlight" id="metaExpiry">—</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">laatst bijgewerkt</div>
+        <div class="meta-val" id="metaUpdated">—</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">land registrar</div>
+        <div class="meta-val" id="metaCountry">—</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">whois server</div>
+        <div class="meta-val" id="metaWhois">—</div>
+      </div>
+    </div>
+
+    <div class="ns-grid" id="nsGrid">
+      <div class="ns-header">nameservers</div>
+      <div id="nsList"></div>
+    </div>
+
+    <div class="note" id="noteText"></div>
+  </div>
+
+  <script>
+    document.getElementById('domainInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') checkDomain();
+    });
+
+    function showStatus(msg, type) {
+      const el = document.getElementById('statusMsg');
+      el.className = 'status-msg ' + type;
+      el.innerHTML = type === 'loading'
+        ? `<span class="dot"></span>${msg}`
+        : msg;
+      el.style.display = 'block';
+    }
+
+    function hideStatus() {
+      document.getElementById('statusMsg').style.display = 'none';
+    }
+
+    function showResults(data) {
+      // Domain card
+      const card = document.getElementById('domainCard');
+      const badge = document.getElementById('statusBadge');
+      document.getElementById('domainName').textContent = data.domain;
+
+      const statuses = (data.status || []).join(' ').toLowerCase();
+      if (statuses.includes('active') || statuses.includes('ok')) {
+        badge.textContent = '● actief';
+        badge.className = 'status-badge status-active';
+      } else if (statuses.includes('expired') || statuses.includes('delete')) {
+        badge.textContent = '● verlopen';
+        badge.className = 'status-badge status-inactive';
+      } else {
+        badge.textContent = '● geregistreerd';
+        badge.className = 'status-badge status-unknown';
+      }
+      card.style.display = 'block';
+
+      // Meta
+      const grid = document.getElementById('metaGrid');
+      document.getElementById('metaRegistrar').textContent = data.registrar || '—';
+      document.getElementById('metaCreated').textContent = formatDate(data.creation_date);
+      document.getElementById('metaExpiry').textContent = formatDate(data.expiration_date);
+      document.getElementById('metaUpdated').textContent = formatDate(data.updated_date);
+      document.getElementById('metaCountry').textContent = data.registrar_country || '—';
+      document.getElementById('metaWhois').textContent = data.whois_server || '—';
+      grid.style.display = 'grid';
+
+      // Nameservers
+      const nsList = data.name_servers || [];
+      if (nsList.length > 0) {
+        const nsGrid = document.getElementById('nsGrid');
+        const nsListEl = document.getElementById('nsList');
+        nsListEl.innerHTML = [...new Set(nsList.map(n => n.toLowerCase()))].map(ns =>
+          `<div class="ns-item"><span class="ns-dot"></span>${ns}</div>`
+        ).join('');
+        nsGrid.style.display = 'block';
+      }
+    }
+
+    function formatDate(d) {
+      if (!d) return '—';
+      const date = Array.isArray(d) ? d[0] : d;
+      try {
+        return new Date(date).toLocaleDateString('nl-NL', {
+          day: '2-digit', month: 'long', year: 'numeric'
+        });
+      } catch { return date; }
+    }
+
+    function reset() {
+      document.getElementById('domainCard').style.display = 'none';
+      document.getElementById('metaGrid').style.display = 'none';
+      document.getElementById('nsGrid').style.display = 'none';
+      document.getElementById('nsList').innerHTML = '';
+      document.getElementById('noteText').textContent = '';
+    }
+
+    async function checkDomain() {
+      const raw = document.getElementById('domainInput').value.trim();
+      if (!raw) return;
+
+      // Clean input: strip protocol, path, www
+      let domain = raw.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0].split('?')[0].toLowerCase();
+
+      reset();
+      showStatus('domeingegevens ophalen...', 'loading');
+
+      try {
+        // Use rdap.org - free, no key needed, structured JSON
+        const res = await fetch(`https://rdap.org/domain/${domain}`);
+        
+        if (res.status === 404) {
+          hideStatus();
+          showStatus(`⚠ Domein <strong>${domain}</strong> is niet gevonden of niet geregistreerd.`, 'error');
+          return;
+        }
+
+        if (!res.ok) throw new Error('API fout');
+
+        const rdap = await res.json();
+        hideStatus();
+
+        // Parse RDAP response
+        const parsed = parseRDAP(rdap, domain);
+        showResults(parsed);
+
+        document.getElementById('noteText').textContent =
+          'Gegevens via RDAP · Sommige velden kunnen afgeschermd zijn door de registrar of AVG.';
+
+      } catch (err) {
+        hideStatus();
+        showStatus(`⚠ Ophalen mislukt. Controleer het domein en probeer opnieuw.`, 'error');
+      }
+    }
+
+    function parseRDAP(data, domain) {
+      const result = { domain: data.ldhName || domain };
+
+      // Status
+      result.status = data.status || [];
+
+      // Dates from events
+      const events = data.events || [];
+      for (const ev of events) {
+        if (ev.eventAction === 'registration') result.creation_date = ev.eventDate;
+        if (ev.eventAction === 'expiration') result.expiration_date = ev.eventDate;
+        if (ev.eventAction === 'last changed') result.updated_date = ev.eventDate;
+      }
+
+      // Nameservers
+      result.name_servers = (data.nameservers || []).map(ns => ns.ldhName || '');
+
+      // Registrar info from entities
+      const entities = data.entities || [];
+      for (const ent of entities) {
+        const roles = ent.roles || [];
+        if (roles.includes('registrar')) {
+          // vcardArray: [["vcard", [["version",...], ["fn", {}, "text", "Name"], ...]]]
+          const vcard = ent.vcardArray;
+          if (vcard && vcard[1]) {
+            for (const field of vcard[1]) {
+              if (field[0] === 'fn') result.registrar = field[3];
+              if (field[0] === 'adr') {
+                const adr = field[3];
+                if (Array.isArray(adr)) result.registrar_country = adr[6] || '';
+              }
+            }
+          }
+          if (!result.registrar && ent.fn) result.registrar = ent.fn;
+          // publicIds
+          const pids = ent.publicIds || [];
+          for (const pid of pids) {
+            if (pid.type === 'IANA Registrar ID') result.registrar_id = pid.identifier;
+          }
+        }
+      }
+
+      // Links for whois server
+      const links = data.links || [];
+      for (const link of links) {
+        if (link.rel === 'related' && link.href && link.href.includes('whois')) {
+          result.whois_server = link.href.replace('https://', '').replace('http://', '').split('/')[0];
+        }
+      }
+
+      // Try port43
+      if (!result.whois_server && data.port43) result.whois_server = data.port43;
+
+      return result;
+    }
+  </script>
+</body>
+</html>

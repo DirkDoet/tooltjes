@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bold Text Maker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --surface: #111118;
+      --accent: #00ff88;
+      --accent2: #0088ff;
+      --text: #e8e8f0;
+      --muted: #555566;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      overflow-x: hidden;
+      padding: 3rem 1rem;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,255,136,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,136,0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+    }
+
+    .container {
+      position: relative;
+      text-align: center;
+      width: 100%;
+      max-width: 640px;
+    }
+
+    .label {
+      font-size: 0.7rem;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 1.5rem;
+    }
+
+    .title {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(2.5rem, 8vw, 4.5rem);
+      font-weight: 800;
+      line-height: 0.9;
+      margin-bottom: 3rem;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* Input card */
+    .input-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 4px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+      box-shadow: 0 0 60px rgba(0,255,136,0.05), inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+
+    .input-card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .card-label {
+      font-size: 0.6rem;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 0.75rem;
+      text-align: left;
+    }
+
+    textarea {
+      width: 100%;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 2px;
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.9rem;
+      line-height: 1.7;
+      padding: 1rem;
+      outline: none;
+      resize: vertical;
+      min-height: 130px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    textarea::placeholder { color: var(--muted); }
+
+    textarea:focus {
+      border-color: rgba(0,255,136,0.4);
+      box-shadow: 0 0 16px rgba(0,255,136,0.08);
+    }
+
+    .char-count {
+      text-align: right;
+      font-size: 0.58rem;
+      color: var(--muted);
+      letter-spacing: 0.1em;
+      margin-top: 0.5rem;
+    }
+
+    /* Output card */
+    .output-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 4px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+
+    .output-card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent2), transparent);
+    }
+
+    .output-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+    }
+
+    .output-result {
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(0,255,136,0.1);
+      border-radius: 2px;
+      padding: 1rem;
+      font-size: 1.05rem;
+      line-height: 1.8;
+      text-align: left;
+      min-height: 80px;
+      word-break: break-word;
+      white-space: pre-wrap;
+      color: var(--text);
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      transition: border-color 0.2s;
+      position: relative;
+    }
+
+    .output-result:hover {
+      border-color: rgba(0,255,136,0.3);
+    }
+
+    .output-result.empty {
+      color: var(--muted);
+      font-size: 0.8rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      letter-spacing: 0.1em;
+    }
+
+    .copy-btn {
+      background: rgba(0,255,136,0.12);
+      border: 1px solid rgba(0,255,136,0.4);
+      color: var(--accent);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 0.5rem 1.1rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .copy-btn:hover {
+      background: rgba(0,255,136,0.2);
+      box-shadow: 0 0 16px rgba(0,255,136,0.15);
+    }
+
+    .copy-btn.copied {
+      background: rgba(0,255,136,0.2);
+      border-color: var(--accent);
+    }
+
+    /* Style selector */
+    .style-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: rgba(0,255,136,0.06);
+      border: 1px solid rgba(0,255,136,0.08);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+    }
+
+    .style-btn {
+      background: var(--surface);
+      border: none;
+      color: var(--muted);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.7rem;
+      padding: 0.9rem 0.5rem;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: center;
+      line-height: 1.5;
+    }
+
+    .style-btn:hover { background: rgba(0,255,136,0.05); color: var(--text); }
+
+    .style-btn.active {
+      background: rgba(0,255,136,0.1);
+      color: var(--accent);
+    }
+
+    .style-preview {
+      display: block;
+      font-size: 1rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .style-name {
+      font-size: 0.55rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+
+    .note {
+      font-size: 0.6rem;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      line-height: 1.8;
+    }
+
+    .fade-in { animation: fadeIn 0.5s ease forwards; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container fade-in">
+    <div class="label">tekst opmaak · unicode</div>
+    <div class="title">BOLD<br>TEXT MAKER</div>
+
+    <!-- Style selector -->
+    <div class="style-grid" id="styleGrid"></div>
+
+    <!-- Input -->
+    <div class="input-card">
+      <div class="card-label">↳ jouw tekst</div>
+      <textarea
+        id="inputText"
+        placeholder="Plak of typ hier je tekst..."
+        oninput="convert()"
+      ></textarea>
+      <div class="char-count"><span id="charCount">0</span> tekens</div>
+    </div>
+
+    <!-- Output -->
+    <div class="output-card">
+      <div class="output-header">
+        <div class="card-label" style="margin:0">↳ resultaat — klaar voor Facebook</div>
+        <button class="copy-btn" id="copyBtn" onclick="copyOutput()">kopieer</button>
+      </div>
+      <div class="output-result empty" id="outputResult" onclick="copyOutput()">
+        Resultaat verschijnt hier...
+      </div>
+    </div>
+
+    <div class="note">
+      Werkt in Facebook, Instagram, LinkedIn, WhatsApp en Twitter/X.<br>
+      De tekst gebruikt speciale Unicode-tekens — geen HTML of markdown.
+    </div>
+  </div>
+
+  <script>
+    // ── Unicode character maps ────────────────────────────────────────────────
+    const STYLES = [
+      {
+        id: 'bold-sans',
+        name: 'Bold Sans',
+        preview: '𝗔𝗯𝗰',
+        upper: 0x1D5D4,
+        lower: 0x1D5EE,
+        digits: '𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵'.split(''),
+      },
+      {
+        id: 'bold-serif',
+        name: 'Bold Serif',
+        preview: '𝐀𝐛𝐜',
+        upper: 0x1D400,
+        lower: 0x1D41A,
+        digits: '𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗'.split(''),
+      },
+      {
+        id: 'italic-bold-sans',
+        name: 'Bold Italic Sans',
+        preview: '𝘼𝙗𝙘',
+        upper: 0x1D608,
+        lower: 0x1D622,
+        digits: null,
+      },
+      {
+        id: 'italic-bold-serif',
+        name: 'Bold Italic Serif',
+        preview: '𝑨𝒃𝒄',
+        upper: 0x1D468,
+        lower: 0x1D482,
+        digits: null,
+      },
+      {
+        id: 'monospace',
+        name: 'Monospace',
+        preview: '𝙰𝚋𝚌',
+        upper: 0x1D670,
+        lower: 0x1D68A,
+        digits: '𝟶𝟷𝟸𝟹𝟺𝟻𝟼𝟽𝟾𝟿'.split(''),
+      },
+      {
+        id: 'sans',
+        name: 'Sans-Serif',
+        preview: '𝖠𝖻𝖼',
+        upper: 0x1D5A0,
+        lower: 0x1D5BA,
+        digits: '𝟢𝟣𝟤𝟥𝟦𝟧𝟨𝟩𝟪𝟫'.split(''),
+      },
+    ];
+
+    let activeStyle = 0;
+
+    // ── Build style buttons ───────────────────────────────────────────────────
+    const grid = document.getElementById('styleGrid');
+    STYLES.forEach((s, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'style-btn' + (i === 0 ? ' active' : '');
+      btn.innerHTML = `<span class="style-preview">${s.preview}</span><span class="style-name">${s.name}</span>`;
+      btn.onclick = () => {
+        document.querySelectorAll('.style-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeStyle = i;
+        convert();
+      };
+      grid.appendChild(btn);
+    });
+
+    // ── Conversion ────────────────────────────────────────────────────────────
+    function toStyledChar(char, style) {
+      const code = char.charCodeAt(0);
+
+      // Uppercase A-Z
+      if (code >= 65 && code <= 90) {
+        return String.fromCodePoint(style.upper + (code - 65));
+      }
+      // Lowercase a-z
+      if (code >= 97 && code <= 122) {
+        return String.fromCodePoint(style.lower + (code - 97));
+      }
+      // Digits 0-9
+      if (code >= 48 && code <= 57 && style.digits) {
+        return style.digits[code - 48];
+      }
+
+      return char; // passthrough: spaces, punctuation, emoji, etc.
+    }
+
+    function convert() {
+      const input = document.getElementById('inputText').value;
+      const style = STYLES[activeStyle];
+      const output = document.getElementById('outputResult');
+
+      document.getElementById('charCount').textContent = input.length;
+
+      if (!input.trim()) {
+        output.textContent = 'Resultaat verschijnt hier...';
+        output.classList.add('empty');
+        return;
+      }
+
+      const result = [...input].map(char => toStyledChar(char, style)).join('');
+      output.textContent = result;
+      output.classList.remove('empty');
+    }
+
+    // ── Copy ──────────────────────────────────────────────────────────────────
+    function copyOutput() {
+      const output = document.getElementById('outputResult');
+      if (output.classList.contains('empty')) return;
+
+      const text = output.textContent;
+      const btn  = document.getElementById('copyBtn');
+
+      const fallback = () => {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); document.body.removeChild(ta);
+      };
+
+      try {
+        navigator.clipboard.writeText(text).catch(fallback);
+      } catch { fallback(); }
+
+      btn.textContent = '✓ gekopieerd!';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = 'kopieer';
+        btn.classList.remove('copied');
+      }, 2000);
+    }
+  </script>
+</body>
+</html>

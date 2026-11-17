@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Structured Data Viewer</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --surface: #111118;
+      --accent: #00ff88;
+      --accent2: #0088ff;
+      --text: #e8e8f0;
+      --muted: #555566;
+      --warn: #ffcc00;
+      --danger: #ff4455;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      overflow-x: hidden;
+      padding: 3rem 1rem;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,255,136,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,136,0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+    }
+
+    .container {
+      position: relative;
+      text-align: center;
+      width: 100%;
+      max-width: 660px;
+    }
+
+    .label {
+      font-size: 0.7rem;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 1.5rem;
+    }
+
+    .title {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(2rem, 7vw, 4rem);
+      font-weight: 800;
+      line-height: 0.9;
+      margin-bottom: 3rem;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* Search */
+    .search-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 4px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+      box-shadow: 0 0 60px rgba(0,255,136,0.05), inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+
+    .search-card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .input-row {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    .url-input {
+      flex: 1;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(0,255,136,0.2);
+      border-radius: 2px;
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.9rem;
+      padding: 0.8rem 1rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .url-input::placeholder { color: var(--muted); }
+    .url-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 20px rgba(0,255,136,0.1);
+    }
+
+    .search-btn {
+      background: rgba(0,255,136,0.12);
+      border: 1px solid rgba(0,255,136,0.4);
+      color: var(--accent);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 0.8rem 1.2rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .search-btn:hover {
+      background: rgba(0,255,136,0.2);
+      box-shadow: 0 0 20px rgba(0,255,136,0.15);
+    }
+
+    .search-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* Status */
+    .status-msg {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.1);
+      border-radius: 4px;
+      padding: 2rem;
+      font-size: 0.8rem;
+      letter-spacing: 0.1em;
+      display: none;
+      margin-bottom: 1.5rem;
+    }
+
+    .status-msg.loading { color: var(--muted); animation: pulse 1.5s ease-in-out infinite; }
+    .status-msg.error   { color: var(--danger); }
+
+    /* Result header */
+    .result-header {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 4px;
+      padding: 1.5rem 2rem;
+      margin-bottom: 1px;
+      position: relative;
+      display: none;
+      text-align: left;
+    }
+
+    .result-header::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .result-url {
+      font-size: 0.65rem;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      margin-bottom: 0.6rem;
+      word-break: break-all;
+    }
+
+    .result-status {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+    }
+
+    .status-badge {
+      display: inline-block;
+      font-size: 0.62rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      padding: 0.3rem 0.8rem;
+      border-radius: 2px;
+    }
+
+    .badge-found {
+      background: rgba(0,255,136,0.1);
+      border: 1px solid rgba(0,255,136,0.3);
+      color: var(--accent);
+    }
+
+    .badge-missing {
+      background: rgba(255,204,0,0.08);
+      border: 1px solid rgba(255,204,0,0.25);
+      color: var(--warn);
+    }
+
+    .result-count {
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
+
+    /* Tabs for multiple schemas */
+    .tabs {
+      display: none;
+      gap: 1px;
+      margin-bottom: 1px;
+      flex-wrap: wrap;
+    }
+
+    .tab {
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(0,255,136,0.1);
+      color: var(--muted);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 0.5rem 1rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.15s;
+    }
+
+    .tab.active {
+      background: rgba(0,255,136,0.1);
+      border-color: rgba(0,255,136,0.35);
+      color: var(--accent);
+    }
+
+    .tab:hover:not(.active) {
+      border-color: rgba(0,255,136,0.2);
+      color: var(--text);
+    }
+
+    /* Code block */
+    .code-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.1);
+      border-radius: 4px;
+      margin-bottom: 1px;
+      display: none;
+      position: relative;
+    }
+
+    .code-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.8rem 1.2rem;
+      border-bottom: 1px solid rgba(0,255,136,0.07);
+    }
+
+    .code-type {
+      font-size: 0.6rem;
+      letter-spacing: 0.25em;
+      color: var(--accent2);
+      text-transform: uppercase;
+    }
+
+    .code-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .btn-copy {
+      background: transparent;
+      border: 1px solid rgba(0,255,136,0.25);
+      color: var(--accent);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 0.35rem 0.8rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.2s;
+    }
+
+    .btn-copy:hover {
+      background: rgba(0,255,136,0.08);
+      border-color: var(--accent);
+    }
+
+    .btn-copy.copied {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    pre {
+      padding: 1.5rem;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.72rem;
+      line-height: 1.8;
+      overflow-x: auto;
+      text-align: left;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* JSON syntax highlighting */
+    .j-key     { color: #7ec8e3; }
+    .j-str     { color: #98d982; }
+    .j-num     { color: #ffcc88; }
+    .j-bool    { color: #ff88aa; }
+    .j-null    { color: var(--muted); }
+    .j-type    { color: var(--accent); font-weight: 700; }
+    .j-context { color: var(--accent2); }
+
+    /* Suggestion card */
+    .suggest-card {
+      background: var(--surface);
+      border: 1px solid rgba(255,204,0,0.15);
+      border-radius: 4px;
+      padding: 1.5rem 2rem;
+      margin-bottom: 1px;
+      position: relative;
+      display: none;
+      text-align: left;
+    }
+
+    .suggest-card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--warn), transparent);
+    }
+
+    .suggest-label {
+      font-size: 0.6rem;
+      letter-spacing: 0.25em;
+      color: var(--warn);
+      text-transform: uppercase;
+      margin-bottom: 0.5rem;
+    }
+
+    .suggest-type {
+      font-family: 'Syne', sans-serif;
+      font-size: 1.3rem;
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 0.4rem;
+    }
+
+    .suggest-reason {
+      font-size: 0.72rem;
+      color: rgba(232,232,240,0.6);
+      line-height: 1.7;
+    }
+
+    .fade-in { animation: fadeIn 0.5s ease forwards; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 1; }
+    }
+
+    .dot {
+      display: inline-block; width: 6px; height: 6px;
+      border-radius: 50%; background: var(--accent);
+      margin-right: 8px;
+      animation: blink 2s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.2; }
+    }
+
+    .note {
+      font-size: 0.6rem;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      margin-top: 1rem;
+      line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+  <div class="container fade-in">
+    <div class="label">seo · schema.org</div>
+    <div class="title">STRUCTURED<br>DATA VIEWER</div>
+
+    <div class="search-card">
+      <div class="input-row">
+        <input class="url-input" id="urlInput" type="text"
+          placeholder="https://example.com"
+          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+        />
+        <button class="search-btn" id="searchBtn" onclick="run()">↳ analyseer</button>
+      </div>
+    </div>
+
+    <div class="status-msg" id="statusMsg"></div>
+
+    <!-- Result header -->
+    <div class="result-header" id="resultHeader">
+      <div class="result-url" id="resultUrl"></div>
+      <div class="result-status">
+        <span class="status-badge" id="statusBadge"></span>
+        <span class="result-count" id="resultCount"></span>
+      </div>
+    </div>
+
+    <!-- Suggestion (no schema found) -->
+    <div class="suggest-card" id="suggestCard">
+      <div class="suggest-label">↳ aanbevolen schema</div>
+      <div class="suggest-type" id="suggestType"></div>
+      <div class="suggest-reason" id="suggestReason"></div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs" id="tabsRow"></div>
+
+    <!-- Code -->
+    <div class="code-card" id="codeCard">
+      <div class="code-header">
+        <span class="code-type" id="codeType"></span>
+        <div class="code-actions">
+          <button class="btn-copy" onclick="copyCode()">kopieer</button>
+        </div>
+      </div>
+      <pre id="codeBlock"></pre>
+    </div>
+
+    <div class="note" id="noteText"></div>
+  </div>
+
+  <script>
+    document.getElementById('urlInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') run();
+    });
+
+    let schemas  = [];
+    let activeTab = 0;
+    let rawCopyTexts = []; // parallel array to schemas for copy
+
+    function showStatus(msg, type) {
+      const el = document.getElementById('statusMsg');
+      el.className = 'status-msg ' + type;
+      el.innerHTML = type === 'loading' ? `<span class="dot"></span>${msg}` : msg;
+      el.style.display = 'block';
+    }
+
+    function hideStatus() { document.getElementById('statusMsg').style.display = 'none'; }
+
+    function reset() {
+      document.getElementById('resultHeader').style.display = 'none';
+      document.getElementById('suggestCard').style.display  = 'none';
+      document.getElementById('tabsRow').style.display      = 'none';
+      document.getElementById('codeCard').style.display     = 'none';
+      document.getElementById('noteText').textContent       = '';
+      document.getElementById('tabsRow').innerHTML          = '';
+      schemas = []; rawCopyTexts = []; activeTab = 0;
+    }
+
+    // ── Main flow ─────────────────────────────────────────────────────────────
+    async function run() {
+      let raw = document.getElementById('urlInput').value.trim();
+      if (!raw) return;
+      if (!/^https?:\/\//i.test(raw)) raw = 'https://' + raw;
+
+      reset();
+      document.getElementById('searchBtn').disabled = true;
+      showStatus('Pagina ophalen...', 'loading');
+
+      let html = '';
+      const proxies = [
+        u => `https://tooltjes-api.antonenmonique.workers.dev/fetch?url=${encodeURIComponent(u)}`,
+      ];
+
+      for (const makeProxy of proxies) {
+        try {
+          const res = await fetch(makeProxy(raw), { signal: AbortSignal.timeout(20000) });
+          if (res.ok) { html = await res.text(); break; }
+        } catch {}
+      }
+
+      document.getElementById('searchBtn').disabled = false;
+
+      if (!html) {
+        hideStatus();
+        showStatus('⚠ Kon de URL niet ophalen. Controleer de URL of probeer later opnieuw.', 'error');
+        return;
+      }
+
+      const parser = new DOMParser();
+      const doc    = parser.parseFromString(html, 'text/html');
+
+      // ── 1. Check for existing JSON-LD ───────────────────────────────────────
+      const jsonLdNodes = doc.querySelectorAll('script[type="application/ld+json"]');
+      const found = [];
+      jsonLdNodes.forEach(node => {
+        try {
+          const parsed = JSON.parse(node.textContent.trim());
+          if (parsed['@graph'] && Array.isArray(parsed['@graph'])) {
+            parsed['@graph'].forEach(item => found.push(item));
+          } else if (Array.isArray(parsed)) {
+            parsed.forEach(item => found.push(item));
+          } else {
+            found.push(parsed);
+          }
+        } catch {}
+      });
+
+      // Show header
+      document.getElementById('resultUrl').textContent = raw;
+      document.getElementById('resultHeader').style.display = 'block';
+
+      if (found.length > 0) {
+        hideStatus();
+        document.getElementById('statusBadge').textContent = '● schema gevonden';
+        document.getElementById('statusBadge').className   = 'status-badge badge-found';
+        document.getElementById('resultCount').textContent =
+          `${found.length} blok${found.length !== 1 ? 'ken' : ''}`;
+
+        schemas      = found;
+        rawCopyTexts = found.map(s => JSON.stringify(s, null, 2));
+        renderTabs();
+        showSchema(0);
+        document.getElementById('noteText').textContent =
+          'JSON-LD uitgelezen uit de raw HTML van de pagina.';
+        return;
+      }
+
+      // ── 2. No schema found — let AI analyse and fill ─────────────────────────
+      document.getElementById('statusBadge').textContent = '● geen schema gevonden';
+      document.getElementById('statusBadge').className   = 'status-badge badge-missing';
+      document.getElementById('resultCount').textContent = '';
+
+      // Smart local parse for basic signals
+      const parsed   = smartParse(doc, raw);
+      const bodyText = extractText(doc, 6000);
+
+      showStatus('AI analyseert de pagina en zoekt de juiste gegevens op... (10–20 sec)', 'loading');
+
+      let finalSchema;
+      try {
+        finalSchema = await enrichWithGPT(null, parsed, bodyText, raw);
+      } catch(e) {
+        hideStatus();
+        document.getElementById('searchBtn').disabled = false;
+        showStatus(`⚠ AI analyse mislukt: ${e.message}`, 'error');
+        return;
+      }
+
+      hideStatus();
+
+      // Read detected type from schema result
+      const detectedType = Array.isArray(finalSchema['@type'])
+        ? finalSchema['@type'][0]
+        : (finalSchema['@type'] || 'Schema');
+
+      // Show suggestion card with AI-detected type
+      document.getElementById('suggestType').textContent   = detectedType;
+      document.getElementById('suggestReason').textContent = 'Schema type bepaald door AI op basis van analyse van de pagina-inhoud.';
+      document.getElementById('suggestCard').style.display = 'block';
+
+      const wrapped = `<script type="application/ld+json">\n${JSON.stringify(finalSchema, null, 2)}\n<\/script>`;
+      document.getElementById('codeType').textContent = `${detectedType} — AI gegenereerd schema`;
+      document.getElementById('codeBlock').innerHTML  = syntaxHL(wrapped);
+      document.getElementById('codeCard').style.display = 'block';
+
+      schemas      = [finalSchema];
+      rawCopyTexts = [wrapped];
+
+      document.getElementById('noteText').textContent =
+        'Geen JSON-LD aangetroffen. Paginatype en gegevens bepaald door AI via websearch (GPT-4o).';
+    }
+
+    // ── Smart local parser ────────────────────────────────────────────────────
+    function smartParse(doc, url) {
+      const title   = doc.querySelector('title')?.textContent?.trim() || '';
+      const h1      = doc.querySelector('h1')?.textContent?.trim() || title;
+      const desc    = doc.querySelector('meta[name="description"]')?.getAttribute('content')?.trim() || '';
+
+      // og:image or first <img>
+      const ogImg   = doc.querySelector('meta[property="og:image"]')?.getAttribute('content') || '';
+      const firstImg = doc.querySelector('img[src]')?.getAttribute('src') || '';
+      const image   = ogImg || (firstImg.startsWith('http') ? firstImg : '');
+
+      // Logo
+      const ogLogo  = doc.querySelector('meta[property="og:logo"]')?.getAttribute('content') || '';
+      const linkIcon = doc.querySelector('link[rel~="icon"]')?.getAttribute('href') || '';
+      const logo    = ogLogo || (linkIcon.startsWith('http') ? linkIcon : '');
+
+      // Phone: look in full HTML text
+      const allText = doc.body?.innerHTML || '';
+      const phoneMatch = allText.match(/(\+31|0031|0)[- ]?([0-9]{1,3})[- ]?([0-9]{6,8})/);
+      const telephone  = phoneMatch ? phoneMatch[0].replace(/\s/g, ' ') : '';
+
+      // Email
+      const emailMatch = allText.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+      const email      = emailMatch ? emailMatch[0] : '';
+
+      // Social links
+      const links = [...doc.querySelectorAll('a[href]')].map(a => a.href);
+      const sameAs = links.filter(h =>
+        /facebook\.com|twitter\.com|x\.com|linkedin\.com|instagram\.com|youtube\.com/.test(h)
+      ).slice(0, 5);
+
+      // og:site_name or title fallback for org name
+      const siteName = doc.querySelector('meta[property="og:site_name"]')?.getAttribute('content')?.trim() || h1;
+
+      return { title, h1, desc, image, logo, telephone, email, sameAs, siteName, url };
+    }
+
+    // ── Detect schema type ────────────────────────────────────────────────────
+    function detectType(doc) {
+      const text = (doc.body?.textContent || '').toLowerCase();
+      const hasProduct = /prijs|price|koop|bestel|add to cart|winkelwagen|€|\$|kopen/.test(text);
+      const hasFaq     = doc.querySelectorAll('[class*="faq"],[class*="accordi"]').length > 0 || /veelgestelde vragen|faq/.test(text);
+      const hasEvent   = /evenement|event|concert|festival|ticket/.test(text);
+      const hasRecipe  = /recept|ingredi[eë]nten|bereidingstijd|portie/.test(text);
+      const hasArticle = !!doc.querySelector('article,[class*="article"],[class*="post"],[class*="blog"]');
+      const hasLocal   = /openingstijd|adres|telefoonnummer|contact/.test(text);
+      const hasOrg     = /over ons|about us|team|missie|mission/.test(text);
+
+      if (hasProduct) return { type: 'Product',       reason: 'De pagina bevat koopgerelateerde content. Het Product schema toont prijzen en beschikbaarheid in Google.' };
+      if (hasFaq)     return { type: 'FAQPage',        reason: 'Vraag-en-antwoord structuur gedetecteerd. FAQPage markup vouwt vragen direct uit in zoekresultaten.' };
+      if (hasRecipe)  return { type: 'Recipe',         reason: 'Receptgerelateerde content gedetecteerd. Recipe schema toont bereidingstijd en beoordeling.' };
+      if (hasEvent)   return { type: 'Event',          reason: 'Evenementgerelateerde content gedetecteerd. Event schema toont datum en locatie in Google.' };
+      if (hasArticle) return { type: 'Article',        reason: 'De pagina heeft de structuur van een artikel of blogpost.' };
+      if (hasLocal)   return { type: 'LocalBusiness',  reason: 'Contactinformatie en/of openingstijden gedetecteerd. LocalBusiness verbetert lokale vindbaarheid.' };
+      if (hasOrg)     return { type: 'Organization',   reason: 'De pagina beschrijft een organisatie of bedrijf.' };
+      return             { type: 'WebPage',            reason: 'Geen specifiek paginatype herkend. WebPage geeft zoekmachines basale context.' };
+    }
+
+    function showSuggestion(s) {
+      document.getElementById('suggestType').textContent   = s.type;
+      document.getElementById('suggestReason').textContent = s.reason;
+      document.getElementById('suggestCard').style.display = 'block';
+    }
+
+    // ── Extract visible text ──────────────────────────────────────────────────
+    function extractText(doc, maxChars) {
+      // Remove scripts/styles first
+      const clone = doc.body.cloneNode(true);
+      clone.querySelectorAll('script,style,noscript').forEach(el => el.remove());
+      const text = clone.innerText || clone.textContent || '';
+      return text.replace(/\s+/g, ' ').trim().substring(0, maxChars);
+    }
+
+    // ── GPT enrichment via CORS proxy → OpenAI chat completions ──────────────
+    // ── GPT: detecteer type + zoek velden via websearch ──────────────────────
+    const WORKER_URL = 'https://tooltjes-api.antonenmonique.workers.dev/ai';
+
+    async function enrichWithGPT(schemaType, parsed, bodyText, url) {
+
+      const prompt = `Analyseer de volgende webpagina en maak er een schema.org JSON-LD schema voor.
+
+URL: ${url}
+Paginatitel: ${parsed.h1 || parsed.title}
+Meta-beschrijving: ${parsed.desc}
+
+Zichtbare paginatekst (eerste deel):
+${bodyText}
+
+STAP 1 — Bepaal zelf het meest passende schema.org type voor deze specifieke pagina.
+Kies uit: LocalBusiness, Organization, Product, Article, BlogPosting, FAQPage, Recipe, Event, ItemList, CollectionPage, AboutPage, ContactPage, WebPage, of een ander passend schema.org type.
+Laat je NIET leiden door de domeinnaam of het merk — kijk naar wat er op DEZE specifieke pagina staat.
+
+STAP 2 — Zoek via websearch aanvullende informatie op die relevant is voor het gekozen schema type.
+Zoek specifiek naar de velden die horen bij dat type. Bijvoorbeeld:
+- Voor LocalBusiness/Organization: adres, telefoon, KvK, openingstijden, social media
+- Voor Article/BlogPosting: auteur, publicatiedatum
+- Voor Product: prijs, merk, beschikbaarheid
+- Voor CollectionPage/ItemList: wat voor items worden getoond
+
+STRIKTE REGELS:
+- Neem ALLEEN informatie op die je daadwerkelijk gevonden hebt of in de paginatekst ziet.
+- Laat velden weg die je niet kunt vinden — geen placeholders, geen gokken.
+- Geef ALLEEN de pure JSON terug, geen uitleg, geen markdown, geen code fences.
+- Begin direct met { en eindig met }
+
+Alvast bekende gegevens:
+${parsed.image     ? `- Afbeelding: ${parsed.image}` : ''}
+${parsed.telephone ? `- Mogelijk telefoon (verifieer): ${parsed.telephone}` : ''}
+${parsed.email     ? `- Mogelijk e-mail (verifieer): ${parsed.email}` : ''}
+${parsed.sameAs.length ? `- Social links: ${parsed.sameAs.join(', ')}` : ''}`;
+
+      const res = await fetch(WORKER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          zoeken: true,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+
+      if (!res.ok) {
+        const errBody = await res.text();
+        throw new Error(`Worker fout ${res.status}: ${errBody.substring(0, 300)}`);
+      }
+
+      const data = await res.json();
+      if (data.error) throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+
+      let content = data.choices?.[0]?.message?.content?.trim() || '';
+      if (!content) throw new Error('Leeg antwoord van OpenAI');
+
+      content = content
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```\s*$/i, '')
+        .trim();
+
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('Geen geldig JSON in antwoord: ' + content.substring(0, 300));
+
+      return JSON.parse(jsonMatch[0]);
+    }
+
+    // ── Fallback base schema (no GPT) ─────────────────────────────────────────
+    function buildBaseSchema(type, p, url) {
+      const base = {
+        "@context": "https://schema.org",
+        "@type": type,
+        "name": p.h1 || p.title,
+        "url": url,
+      };
+      if (p.desc)      base.description = p.desc;
+      if (p.image)     base.image       = p.image;
+      if (p.telephone) base.telephone   = p.telephone;
+      if (p.email)     base.email       = p.email;
+      if (p.sameAs.length) base.sameAs  = p.sameAs;
+      return base;
+    }
+
+    // ── Tabs ──────────────────────────────────────────────────────────────────
+    function renderTabs() {
+      const row = document.getElementById('tabsRow');
+      if (schemas.length <= 1) { row.style.display = 'none'; return; }
+      row.style.display = 'flex';
+      row.innerHTML = schemas.map((s, i) => {
+        const type  = s['@type'] || 'Schema';
+        const label = Array.isArray(type) ? type[0] : type;
+        return `<button class="tab${i === 0 ? ' active' : ''}" onclick="showSchema(${i})">${label}</button>`;
+      }).join('');
+    }
+
+    function showSchema(index) {
+      activeTab = index;
+      document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i === index));
+      const s    = schemas[index];
+      const type = Array.isArray(s['@type']) ? s['@type'].join(' · ') : (s['@type'] || 'Schema');
+      document.getElementById('codeType').textContent = type;
+      document.getElementById('codeBlock').innerHTML  = syntaxHL(JSON.stringify(s, null, 2));
+      document.getElementById('codeCard').style.display = 'block';
+    }
+
+    // ── Syntax highlighting ───────────────────────────────────────────────────
+    function syntaxHL(json) {
+      const escaped = json
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      return escaped.replace(
+        /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+        match => {
+          if (/^"/.test(match)) {
+            if (/:$/.test(match)) {
+              const key = match.replace(/:$/, '');
+              if (key === '"@type"')    return `<span class="j-type">${key}</span>:`;
+              if (key === '"@context"') return `<span class="j-context">${key}</span>:`;
+              return `<span class="j-key">${key}</span>:`;
+            }
+            return `<span class="j-str">${match}</span>`;
+          }
+          if (/true|false/.test(match)) return `<span class="j-bool">${match}</span>`;
+          if (/null/.test(match))       return `<span class="j-null">${match}</span>`;
+          return `<span class="j-num">${match}</span>`;
+        }
+      );
+    }
+
+    // ── Copy ──────────────────────────────────────────────────────────────────
+    function copyCode() {
+      const btn = document.querySelector('.btn-copy');
+
+      // Use rawCopyTexts if available (includes <script> wrapper for generated schemas)
+      const text = rawCopyTexts[activeTab] || JSON.stringify(schemas[activeTab], null, 2);
+
+      const fallback = () => {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); document.body.removeChild(ta);
+      };
+
+      try {
+        navigator.clipboard.writeText(text).catch(fallback);
+      } catch { fallback(); }
+
+      btn.textContent = '✓ gekopieerd';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'kopieer'; btn.classList.remove('copied'); }, 2000);
+    }
+  </script>
+</body>
+</html>

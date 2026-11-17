@@ -1,0 +1,1812 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Crawler Log Analyzer — Dirk Doet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0c0b;
+    --bg-elev: #12151a;
+    --bg-elev-2: #1a1f26;
+    --border: #2a3038;
+    --border-hi: #3a424d;
+    --text: #e8ebe5;
+    --text-dim: #8a8f86;
+    --text-faint: #555a53;
+    --accent: #d4ff3a;
+    --accent-dim: #a8cc2e;
+    --training: #ff6b35;
+    --retrieval: #d4ff3a;
+    --traditional: #6ab7ff;
+    --other: #8a8f86;
+    --error: #ff4d4d;
+    --warn: #ffb84d;
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
+    --display: 'Fraunces', Georgia, serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  body { min-height: 100vh; padding: 0; }
+
+  /* Header */
+  .masthead {
+    border-bottom: 1px solid var(--border);
+    padding: 24px 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    background: var(--bg);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+  .masthead-left h1 {
+    font-family: var(--display);
+    font-weight: 800;
+    font-size: 28px;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .masthead-left h1 em {
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 400;
+  }
+  .masthead-left p {
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-top: 6px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  .masthead-right {
+    font-size: 10px;
+    color: var(--text-faint);
+    text-align: right;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .masthead-right .dd-mark {
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  /* Main layout */
+  main { padding: 32px; max-width: 1600px; margin: 0 auto; }
+
+  /* Upload */
+  .upload-zone {
+    border: 1px dashed var(--border-hi);
+    background: var(--bg-elev);
+    padding: 48px 32px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+    overflow: hidden;
+  }
+  .upload-zone:hover, .upload-zone.drag {
+    border-color: var(--accent);
+    background: var(--bg-elev-2);
+  }
+  .upload-zone::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 24px 24px;
+    opacity: 0.15;
+    pointer-events: none;
+  }
+  .upload-zone-label {
+    font-family: var(--display);
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    position: relative;
+  }
+  .upload-zone-hint {
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-top: 12px;
+    position: relative;
+  }
+  .upload-zone-hint code {
+    color: var(--accent);
+    background: rgba(212, 255, 58, 0.08);
+    padding: 2px 6px;
+    border: 1px solid rgba(212, 255, 58, 0.2);
+  }
+  #fileInput { display: none; }
+
+  /* Progress */
+  .progress-bar {
+    margin-top: 24px;
+    height: 2px;
+    background: var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    width: 0%;
+    transition: width 0.2s;
+  }
+  .progress-label {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+  }
+
+  /* Sections */
+  .section { margin-top: 48px; }
+  .section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+    margin-bottom: 24px;
+  }
+  .section-head h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 20px;
+    letter-spacing: -0.01em;
+  }
+  .section-head .section-num {
+    color: var(--text-faint);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+  }
+  .section-head .section-desc {
+    color: var(--text-dim);
+    font-size: 11px;
+    max-width: 420px;
+    text-align: right;
+  }
+
+  /* KPI grid */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+  }
+  .kpi {
+    background: var(--bg-elev);
+    padding: 20px 20px;
+  }
+  .kpi-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 8px;
+  }
+  .kpi-value {
+    font-family: var(--display);
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .kpi-sub {
+    font-size: 11px;
+    color: var(--text-faint);
+    margin-top: 6px;
+  }
+
+  /* Bot family cards */
+  .family-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  .family {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    padding: 20px;
+    position: relative;
+  }
+  .family::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--family-color, var(--accent));
+  }
+  .family-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 16px;
+  }
+  .family-name {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--family-color, var(--text));
+    font-weight: 700;
+  }
+  .family-count {
+    font-family: var(--display);
+    font-size: 24px;
+    font-weight: 600;
+  }
+  .family-bots { font-size: 11px; color: var(--text-dim); line-height: 1.8; }
+  .family-bots .bot-row { display: flex; justify-content: space-between; gap: 8px; }
+  .family-bots .bot-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .family-bots .bot-hits { color: var(--text-faint); flex-shrink: 0; }
+  .family-empty { color: var(--text-faint); font-style: italic; font-size: 11px; }
+
+  /* Charts */
+  .chart-wrap {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    padding: 24px;
+    position: relative;
+  }
+  .chart-wrap-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    margin-bottom: 16px;
+  }
+  .chart-canvas-wrap { position: relative; height: 300px; }
+
+  /* Two-col */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  /* Tables */
+  .table-wrap {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  thead th {
+    background: var(--bg-elev-2);
+    text-align: left;
+    padding: 10px 16px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    font-weight: 500;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    cursor: pointer;
+    user-select: none;
+  }
+  thead th:hover { color: var(--text); }
+  thead th.sorted::after { content: ' ↓'; color: var(--accent); }
+  thead th.sorted-asc::after { content: ' ↑'; color: var(--accent); }
+  tbody td {
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tbody tr:hover { background: var(--bg-elev-2); }
+  tbody td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody td.url {
+    max-width: 500px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+  }
+  tbody td.dim { color: var(--text-dim); }
+
+  /* Pills */
+  .pill {
+    display: inline-block;
+    font-size: 10px;
+    padding: 2px 8px;
+    border: 1px solid var(--border-hi);
+    border-radius: 0;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .pill.training { color: var(--training); border-color: var(--training); }
+  .pill.retrieval { color: var(--retrieval); border-color: var(--retrieval); }
+  .pill.traditional { color: var(--traditional); border-color: var(--traditional); }
+  .pill.other { color: var(--other); border-color: var(--other); }
+  .pill.status-2xx { color: #8eff9f; border-color: #8eff9f; }
+  .pill.status-3xx { color: var(--traditional); border-color: var(--traditional); }
+  .pill.status-4xx { color: var(--warn); border-color: var(--warn); }
+  .pill.status-5xx { color: var(--error); border-color: var(--error); }
+
+  /* Insights */
+  .insights-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 16px;
+  }
+  .insight {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--accent);
+    padding: 20px;
+  }
+  .insight.warn { border-left-color: var(--warn); }
+  .insight.bad { border-left-color: var(--error); }
+  .insight.good { border-left-color: #8eff9f; }
+  .insight-title {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 15px;
+    margin-bottom: 8px;
+  }
+  .insight-body { color: var(--text-dim); font-size: 12px; line-height: 1.6; }
+  .insight-body strong { color: var(--text); font-weight: 500; }
+
+  /* Controls */
+  .controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .control-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+  }
+  select, input[type=text] {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    outline: none;
+  }
+  select:focus, input[type=text]:focus { border-color: var(--accent); }
+  button {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border-hi);
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: all 0.1s;
+  }
+  button:hover { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  button.primary:hover { background: var(--accent-dim); }
+
+  /* Pagination */
+  .pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 16px;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .page-info {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+  }
+  .page-nav {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .page-btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    padding: 6px 11px;
+    cursor: pointer;
+    min-width: 32px;
+    text-align: center;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .page-btn:hover:not([disabled]):not(.active) {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: transparent;
+  }
+  .page-btn.active {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+    cursor: default;
+  }
+  .page-btn[disabled] {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+  .page-ellipsis {
+    color: var(--text-faint);
+    padding: 0 4px;
+    font-size: 11px;
+  }
+
+  /* Hidden by default */
+  .hidden { display: none !important; }
+
+  /* Global filter bar */
+  .filter-bar {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    padding: 14px 20px;
+    margin-bottom: 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+  }
+  .toggle input { display: none; }
+  .toggle-slider {
+    width: 32px;
+    height: 18px;
+    background: var(--border);
+    border-radius: 9px;
+    position: relative;
+    transition: background 0.15s;
+    flex-shrink: 0;
+  }
+  .toggle-slider::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    background: var(--text);
+    border-radius: 50%;
+    transition: transform 0.15s;
+  }
+  .toggle input:checked + .toggle-slider { background: var(--accent); }
+  .toggle input:checked + .toggle-slider::after { transform: translateX(14px); background: var(--bg); }
+  .toggle-label { color: var(--text); }
+  .toggle-hint { color: var(--text-faint); font-size: 11px; margin-left: 4px; }
+  .inspect-btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border-hi);
+    padding: 6px 14px;
+    cursor: pointer;
+  }
+  .inspect-btn:hover { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+  .inspect-btn:hover span { color: var(--bg); }
+  .inspect-btn span { color: var(--warn); margin-left: 4px; }
+
+  /* Prominent upload-new button */
+  .upload-new-btn {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    background: var(--accent);
+    color: var(--bg);
+    border: 1px solid var(--accent);
+    padding: 10px 20px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    transition: all 0.15s;
+  }
+  .upload-new-btn:hover {
+    background: var(--accent-dim);
+    border-color: var(--accent-dim);
+    color: var(--bg);
+  }
+  .upload-new-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border: 1px solid var(--bg);
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  /* Modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 100;
+    display: flex; align-items: center; justify-content: center; padding: 32px;
+  }
+  .modal {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    max-width: 900px; width: 100%; max-height: 85vh; overflow: auto;
+    padding: 32px;
+  }
+  .modal-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 20px;
+  }
+  .modal h3 {
+    font-family: var(--display); font-weight: 600; font-size: 20px; letter-spacing: -0.01em;
+  }
+  .modal-close {
+    background: transparent; color: var(--text-dim); border: none;
+    font-size: 20px; cursor: pointer; padding: 0 8px;
+  }
+  .modal-close:hover { color: var(--accent); background: transparent; }
+  .modal-intro { color: var(--text-dim); font-size: 12px; margin-bottom: 16px; line-height: 1.6; }
+  .ua-row {
+    padding: 12px 0; border-bottom: 1px solid var(--border);
+    display: grid; grid-template-columns: 80px 1fr; gap: 16px;
+  }
+  .ua-count { font-variant-numeric: tabular-nums; color: var(--warn); font-size: 13px; font-weight: 500; }
+  .ua-string { font-size: 11px; color: var(--text); word-break: break-all; line-height: 1.5; }
+  .ua-paths { font-size: 10px; color: var(--text-faint); margin-top: 4px; }
+
+  /* Depth bar */
+  .depth-bar {
+    height: 6px;
+    background: var(--border);
+    margin-top: 4px;
+    position: relative;
+  }
+  .depth-bar-fill {
+    height: 100%;
+    background: var(--accent);
+  }
+
+  /* Footer */
+  footer {
+    margin-top: 64px;
+    padding: 24px 32px;
+    border-top: 1px solid var(--border);
+    color: var(--text-faint);
+    font-size: 11px;
+    text-align: center;
+  }
+  footer span.dd { color: var(--accent); }
+
+  /* Empty state messaging */
+  .empty-big {
+    text-align: center;
+    padding: 80px 20px;
+    color: var(--text-dim);
+  }
+  .empty-big .big-num {
+    font-family: var(--display);
+    font-size: 64px;
+    font-weight: 600;
+    color: var(--text-faint);
+    line-height: 1;
+  }
+
+  @media (max-width: 1100px) {
+    .kpi-grid, .family-grid { grid-template-columns: repeat(2, 1fr); }
+    .two-col { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-left">
+    <h1>AI Crawler <em>Log</em> Analyzer</h1>
+    <p>Serverlog analyse · Focus op AI-bots</p>
+  </div>
+  <div class="masthead-right">
+    <div class="dd-mark">DIRK DOET</div>
+    <div>Versie 1.0</div>
+  </div>
+</header>
+
+<main>
+
+  <!-- Upload -->
+  <section id="uploadSection">
+    <label for="fileInput" class="upload-zone" id="dropZone">
+      <div class="upload-zone-label">Upload je access.log</div>
+      <div class="upload-zone-hint">
+        Klik of sleep een Apache/Nginx Combined logbestand hiernaartoe. Ondersteunt <code>.log</code>, <code>.txt</code> en <code>.gz</code>.
+        <br>Data verlaat deze browser niet.
+      </div>
+    </label>
+    <input type="file" id="fileInput" accept=".log,.txt,.gz,.access">
+
+    <div id="progressWrap" class="hidden">
+      <div class="progress-bar"><div class="progress-bar-fill" id="progressFill"></div></div>
+      <div class="progress-label">
+        <span id="progressLabel">Parsing…</span>
+        <span id="progressCount">0 / 0 regels</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Results -->
+  <div id="results" class="hidden">
+
+    <!-- Global filter bar -->
+    <div class="filter-bar">
+      <button id="uploadNewBtn" class="upload-new-btn">
+        <span class="upload-new-icon">↑</span>
+        <span>Nieuw logbestand uploaden</span>
+      </button>
+      <div style="display:flex; gap:12px; align-items:center;">
+        <button id="inspectUnknownBots" class="inspect-btn hidden">Onbekende bots inspecteren <span id="unknownBotsCount"></span></button>
+      </div>
+    </div>
+
+    <!-- KPIs -->
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <div class="section-num">01 / OVERZICHT</div>
+          <h2>Samenvatting</h2>
+        </div>
+        <div class="section-desc">Totale metingen over het geüploade logbestand.</div>
+      </div>
+      <div class="kpi-grid">
+        <div class="kpi">
+          <div class="kpi-label">Totale requests</div>
+          <div class="kpi-value" id="kpiTotal">—</div>
+          <div class="kpi-sub" id="kpiTotalSub">—</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Unieke URLs</div>
+          <div class="kpi-value" id="kpiUrls">—</div>
+          <div class="kpi-sub" id="kpiUrlsSub">—</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">AI-crawlers hits</div>
+          <div class="kpi-value" id="kpiAI">—</div>
+          <div class="kpi-sub" id="kpiAISub">—</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Periode</div>
+          <div class="kpi-value" id="kpiPeriod" style="font-size:18px;">—</div>
+          <div class="kpi-sub" id="kpiPeriodSub">—</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Bot families -->
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <div class="section-num">02 / DISCOVERY</div>
+          <h2>Komen ze überhaupt?</h2>
+        </div>
+        <div class="section-desc">Aanwezigheid per crawler-familie. Absentie is óók een signaal.</div>
+      </div>
+      <div class="family-grid" id="familyGrid"></div>
+    </section>
+
+    <!-- Insights -->
+    <section class="section" id="insightsSection">
+      <div class="section-head">
+        <div>
+          <div class="section-num">03 / SIGNALEN</div>
+          <h2>Wat valt op</h2>
+        </div>
+        <div class="section-desc">Automatische observaties op basis van het logbestand.</div>
+      </div>
+      <div class="insights-grid" id="insightsGrid"></div>
+    </section>
+
+    <!-- Activity over time -->
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <div class="section-num">04 / ACTIVITEIT</div>
+          <h2>Crawl-activiteit over tijd</h2>
+        </div>
+        <div class="section-desc">Requests per dag, per crawler-familie. AI-bots komen sporadisch.</div>
+      </div>
+      <div class="chart-wrap">
+        <div class="chart-wrap-title">Requests per dag</div>
+        <div class="chart-canvas-wrap"><canvas id="timeChart"></canvas></div>
+      </div>
+    </section>
+
+    <!-- Depth + status -->
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <div class="section-num">05 / DIEPTE &amp; FRICTIE</div>
+          <h2>Hoe diep, met welke response</h2>
+        </div>
+        <div class="section-desc">Crawl depth en response codes per familie.</div>
+      </div>
+      <div class="two-col">
+        <div class="chart-wrap">
+          <div class="chart-wrap-title">Gemiddelde URL-diepte per familie</div>
+          <div class="chart-canvas-wrap"><canvas id="depthChart"></canvas></div>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-wrap-title">Response codes per familie</div>
+          <div class="chart-canvas-wrap"><canvas id="statusChart"></canvas></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Top URLs per bot -->
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <div class="section-num">06 / CRAWL PATHS</div>
+          <h2>Top URLs per crawler</h2>
+        </div>
+        <div class="section-desc">Welke pagina's krijgen de hits. Clustering rond homepage is normaal voor AI-bots.</div>
+      </div>
+      <div class="controls">
+        <span class="control-label">Filter op bot:</span>
+        <select id="botFilter"><option value="__all">Alle crawlers</option></select>
+        <span class="control-label" style="margin-left:16px">Zoek in URL:</span>
+        <input type="text" id="urlFilter" placeholder="/blog, /product, …" style="width:240px">
+        <button id="clearFilters">Reset</button>
+      </div>
+      <div class="table-wrap">
+        <table id="urlTable">
+          <thead>
+            <tr>
+              <th data-sort="url">URL</th>
+              <th data-sort="hits" class="num" style="text-align:right">Hits</th>
+              <th data-sort="bots" class="num" style="text-align:right">Bots</th>
+              <th data-sort="status">Statussen</th>
+              <th data-sort="depth" class="num" style="text-align:right">Diepte</th>
+              <th data-sort="last">Laatste hit</th>
+            </tr>
+          </thead>
+          <tbody id="urlTableBody"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="urlTablePagination"></div>
+    </section>
+
+    <!-- Friction -->
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <div class="section-num">07 / FRICTIE</div>
+          <h2>Problematische requests</h2>
+        </div>
+        <div class="section-desc">403 (blocked), 429 (rate limit), 404 (niet gevonden), 5xx (server) voor AI-crawlers.</div>
+      </div>
+      <div class="table-wrap">
+        <table id="frictionTable">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Bot</th>
+              <th>URL</th>
+              <th class="num" style="text-align:right">Hits</th>
+            </tr>
+          </thead>
+          <tbody id="frictionTableBody"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="frictionTablePagination"></div>
+    </section>
+
+    <!-- Cross system -->
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <div class="section-num">08 / CROSS-SYSTEM</div>
+          <h2>Googlebot vs AI-crawlers</h2>
+        </div>
+        <div class="section-desc">URLs die Googlebot bereikt maar AI-crawlers missen. Hier zit de gap.</div>
+      </div>
+      <div class="table-wrap">
+        <table id="gapTable">
+          <thead>
+            <tr>
+              <th>URL</th>
+              <th class="num" style="text-align:right">Googlebot hits</th>
+              <th class="num" style="text-align:right">AI-crawler hits</th>
+              <th class="num" style="text-align:right">Diepte</th>
+            </tr>
+          </thead>
+          <tbody id="gapTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <div style="margin-top:48px; text-align:center;">
+      <button id="resetBtn">Nieuw logbestand analyseren</button>
+    </div>
+
+  </div>
+
+</main>
+
+<footer>
+  <span class="dd">Dirk Doet</span> · AI Crawler Log Analyzer · Versie 1.0 · By Claude and Ai-bert
+</footer>
+
+<script>
+// ============================================================================
+// BOT CLASSIFICATION
+// Bron: artikel + eigen research. Case-insensitive matching op UA-string.
+// ============================================================================
+const BOT_PATTERNS = [
+  // Retrieval Claude-varianten MOETEN voor ClaudeBot staan (specifieker eerst)
+  { match: /Claude-User/i, name: 'Claude-User', family: 'retrieval', vendor: 'Anthropic' },
+  { match: /Claude-SearchBot/i, name: 'Claude-SearchBot', family: 'retrieval', vendor: 'Anthropic' },
+  { match: /ClaudeBot-User/i, name: 'ClaudeBot-User', family: 'retrieval', vendor: 'Anthropic' },
+
+  // Training crawlers — bouwen datasets voor modeltraining
+  { match: /GPTBot/i, name: 'GPTBot', family: 'training', vendor: 'OpenAI' },
+  { match: /ClaudeBot/i, name: 'ClaudeBot', family: 'training', vendor: 'Anthropic' },
+  { match: /anthropic-ai/i, name: 'anthropic-ai', family: 'training', vendor: 'Anthropic' },
+  { match: /CCBot/i, name: 'CCBot', family: 'training', vendor: 'Common Crawl' },
+  { match: /Google-Extended/i, name: 'Google-Extended', family: 'training', vendor: 'Google' },
+  { match: /Bytespider/i, name: 'Bytespider', family: 'training', vendor: 'ByteDance' },
+  { match: /Amazonbot/i, name: 'Amazonbot', family: 'training', vendor: 'Amazon' },
+  { match: /Applebot-Extended/i, name: 'Applebot-Extended', family: 'training', vendor: 'Apple' },
+  { match: /Meta-ExternalAgent/i, name: 'Meta-ExternalAgent', family: 'training', vendor: 'Meta' },
+  { match: /FacebookBot/i, name: 'FacebookBot', family: 'training', vendor: 'Meta' },
+  { match: /cohere-ai/i, name: 'cohere-ai', family: 'training', vendor: 'Cohere' },
+  { match: /Diffbot/i, name: 'Diffbot', family: 'training', vendor: 'Diffbot' },
+  { match: /Omgilibot/i, name: 'Omgilibot', family: 'training', vendor: 'Omgili' },
+  { match: /PanguBot/i, name: 'PanguBot', family: 'training', vendor: 'Huawei' },
+
+  // Retrieval crawlers — tonen resultaten in live AI-antwoorden
+  { match: /ChatGPT-User/i, name: 'ChatGPT-User', family: 'retrieval', vendor: 'OpenAI' },
+  { match: /OAI-SearchBot/i, name: 'OAI-SearchBot', family: 'retrieval', vendor: 'OpenAI' },
+  { match: /PerplexityBot/i, name: 'PerplexityBot', family: 'retrieval', vendor: 'Perplexity' },
+  { match: /Perplexity-User/i, name: 'Perplexity-User', family: 'retrieval', vendor: 'Perplexity' },
+  { match: /YouBot/i, name: 'YouBot', family: 'retrieval', vendor: 'You.com' },
+  { match: /MistralAI-User/i, name: 'MistralAI-User', family: 'retrieval', vendor: 'Mistral' },
+  { match: /Meta-ExternalFetcher/i, name: 'Meta-ExternalFetcher', family: 'retrieval', vendor: 'Meta' },
+  { match: /DuckAssistBot/i, name: 'DuckAssistBot', family: 'retrieval', vendor: 'DuckDuckGo' },
+
+  // Traditional search crawlers
+  { match: /Googlebot-Image/i, name: 'Googlebot-Image', family: 'traditional', vendor: 'Google' },
+  { match: /Googlebot-Video/i, name: 'Googlebot-Video', family: 'traditional', vendor: 'Google' },
+  { match: /Googlebot-News/i, name: 'Googlebot-News', family: 'traditional', vendor: 'Google' },
+  { match: /Googlebot/i, name: 'Googlebot', family: 'traditional', vendor: 'Google' },
+  { match: /AdsBot-Google/i, name: 'AdsBot-Google', family: 'traditional', vendor: 'Google' },
+  { match: /Mediapartners-Google/i, name: 'Mediapartners-Google', family: 'traditional', vendor: 'Google' },
+  { match: /bingbot/i, name: 'Bingbot', family: 'traditional', vendor: 'Microsoft' },
+  { match: /BingPreview/i, name: 'BingPreview', family: 'traditional', vendor: 'Microsoft' },
+  { match: /msnbot/i, name: 'msnbot', family: 'traditional', vendor: 'Microsoft' },
+  { match: /Slurp/i, name: 'Yahoo Slurp', family: 'traditional', vendor: 'Yahoo' },
+  { match: /DuckDuckBot/i, name: 'DuckDuckBot', family: 'traditional', vendor: 'DuckDuckGo' },
+  { match: /YandexBot/i, name: 'YandexBot', family: 'traditional', vendor: 'Yandex' },
+  { match: /Baiduspider/i, name: 'Baiduspider', family: 'traditional', vendor: 'Baidu' },
+  { match: /Applebot/i, name: 'Applebot', family: 'traditional', vendor: 'Apple' },
+  { match: /Sogou/i, name: 'Sogou', family: 'traditional', vendor: 'Sogou' },
+
+  // Overige bots
+  { match: /AhrefsBot/i, name: 'AhrefsBot', family: 'other', vendor: 'Ahrefs' },
+  { match: /SemrushBot/i, name: 'SemrushBot', family: 'other', vendor: 'Semrush' },
+  { match: /MJ12bot/i, name: 'MJ12bot', family: 'other', vendor: 'Majestic' },
+  { match: /DotBot/i, name: 'DotBot', family: 'other', vendor: 'Moz' },
+  { match: /rogerbot/i, name: 'rogerbot', family: 'other', vendor: 'Moz' },
+  { match: /Screaming Frog/i, name: 'Screaming Frog', family: 'other', vendor: 'Screaming Frog' },
+  { match: /facebookexternalhit/i, name: 'facebookexternalhit', family: 'other', vendor: 'Meta' },
+  { match: /Twitterbot/i, name: 'Twitterbot', family: 'other', vendor: 'X/Twitter' },
+  { match: /LinkedInBot/i, name: 'LinkedInBot', family: 'other', vendor: 'LinkedIn' },
+  { match: /WhatsApp/i, name: 'WhatsApp', family: 'other', vendor: 'Meta' },
+  { match: /TelegramBot/i, name: 'TelegramBot', family: 'other', vendor: 'Telegram' },
+  { match: /Slackbot/i, name: 'Slackbot', family: 'other', vendor: 'Slack' },
+  { match: /Pinterest/i, name: 'Pinterest', family: 'other', vendor: 'Pinterest' },
+  { match: /Discordbot/i, name: 'Discordbot', family: 'other', vendor: 'Discord' },
+];
+
+function classifyUA(ua) {
+  if (!ua) return null;
+  for (const p of BOT_PATTERNS) {
+    if (p.match.test(ua)) return p;
+  }
+  // generic bot detection
+  if (/bot|crawler|spider|scraper/i.test(ua)) {
+    return { name: 'Andere bot', family: 'other', vendor: 'onbekend', isUnknown: true };
+  }
+  return null; // niet-bot, we slaan niet-bot requests over voor efficiëntie
+}
+
+// Herkent static assets (CSS, JS, fonts, images, icons). Wordt gebruikt voor optionele filtering.
+const ASSET_RE = /\.(css|js|mjs|map|woff2?|ttf|otf|eot|png|jpe?g|gif|webp|svg|ico|bmp|avif|pdf|mp4|webm|mp3|wav|zip|xml)(\?|$)/i;
+function isStaticAsset(path) {
+  return ASSET_RE.test(path);
+}
+
+// ============================================================================
+// LOG PARSER — Apache/Nginx Combined Log Format
+// Format: host ident authuser [date] "request" status size "referer" "ua"
+// ============================================================================
+// Regex gebaseerd op Combined Log Format, permissief genoeg voor varianten
+const LOG_REGEX = /^(\S+) (\S+) (\S+) \[([^\]]+)\] "([^"]*)" (\d{3}|-) (\d+|-) "([^"]*)" "([^"]*)"/;
+
+function parseDate(s) {
+  // Format: 10/Oct/2025:13:55:36 +0200
+  const m = s.match(/^(\d{2})\/(\w{3})\/(\d{4}):(\d{2}):(\d{2}):(\d{2})(?:\s+([+-]\d{4}))?/);
+  if (!m) return null;
+  const months = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+  const month = months[m[2]];
+  if (month === undefined) return null;
+  // Convert to UTC considering the offset
+  const d = new Date(Date.UTC(
+    parseInt(m[3]), month, parseInt(m[1]),
+    parseInt(m[4]), parseInt(m[5]), parseInt(m[6])
+  ));
+  if (m[7]) {
+    const sign = m[7][0] === '-' ? 1 : -1;
+    const hh = parseInt(m[7].slice(1,3));
+    const mm = parseInt(m[7].slice(3,5));
+    d.setTime(d.getTime() + sign * (hh * 3600 + mm * 60) * 1000);
+  }
+  return d;
+}
+
+function extractPath(request) {
+  // request format: "GET /path HTTP/1.1"
+  const parts = request.split(' ');
+  if (parts.length < 2) return { method: '-', path: request };
+  // strip querystring for clustering, keep pathOnly
+  let path = parts[1] || '/';
+  try {
+    // normalize: strip trailing slash except root, lowercase? nee, case matters
+    const qIdx = path.indexOf('?');
+    const pathOnly = qIdx > -1 ? path.slice(0, qIdx) : path;
+    return { method: parts[0], path: pathOnly, fullPath: path };
+  } catch {
+    return { method: parts[0], path: path, fullPath: path };
+  }
+}
+
+function depthOf(path) {
+  if (!path || path === '/') return 0;
+  const segs = path.split('/').filter(s => s.length > 0);
+  return segs.length;
+}
+
+// ============================================================================
+// STATE
+// ============================================================================
+const state = {
+  rows: [],           // { ts, bot, family, path, status, size, ua, depth }
+  totalLines: 0,
+  parsedLines: 0,
+  errorLines: 0,
+  assetLines: 0,      // aantal asset-requests dat genegeerd is
+  urlStats: new Map(),    // path -> { hits, bots:Set, statuses:Map, lastTs, depth }
+  botStats: new Map(),    // botName -> { family, vendor, hits }
+  familyStats: {training: 0, retrieval: 0, traditional: 0, other: 0},
+  timeSeries: new Map(),  // dayKey -> { training, retrieval, traditional, other }
+  frictionRows: [],
+  unknownUAs: new Map(),  // UA-string -> { count, paths: Set }
+  charts: {},
+  urlTableState: { sortKey: 'hits', sortDir: 'desc', page: 1, pageSize: 10 },
+  frictionTableState: { page: 1, pageSize: 10 },
+};
+
+// ============================================================================
+// FILE READING — streamt gzip/plain, parst line-by-line
+// ============================================================================
+async function handleFile(file) {
+  document.getElementById('progressWrap').classList.remove('hidden');
+  setProgress(0, 'Bestand inlezen…', '');
+
+  resetState();
+
+  const isGz = /\.gz$/i.test(file.name);
+  let text;
+
+  try {
+    if (isGz) {
+      setProgress(5, 'Gzip uitpakken…', '');
+      const buf = await file.arrayBuffer();
+      const uint8 = new Uint8Array(buf);
+      const decompressed = pako.ungzip(uint8);
+      text = new TextDecoder('utf-8').decode(decompressed);
+    } else {
+      text = await file.text();
+    }
+  } catch (e) {
+    alert('Fout bij inlezen bestand: ' + e.message);
+    document.getElementById('progressWrap').classList.add('hidden');
+    return;
+  }
+
+  setProgress(15, 'Regels tellen…', '');
+
+  // Split on newlines, filter empty
+  const lines = text.split(/\r?\n/);
+  state.totalLines = lines.length;
+
+  setProgress(20, 'Parsen…', `0 / ${lines.length.toLocaleString('nl-NL')} regels`);
+
+  // Parse in chunks of 5000 to keep UI responsive
+  const CHUNK = 5000;
+  let i = 0;
+  while (i < lines.length) {
+    const end = Math.min(i + CHUNK, lines.length);
+    for (let j = i; j < end; j++) {
+      parseLine(lines[j]);
+    }
+    i = end;
+    const pct = 20 + Math.round((i / lines.length) * 70);
+    setProgress(pct, 'Parsen…', `${i.toLocaleString('nl-NL')} / ${lines.length.toLocaleString('nl-NL')} regels`);
+    await new Promise(r => setTimeout(r, 0)); // yield
+  }
+
+  setProgress(95, 'Analyseren…', '');
+  await new Promise(r => setTimeout(r, 50));
+
+  if (state.rows.length === 0) {
+    alert('Geen bot-requests gevonden in dit logbestand.\n\nCheck of het een Apache/Nginx Combined-format logbestand is en of er überhaupt crawlers in voorkomen.');
+    document.getElementById('progressWrap').classList.add('hidden');
+    return;
+  }
+
+  render();
+  setProgress(100, 'Klaar', '');
+  setTimeout(() => document.getElementById('progressWrap').classList.add('hidden'), 400);
+  document.getElementById('uploadSection').classList.add('hidden');
+  document.getElementById('results').classList.remove('hidden');
+}
+
+function setProgress(pct, label, count) {
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('progressLabel').textContent = label;
+  document.getElementById('progressCount').textContent = count;
+}
+
+function resetState() {
+  state.rows = [];
+  state.totalLines = 0;
+  state.parsedLines = 0;
+  state.errorLines = 0;
+  state.assetLines = 0;
+  state.urlStats = new Map();
+  state.botStats = new Map();
+  state.familyStats = {training: 0, retrieval: 0, traditional: 0, other: 0};
+  state.timeSeries = new Map();
+  state.frictionRows = [];
+  state.unknownUAs = new Map();
+  Object.values(state.charts).forEach(c => c && c.destroy && c.destroy());
+  state.charts = {};
+  state.urlTableState = { sortKey: 'hits', sortDir: 'desc', page: 1, pageSize: 10 };
+  state.frictionTableState = { page: 1, pageSize: 10 };
+}
+
+function parseLine(line) {
+  if (!line || line.length < 20) return;
+  const m = line.match(LOG_REGEX);
+  if (!m) { state.errorLines++; return; }
+
+  const ua = m[9];
+  const bot = classifyUA(ua);
+  if (!bot) return; // skip non-bot traffic
+
+  const { path } = extractPath(m[5]);
+  if (isStaticAsset(path)) { state.assetLines++; return; } // assets zijn ruis — niet meenemen
+
+  const ts = parseDate(m[4]);
+  const status = parseInt(m[6]) || 0;
+  const size = m[7] === '-' ? 0 : parseInt(m[7]) || 0;
+
+  state.parsedLines++;
+
+  // Track unknown bot UAs so we can surface them
+  if (bot.isUnknown) {
+    let u = state.unknownUAs.get(ua);
+    if (!u) { u = { ua, count: 0, samplePaths: new Set() }; state.unknownUAs.set(ua, u); }
+    u.count++;
+    if (u.samplePaths.size < 3) u.samplePaths.add(path);
+  }
+
+  const row = {
+    ts: ts ? ts.getTime() : 0,
+    bot: bot.name,
+    family: bot.family,
+    vendor: bot.vendor,
+    path,
+    status,
+    size,
+    ua,
+    depth: depthOf(path),
+  };
+  state.rows.push(row);
+
+  // aggregate: url stats
+  let u = state.urlStats.get(path);
+  if (!u) {
+    u = { path, hits: 0, bots: new Set(), statuses: new Map(), lastTs: 0, depth: row.depth, familyHits: {training:0, retrieval:0, traditional:0, other:0} };
+    state.urlStats.set(path, u);
+  }
+  u.hits++;
+  u.bots.add(bot.name);
+  u.statuses.set(status, (u.statuses.get(status) || 0) + 1);
+  if (row.ts > u.lastTs) u.lastTs = row.ts;
+  u.familyHits[bot.family]++;
+
+  // bot stats
+  let b = state.botStats.get(bot.name);
+  if (!b) {
+    b = { name: bot.name, family: bot.family, vendor: bot.vendor, hits: 0 };
+    state.botStats.set(bot.name, b);
+  }
+  b.hits++;
+
+  // family
+  state.familyStats[bot.family]++;
+
+  // time series
+  if (ts) {
+    const dayKey = ts.toISOString().slice(0, 10); // YYYY-MM-DD
+    let day = state.timeSeries.get(dayKey);
+    if (!day) {
+      day = { training: 0, retrieval: 0, traditional: 0, other: 0 };
+      state.timeSeries.set(dayKey, day);
+    }
+    day[bot.family]++;
+  }
+
+  // friction
+  if (status === 403 || status === 429 || status === 404 || status >= 500) {
+    state.frictionRows.push(row);
+  }
+}
+
+// ============================================================================
+// RENDERING
+// ============================================================================
+function render() {
+  renderKPIs();
+  renderFamilies();
+  renderInsights();
+  renderTimeChart();
+  renderDepthChart();
+  renderStatusChart();
+  renderUrlTable();
+  renderFrictionTable();
+  renderGapTable();
+  populateBotFilter();
+  renderUnknownBotsButton();
+}
+
+function fmt(n) { return n.toLocaleString('nl-NL'); }
+
+function renderKPIs() {
+  document.getElementById('kpiTotal').textContent = fmt(state.parsedLines);
+  const parts = [];
+  if (state.assetLines > 0) parts.push(`${fmt(state.assetLines)} assets genegeerd`);
+  if (state.errorLines > 0) parts.push(`${fmt(state.errorLines)} regels overgeslagen`);
+  document.getElementById('kpiTotalSub').textContent = parts.join(' · ') || 'alle regels gematched';
+
+  document.getElementById('kpiUrls').textContent = fmt(state.urlStats.size);
+  document.getElementById('kpiUrlsSub').textContent = 'unieke pagina\'s';
+
+  const aiHits = state.familyStats.training + state.familyStats.retrieval;
+  document.getElementById('kpiAI').textContent = fmt(aiHits);
+  const aiPct = state.parsedLines > 0 ? (aiHits / state.parsedLines * 100).toFixed(1) : 0;
+  document.getElementById('kpiAISub').textContent = `${aiPct}% van alle bot-hits`;
+
+  // periode
+  const ts = state.rows.map(r => r.ts).filter(t => t > 0);
+  if (ts.length) {
+    const min = new Date(Math.min(...ts));
+    const max = new Date(Math.max(...ts));
+    const fmtDate = d => d.toLocaleDateString('nl-NL', { day: '2-digit', month: 'short' });
+    document.getElementById('kpiPeriod').textContent = `${fmtDate(min)} – ${fmtDate(max)}`;
+    const days = Math.max(1, Math.round((max - min) / 86400000));
+    document.getElementById('kpiPeriodSub').textContent = `${days} ${days === 1 ? 'dag' : 'dagen'}`;
+  }
+}
+
+const FAMILY_META = {
+  training:    { label: 'Training',    color: 'var(--training)',    desc: 'Dataset-bouwers voor model-training' },
+  retrieval:   { label: 'Retrieval',   color: 'var(--retrieval)',   desc: 'Live ophalen voor AI-antwoorden' },
+  traditional: { label: 'Traditional', color: 'var(--traditional)', desc: 'Klassieke zoekmachines' },
+  other:       { label: 'Other',       color: 'var(--other)',       desc: 'SEO-tools, social, overig' },
+};
+
+function renderFamilies() {
+  const grid = document.getElementById('familyGrid');
+  grid.innerHTML = '';
+
+  for (const fam of ['training', 'retrieval', 'traditional', 'other']) {
+    const meta = FAMILY_META[fam];
+    const bots = [...state.botStats.values()]
+      .filter(b => b.family === fam)
+      .sort((a, b) => b.hits - a.hits);
+    const total = state.familyStats[fam];
+
+    const card = document.createElement('div');
+    card.className = 'family';
+    card.style.setProperty('--family-color', meta.color);
+
+    if (bots.length === 0) {
+      card.innerHTML = `
+        <div class="family-head">
+          <span class="family-name">${meta.label}</span>
+          <span class="family-count" style="color:var(--text-faint)">0</span>
+        </div>
+        <div class="family-empty">Geen activiteit in dit logbestand.<br><span style="color:var(--text-faint)">${meta.desc}</span></div>
+      `;
+    } else {
+      const botsHtml = bots.slice(0, 6).map(b => `
+        <div class="bot-row">
+          <span class="bot-name" title="${b.name}">${b.name}</span>
+          <span class="bot-hits">${fmt(b.hits)}</span>
+        </div>
+      `).join('');
+      const more = bots.length > 6 ? `<div class="bot-row"><span class="bot-name" style="color:var(--text-faint)">+ ${bots.length - 6} overige</span><span></span></div>` : '';
+      card.innerHTML = `
+        <div class="family-head">
+          <span class="family-name">${meta.label}</span>
+          <span class="family-count">${fmt(total)}</span>
+        </div>
+        <div class="family-bots">${botsHtml}${more}</div>
+      `;
+    }
+    grid.appendChild(card);
+  }
+}
+
+function renderInsights() {
+  const grid = document.getElementById('insightsGrid');
+  grid.innerHTML = '';
+  const insights = generateInsights();
+  if (insights.length === 0) {
+    grid.innerHTML = `<div class="insight"><div class="insight-title">Geen signalen</div><div class="insight-body">Niets opvallends gevonden in deze dataset.</div></div>`;
+    return;
+  }
+  for (const ins of insights) {
+    const el = document.createElement('div');
+    el.className = 'insight ' + (ins.level || '');
+    el.innerHTML = `<div class="insight-title">${ins.title}</div><div class="insight-body">${ins.body}</div>`;
+    grid.appendChild(el);
+  }
+}
+
+function generateInsights() {
+  const out = [];
+  const rows = state.rows;
+  const fam = state.familyStats;
+  const totalAI = fam.training + fam.retrieval;
+  const totalBots = fam.training + fam.retrieval + fam.traditional + fam.other;
+
+  // 1. AI crawler ratio
+  if (totalBots > 50) {
+    const pct = totalAI / totalBots * 100;
+    if (pct < 1) {
+      out.push({ level: 'bad', title: 'AI-crawlers nauwelijks aanwezig', body: `Slechts <strong>${pct.toFixed(1)}%</strong> van alle bot-hits komt van AI-crawlers. Over een langere periode (de logwindow is vaak te kort) zou dit hoger moeten zijn. Check of ze in <code>robots.txt</code> geblokkeerd zijn, of dat ze door je CDN/WAF worden gefilterd.` });
+    } else if (pct < 5) {
+      out.push({ level: 'warn', title: 'AI-crawlers ondervertegenwoordigd', body: `Slechts <strong>${pct.toFixed(1)}%</strong> van alle bot-activiteit is AI-gerelateerd. Dat kan normaal zijn voor korte logwindows (AI-bots komen sporadisch), maar monitor dit over langere periode.` });
+    } else {
+      out.push({ level: 'good', title: 'AI-crawlers actief aanwezig', body: `<strong>${pct.toFixed(1)}%</strong> van de bot-hits komt van AI-crawlers. Goed teken: je site wordt meegenomen in training en retrieval.` });
+    }
+  }
+
+  // 2. Training absence per major vendor
+  const majorTraining = ['GPTBot', 'ClaudeBot', 'CCBot', 'Google-Extended'];
+  const missingTraining = majorTraining.filter(n => !state.botStats.has(n));
+  if (missingTraining.length >= 2) {
+    out.push({ level: 'warn', title: 'Training-crawlers afwezig', body: `<strong>${missingTraining.join(', ')}</strong> ${missingTraining.length === 1 ? 'komt' : 'komen'} niet voor in dit logbestand. Absentie is een signaal: check <code>robots.txt</code>, en overweeg of je logwindow lang genoeg is (training-bots crawlen sporadisch).` });
+  }
+
+  // 3. Retrieval depth check
+  const retrievalRows = rows.filter(r => r.family === 'retrieval');
+  if (retrievalRows.length > 20) {
+    const avgDepth = retrievalRows.reduce((s, r) => s + r.depth, 0) / retrievalRows.length;
+    if (avgDepth < 1.5) {
+      out.push({ level: 'warn', title: 'Retrieval blijft ondiep', body: `Retrieval-bots (ChatGPT-User, PerplexityBot e.d.) blijven gemiddeld op diepte <strong>${avgDepth.toFixed(1)}</strong>. Ze zien vooral homepage en top-nav, niet de diepere content. Check je interne linking.` });
+    }
+  }
+
+  // 4. Training deep pages check
+  const trainingRows = rows.filter(r => r.family === 'training');
+  if (trainingRows.length > 50) {
+    const uniqueUrls = new Set(trainingRows.map(r => r.path)).size;
+    const pagesPerHit = uniqueUrls / trainingRows.length;
+    if (pagesPerHit < 0.1) {
+      out.push({ level: 'warn', title: 'Training-bots hameren op weinig URLs', body: `<strong>${fmt(trainingRows.length)}</strong> hits verdeeld over slechts <strong>${fmt(uniqueUrls)}</strong> unieke URLs. De bot keert veel terug naar dezelfde pagina's en dekt de site niet breed af.` });
+    } else {
+      out.push({ level: 'good', title: 'Training-bots dekken site breed af', body: `<strong>${fmt(trainingRows.length)}</strong> training-hits over <strong>${fmt(uniqueUrls)}</strong> unieke URLs. Goede spreiding.` });
+    }
+  }
+
+  // 5. Friction: 403/429 voor AI-bots
+  const aiBlocked = state.frictionRows.filter(r => (r.family === 'training' || r.family === 'retrieval') && (r.status === 403 || r.status === 429));
+  if (aiBlocked.length > 0) {
+    const byBot = {};
+    aiBlocked.forEach(r => byBot[r.bot] = (byBot[r.bot] || 0) + 1);
+    const top = Object.entries(byBot).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k} (${v}×)`).join(', ');
+    out.push({ level: 'bad', title: 'AI-crawlers worden geblokkeerd', body: `<strong>${fmt(aiBlocked.length)}</strong> requests van AI-bots kregen <code>403</code> of <code>429</code>. Top: ${top}. Check firewall/WAF-regels, CDN-instellingen en <code>robots.txt</code>.` });
+  }
+
+  // 6. AI-only 404s
+  const aiNotFound = state.frictionRows.filter(r => (r.family === 'training' || r.family === 'retrieval') && r.status === 404);
+  if (aiNotFound.length > 10) {
+    out.push({ level: 'warn', title: 'AI-crawlers lopen tegen 404s aan', body: `<strong>${fmt(aiNotFound.length)}</strong> requests van AI-bots kregen <code>404</code>. Check je sitemap en gebroken interne links — dit is crawl-budget dat verloren gaat.` });
+  }
+
+  // 7. Gap: Googlebot heeft deep pages die AI nooit ziet
+  const gbRows = rows.filter(r => r.bot === 'Googlebot');
+  if (gbRows.length > 100) {
+    const gbUrls = new Set(gbRows.map(r => r.path));
+    const aiUrls = new Set(rows.filter(r => r.family === 'training' || r.family === 'retrieval').map(r => r.path));
+    const gapUrls = [...gbUrls].filter(u => !aiUrls.has(u));
+    const gapPct = gbUrls.size > 0 ? (gapUrls.length / gbUrls.size) * 100 : 0;
+    if (gapPct > 50 && gapUrls.length > 20) {
+      out.push({ level: 'warn', title: 'Grote gap: Googlebot ziet, AI niet', body: `<strong>${gapPct.toFixed(0)}%</strong> van de URLs die Googlebot bereikt, is nooit door een AI-crawler bezocht (<strong>${fmt(gapUrls.length)}</strong> URLs). Dit zijn pages die onvindbaar zijn voor ChatGPT/Claude/Perplexity.` });
+    }
+  }
+
+  return out;
+}
+
+function renderTimeChart() {
+  const days = [...state.timeSeries.keys()].sort();
+  const container = document.querySelector('#timeChart').parentElement;
+  if (days.length < 2) {
+    container.innerHTML = `<div style="color:var(--text-dim); text-align:center; padding:60px;">Te weinig tijdspreiding in dit logbestand voor een grafiek.<br><span style="color:var(--text-faint);font-size:11px;margin-top:8px;display:inline-block">Gebruik logs over meerdere dagen voor tijdreeks-analyse.</span></div>`;
+    return;
+  }
+  if (!document.getElementById('timeChart')) {
+    container.innerHTML = '<canvas id="timeChart"></canvas>';
+  }
+  const ctx = document.getElementById('timeChart').getContext('2d');
+  if (state.charts.time) state.charts.time.destroy();
+  const cssVar = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const datasets = ['training', 'retrieval', 'traditional', 'other'].map(fam => ({
+    label: FAMILY_META[fam].label,
+    data: days.map(d => state.timeSeries.get(d)[fam] || 0),
+    borderColor: cssVar('--' + fam),
+    backgroundColor: cssVar('--' + fam) + '20',
+    tension: 0.2,
+    fill: false,
+    borderWidth: 1.5,
+    pointRadius: 2,
+    pointHoverRadius: 5,
+  }));
+  state.charts.time = new Chart(ctx, {
+    type: 'line',
+    data: { labels: days, datasets },
+    options: chartOpts({ x: { grid: { color: '#1f252c' }, ticks: { color: '#8a8f86', font: { family: 'JetBrains Mono', size: 10 }, maxTicksLimit: 12 } }, y: { grid: { color: '#1f252c' }, ticks: { color: '#8a8f86', font: { family: 'JetBrains Mono', size: 10 } }, beginAtZero: true } })
+  });
+}
+
+function renderDepthChart() {
+  const cssVar = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const families = ['training', 'retrieval', 'traditional', 'other'];
+  const data = families.map(fam => {
+    const frows = state.rows.filter(r => r.family === fam);
+    if (frows.length === 0) return 0;
+    return frows.reduce((s, r) => s + r.depth, 0) / frows.length;
+  });
+  if (state.charts.depth) state.charts.depth.destroy();
+  const ctx = document.getElementById('depthChart').getContext('2d');
+  state.charts.depth = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: families.map(f => FAMILY_META[f].label),
+      datasets: [{
+        label: 'Gem. diepte',
+        data: data,
+        backgroundColor: families.map(f => cssVar('--' + f) + 'cc'),
+        borderColor: families.map(f => cssVar('--' + f)),
+        borderWidth: 1,
+      }]
+    },
+    options: chartOpts({
+      x: { grid: { color: '#1f252c' }, ticks: { color: '#8a8f86', font: { family: 'JetBrains Mono', size: 10 } } },
+      y: { grid: { color: '#1f252c' }, ticks: { color: '#8a8f86', font: { family: 'JetBrains Mono', size: 10 } }, beginAtZero: true, title: { display: true, text: 'URL-segmenten', color: '#555a53', font: { family: 'JetBrains Mono', size: 10 } } }
+    }, { legend: { display: false } })
+  });
+}
+
+function renderStatusChart() {
+  const cssVar = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const families = ['training', 'retrieval', 'traditional', 'other'];
+  const buckets = ['2xx', '3xx', '4xx', '5xx'];
+  const colors = { '2xx': '#8eff9f', '3xx': cssVar('--traditional'), '4xx': cssVar('--warn'), '5xx': cssVar('--error') };
+  const data = buckets.map(b => ({
+    label: b,
+    data: families.map(fam => {
+      return state.rows.filter(r => r.family === fam && Math.floor(r.status / 100) === parseInt(b[0])).length;
+    }),
+    backgroundColor: colors[b],
+    borderWidth: 0,
+  }));
+  if (state.charts.status) state.charts.status.destroy();
+  const ctx = document.getElementById('statusChart').getContext('2d');
+  state.charts.status = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: families.map(f => FAMILY_META[f].label), datasets: data },
+    options: chartOpts({
+      x: { stacked: true, grid: { color: '#1f252c' }, ticks: { color: '#8a8f86', font: { family: 'JetBrains Mono', size: 10 } } },
+      y: { stacked: true, grid: { color: '#1f252c' }, ticks: { color: '#8a8f86', font: { family: 'JetBrains Mono', size: 10 } }, beginAtZero: true }
+    })
+  });
+}
+
+function chartOpts(scales, extras = {}) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { labels: { color: '#e8ebe5', font: { family: 'JetBrains Mono', size: 11 }, boxWidth: 10 }, ...(extras.legend || {}) },
+      tooltip: { backgroundColor: '#0a0c0b', titleColor: '#d4ff3a', bodyColor: '#e8ebe5', borderColor: '#2a3038', borderWidth: 1, titleFont: { family: 'JetBrains Mono', size: 11 }, bodyFont: { family: 'JetBrains Mono', size: 11 } }
+    },
+    scales,
+  };
+}
+
+// ============================================================================
+// URL TABLE
+// ============================================================================
+function populateBotFilter() {
+  const sel = document.getElementById('botFilter');
+  const cur = sel.value;
+  const opts = ['<option value="__all">Alle crawlers</option>'];
+  for (const fam of ['training', 'retrieval', 'traditional', 'other']) {
+    const bots = [...state.botStats.values()].filter(b => b.family === fam).sort((a,b) => b.hits - a.hits);
+    if (!bots.length) continue;
+    opts.push(`<optgroup label="${FAMILY_META[fam].label}">`);
+    opts.push(`<option value="__fam:${fam}">${FAMILY_META[fam].label} (alles)</option>`);
+    for (const b of bots) {
+      opts.push(`<option value="${b.name}">${b.name} — ${fmt(b.hits)}</option>`);
+    }
+    opts.push(`</optgroup>`);
+  }
+  sel.innerHTML = opts.join('');
+  if (cur && sel.querySelector(`option[value="${CSS.escape(cur)}"]`)) sel.value = cur;
+}
+
+function getFilteredUrlStats() {
+  const botFilter = document.getElementById('botFilter').value;
+  const urlFilter = document.getElementById('urlFilter').value.toLowerCase().trim();
+
+  let rows;
+  if (botFilter === '__all') {
+    rows = [...state.urlStats.values()].map(u => ({
+      path: u.path, hits: u.hits, bots: u.bots.size, statusMap: u.statuses, lastTs: u.lastTs, depth: u.depth
+    }));
+  } else {
+    const filter = botFilter.startsWith('__fam:')
+      ? (r) => r.family === botFilter.slice(6)
+      : (r) => r.bot === botFilter;
+    const map = new Map();
+    for (const r of state.rows) {
+      if (!filter(r)) continue;
+      let u = map.get(r.path);
+      if (!u) { u = { path: r.path, hits: 0, botSet: new Set(), statusMap: new Map(), lastTs: 0, depth: r.depth }; map.set(r.path, u); }
+      u.hits++;
+      u.botSet.add(r.bot);
+      u.statusMap.set(r.status, (u.statusMap.get(r.status) || 0) + 1);
+      if (r.ts > u.lastTs) u.lastTs = r.ts;
+    }
+    rows = [...map.values()].map(u => ({ ...u, bots: u.botSet.size }));
+  }
+
+  if (urlFilter) rows = rows.filter(r => r.path.toLowerCase().includes(urlFilter));
+
+  const { sortKey, sortDir } = state.urlTableState;
+  const dir = sortDir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    let av, bv;
+    switch (sortKey) {
+      case 'url': av = a.path; bv = b.path; break;
+      case 'bots': av = a.bots; bv = b.bots; break;
+      case 'status': av = [...a.statusMap.keys()].sort()[0] || 0; bv = [...b.statusMap.keys()].sort()[0] || 0; break;
+      case 'depth': av = a.depth; bv = b.depth; break;
+      case 'last': av = a.lastTs; bv = b.lastTs; break;
+      case 'hits': default: av = a.hits; bv = b.hits;
+    }
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    return 0;
+  });
+
+  return rows;
+}
+
+// Generic pagination control renderer.
+// containerEl: DOM node that will hold the controls
+// currentPage: 1-indexed
+// totalItems: total count
+// pageSize
+// onPage: callback(newPage)
+function renderPagination(containerEl, currentPage, totalItems, pageSize, onPage) {
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const page = Math.min(Math.max(1, currentPage), totalPages);
+  const start = totalItems === 0 ? 0 : (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, totalItems);
+
+  // Build page number sequence: 1 … (p-1) p (p+1) … last
+  const pages = [];
+  const add = v => { if (pages[pages.length - 1] !== v) pages.push(v); };
+  add(1);
+  if (page - 1 > 2) add('…');
+  if (page - 1 >= 2) add(page - 1);
+  if (page !== 1 && page !== totalPages) add(page);
+  if (page + 1 <= totalPages - 1) add(page + 1);
+  if (page + 1 < totalPages - 1) add('…');
+  if (totalPages > 1) add(totalPages);
+
+  const pagesHtml = pages.map(p => {
+    if (p === '…') return `<span class="page-ellipsis">…</span>`;
+    const active = p === page ? 'active' : '';
+    return `<button class="page-btn ${active}" data-page="${p}">${p}</button>`;
+  }).join('');
+
+  containerEl.innerHTML = `
+    <span class="page-info">${totalItems === 0 ? 'Geen resultaten' : `${fmt(start)}–${fmt(end)} van ${fmt(totalItems)}`}</span>
+    <div class="page-nav">
+      <button class="page-btn" data-page="${page - 1}" ${page === 1 ? 'disabled' : ''}>‹ Vorige</button>
+      ${pagesHtml}
+      <button class="page-btn" data-page="${page + 1}" ${page === totalPages ? 'disabled' : ''}>Volgende ›</button>
+    </div>
+  `;
+  containerEl.querySelectorAll('.page-btn:not([disabled])').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const newPage = parseInt(btn.dataset.page);
+      if (!isNaN(newPage) && newPage !== page) onPage(newPage);
+    });
+  });
+}
+
+function renderUrlTable() {
+  const body = document.getElementById('urlTableBody');
+  const rows = getFilteredUrlStats();
+  const { page, pageSize } = state.urlTableState;
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const currentPage = Math.min(Math.max(1, page), totalPages);
+  state.urlTableState.page = currentPage;
+  const start = (currentPage - 1) * pageSize;
+  const shown = rows.slice(start, start + pageSize);
+
+  body.innerHTML = shown.map(r => {
+    const statuses = [...r.statusMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([s, c]) => `<span class="pill status-${Math.floor(s/100)}xx">${s}·${c}</span>`)
+      .join(' ');
+    const lastDate = r.lastTs ? new Date(r.lastTs).toLocaleString('nl-NL', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' }) : '—';
+    return `<tr>
+      <td class="url" title="${escapeHtml(r.path)}">${escapeHtml(r.path)}</td>
+      <td class="num">${fmt(r.hits)}</td>
+      <td class="num">${fmt(r.bots)}</td>
+      <td>${statuses}</td>
+      <td class="num">${r.depth}</td>
+      <td class="dim">${lastDate}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="6" style="padding:40px; text-align:center; color:var(--text-faint);">Geen resultaten voor deze filter.</td></tr>`;
+
+  renderPagination(
+    document.getElementById('urlTablePagination'),
+    currentPage, rows.length, pageSize,
+    (p) => { state.urlTableState.page = p; renderUrlTable(); }
+  );
+
+  // sort indicator
+  document.querySelectorAll('#urlTable th').forEach(th => {
+    th.classList.remove('sorted', 'sorted-asc');
+    if (th.dataset.sort === state.urlTableState.sortKey) {
+      th.classList.add(state.urlTableState.sortDir === 'asc' ? 'sorted-asc' : 'sorted');
+    }
+  });
+}
+
+function renderFrictionTable() {
+  const body = document.getElementById('frictionTableBody');
+  const map = new Map();
+  for (const r of state.frictionRows) {
+    const key = `${r.status}|${r.bot}|${r.path}`;
+    let e = map.get(key);
+    if (!e) { e = { status: r.status, bot: r.bot, family: r.family, path: r.path, hits: 0 }; map.set(key, e); }
+    e.hits++;
+  }
+  const rows = [...map.values()].sort((a, b) => b.hits - a.hits);
+  const pagContainer = document.getElementById('frictionTablePagination');
+
+  if (rows.length === 0) {
+    body.innerHTML = `<tr><td colspan="4" style="padding:40px; text-align:center; color:var(--text-dim);">Geen frictie gevonden. Geen 403/404/429/5xx in dit logbestand. 🎯</td></tr>`;
+    if (pagContainer) pagContainer.innerHTML = '';
+    return;
+  }
+
+  const { page, pageSize } = state.frictionTableState;
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const currentPage = Math.min(Math.max(1, page), totalPages);
+  state.frictionTableState.page = currentPage;
+  const start = (currentPage - 1) * pageSize;
+  const shown = rows.slice(start, start + pageSize);
+
+  body.innerHTML = shown.map(r => `
+    <tr>
+      <td><span class="pill status-${Math.floor(r.status/100)}xx">${r.status}</span></td>
+      <td><span class="pill ${r.family}">${r.bot}</span></td>
+      <td class="url" title="${escapeHtml(r.path)}">${escapeHtml(r.path)}</td>
+      <td class="num">${fmt(r.hits)}</td>
+    </tr>
+  `).join('');
+
+  renderPagination(
+    pagContainer,
+    currentPage, rows.length, pageSize,
+    (p) => { state.frictionTableState.page = p; renderFrictionTable(); }
+  );
+}
+
+function renderGapTable() {
+  const body = document.getElementById('gapTableBody');
+  const gbRows = state.rows.filter(r => r.bot === 'Googlebot');
+  if (gbRows.length < 20) {
+    body.innerHTML = `<tr><td colspan="4" style="padding:40px; text-align:center; color:var(--text-dim);">Te weinig Googlebot-data voor cross-system vergelijking.<br><span style="color:var(--text-faint);font-size:11px;">Minimaal 20 Googlebot-hits nodig.</span></td></tr>`;
+    return;
+  }
+
+  const urlMap = new Map();
+  for (const r of state.rows) {
+    let e = urlMap.get(r.path);
+    if (!e) { e = { path: r.path, gb: 0, ai: 0, depth: r.depth }; urlMap.set(r.path, e); }
+    if (r.bot === 'Googlebot') e.gb++;
+    if (r.family === 'training' || r.family === 'retrieval') e.ai++;
+  }
+  const gaps = [...urlMap.values()]
+    .filter(e => e.gb > 0 && e.ai === 0)
+    .sort((a, b) => b.gb - a.gb)
+    .slice(0, 50);
+
+  if (gaps.length === 0) {
+    body.innerHTML = `<tr><td colspan="4" style="padding:40px; text-align:center; color:#8eff9f;">Geen gap gevonden. Elke Googlebot-URL is ook door een AI-crawler bezocht. 🎯</td></tr>`;
+    return;
+  }
+  body.innerHTML = gaps.map(g => `
+    <tr>
+      <td class="url" title="${escapeHtml(g.path)}">${escapeHtml(g.path)}</td>
+      <td class="num">${fmt(g.gb)}</td>
+      <td class="num" style="color:var(--error)">${g.ai}</td>
+      <td class="num">${g.depth}</td>
+    </tr>
+  `).join('');
+}
+
+// Render the "inspect unknown bots" button + modal
+function renderUnknownBotsButton() {
+  const btn = document.getElementById('inspectUnknownBots');
+  const countSpan = document.getElementById('unknownBotsCount');
+  const total = [...state.unknownUAs.values()].reduce((s, u) => s + u.count, 0);
+  if (total === 0) {
+    btn.classList.add('hidden');
+    return;
+  }
+  btn.classList.remove('hidden');
+  countSpan.textContent = `(${fmt(state.unknownUAs.size)} unieke · ${fmt(total)} hits)`;
+}
+
+function showUnknownBotsModal() {
+  const uas = [...state.unknownUAs.values()].sort((a, b) => b.count - a.count);
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Onbekende bots in je logbestand</h3>
+        <button class="modal-close" aria-label="Sluiten">×</button>
+      </div>
+      <div class="modal-intro">
+        Deze user-agents zijn als bot herkend (bevatten "bot", "crawler", "spider" of "scraper") maar staan niet in onze catalogus.
+        Als hier een belangrijke AI- of zoekmachine-crawler tussen zit, laat het weten — dan voegen we 'm toe.
+      </div>
+      ${uas.map(u => `
+        <div class="ua-row">
+          <div class="ua-count">${fmt(u.count)}×</div>
+          <div>
+            <div class="ua-string">${escapeHtml(u.ua)}</div>
+            <div class="ua-paths">Voorbeelden: ${[...u.samplePaths].map(p => escapeHtml(p)).join(' · ')}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  const close = () => backdrop.remove();
+  backdrop.querySelector('.modal-close').addEventListener('click', close);
+  backdrop.addEventListener('click', e => { if (e.target === backdrop) close(); });
+  document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); } });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ============================================================================
+// EVENTS
+// ============================================================================
+document.getElementById('fileInput').addEventListener('change', e => {
+  if (e.target.files[0]) handleFile(e.target.files[0]);
+});
+
+const dz = document.getElementById('dropZone');
+['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('drag'); }));
+['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('drag'); }));
+dz.addEventListener('drop', e => {
+  const f = e.dataTransfer.files[0];
+  if (f) handleFile(f);
+});
+
+document.getElementById('botFilter').addEventListener('change', () => { state.urlTableState.page = 1; renderUrlTable(); });
+document.getElementById('urlFilter').addEventListener('input', debounce(() => { state.urlTableState.page = 1; renderUrlTable(); }, 200));
+document.getElementById('clearFilters').addEventListener('click', () => {
+  document.getElementById('botFilter').value = '__all';
+  document.getElementById('urlFilter').value = '';
+  state.urlTableState.page = 1;
+  renderUrlTable();
+});
+document.querySelectorAll('#urlTable th').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    if (state.urlTableState.sortKey === key) {
+      state.urlTableState.sortDir = state.urlTableState.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      state.urlTableState.sortKey = key;
+      state.urlTableState.sortDir = 'desc';
+    }
+    state.urlTableState.page = 1;
+    renderUrlTable();
+  });
+});
+const resetHandler = () => {
+  document.getElementById('results').classList.add('hidden');
+  document.getElementById('uploadSection').classList.remove('hidden');
+  document.getElementById('fileInput').value = '';
+  resetState();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+document.getElementById('resetBtn').addEventListener('click', resetHandler);
+document.getElementById('uploadNewBtn').addEventListener('click', resetHandler);
+
+document.getElementById('inspectUnknownBots').addEventListener('click', showUnknownBotsModal);
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+</script>
+
+</body>
+</html>

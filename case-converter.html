@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Case Converter</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --surface: #111118;
+      --accent: #00ff88;
+      --accent2: #0088ff;
+      --text: #e8e8f0;
+      --muted: #555566;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      overflow-x: hidden;
+      padding: 3rem 1rem;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,255,136,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,136,0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+    }
+
+    .container {
+      position: relative;
+      text-align: center;
+      width: 100%;
+      max-width: 640px;
+    }
+
+    .label {
+      font-size: 0.7rem;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 1.5rem;
+    }
+
+    .title {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(2.5rem, 8vw, 3.5rem);
+      font-weight: 800;
+      line-height: 0.9;
+      margin-bottom: 3rem;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* Input card */
+    .input-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 4px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+      box-shadow: 0 0 60px rgba(0,255,136,0.05), inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+
+    .input-card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+    }
+
+    .card-label {
+      font-size: 0.6rem;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    textarea {
+      width: 100%;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(0,255,136,0.12);
+      border-radius: 2px;
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.9rem;
+      line-height: 1.7;
+      padding: 1rem;
+      outline: none;
+      resize: vertical;
+      min-height: 140px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    textarea::placeholder { color: var(--muted); }
+    textarea:focus {
+      border-color: rgba(0,255,136,0.35);
+      box-shadow: 0 0 16px rgba(0,255,136,0.07);
+    }
+
+    .footer-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 0.5rem;
+    }
+
+    .char-info {
+      font-size: 0.58rem;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+    }
+
+    .btn-clear {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.08);
+      color: var(--muted);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 0.35rem 0.8rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.2s;
+    }
+
+    .btn-clear:hover {
+      border-color: rgba(255,68,85,0.4);
+      color: #ff4455;
+    }
+
+    /* Cases grid */
+    .cases-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: rgba(0,255,136,0.06);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+    }
+
+    .case-card {
+      background: var(--surface);
+      padding: 1.25rem 1.5rem;
+      text-align: left;
+      position: relative;
+      transition: background 0.15s;
+      cursor: pointer;
+    }
+
+    .case-card:hover { background: rgba(0,255,136,0.04); }
+
+    .case-card.wide {
+      grid-column: span 2;
+    }
+
+    .case-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.6rem;
+    }
+
+    .case-name {
+      font-size: 0.58rem;
+      letter-spacing: 0.25em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .copy-btn {
+      background: transparent;
+      border: 1px solid rgba(0,255,136,0.25);
+      color: var(--accent);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.58rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 0.25rem 0.65rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.2s;
+      opacity: 0;
+      transition: opacity 0.15s, background 0.15s;
+    }
+
+    .case-card:hover .copy-btn { opacity: 1; }
+
+    .copy-btn:hover {
+      background: rgba(0,255,136,0.1);
+    }
+
+    .copy-btn.copied {
+      opacity: 1;
+      color: var(--accent);
+      border-color: var(--accent);
+      background: rgba(0,255,136,0.1);
+    }
+
+    .case-preview {
+      font-size: 0.95rem;
+      line-height: 1.6;
+      color: var(--text);
+      word-break: break-word;
+      min-height: 1.6rem;
+    }
+
+    .case-preview.empty { color: var(--muted); font-size: 0.75rem; }
+
+    /* Stats row */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: rgba(0,255,136,0.06);
+      border: 1px solid rgba(0,255,136,0.08);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+    }
+
+    .stat-item {
+      background: var(--surface);
+      padding: 0.8rem;
+      text-align: center;
+    }
+
+    .stat-key {
+      font-size: 0.52rem;
+      letter-spacing: 0.18em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 0.3rem;
+    }
+
+    .stat-val {
+      font-size: 0.9rem;
+      color: var(--text);
+    }
+
+    .note {
+      font-size: 0.6rem;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      line-height: 1.8;
+    }
+
+    .fade-in { animation: fadeIn 0.5s ease forwards; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container fade-in">
+    <div class="label">tekst opmaak</div>
+    <div class="title">CASE<br>CONVERTER</div>
+
+    <!-- Input -->
+    <div class="input-card">
+      <div class="card-header">
+        <div class="card-label">↳ invoer</div>
+      </div>
+      <textarea id="inputArea" placeholder="Typ of plak hier je tekst..." oninput="convert()"></textarea>
+      <div class="footer-row">
+        <div class="char-info" id="charInfo">0 tekens · 0 woorden · 0 zinnen</div>
+        <button class="btn-clear" onclick="clearInput()">wissen</button>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-row">
+      <div class="stat-item">
+        <div class="stat-key">Tekens</div>
+        <div class="stat-val" id="statChars">0</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-key">Woorden</div>
+        <div class="stat-val" id="statWords">0</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-key">Zinnen</div>
+        <div class="stat-val" id="statSentences">0</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-key">Regels</div>
+        <div class="stat-val" id="statLines">0</div>
+      </div>
+    </div>
+
+    <!-- Cases grid -->
+    <div class="cases-grid">
+
+      <div class="case-card" onclick="copyCase('lower')">
+        <div class="case-header">
+          <div class="case-name">lowercase</div>
+          <button class="copy-btn" id="copy-lower" onclick="event.stopPropagation();copyCase('lower')">kopieer</button>
+        </div>
+        <div class="case-preview empty" id="prev-lower">alles in kleine letters</div>
+      </div>
+
+      <div class="case-card" onclick="copyCase('upper')">
+        <div class="case-header">
+          <div class="case-name">UPPERCASE</div>
+          <button class="copy-btn" id="copy-upper" onclick="event.stopPropagation();copyCase('upper')">kopieer</button>
+        </div>
+        <div class="case-preview empty" id="prev-upper">ALLES IN HOOFDLETTERS</div>
+      </div>
+
+      <div class="case-card" onclick="copyCase('title')">
+        <div class="case-header">
+          <div class="case-name">Title Case</div>
+          <button class="copy-btn" id="copy-title" onclick="event.stopPropagation();copyCase('title')">kopieer</button>
+        </div>
+        <div class="case-preview empty" id="prev-title">Elk Woord Met Hoofdletter</div>
+      </div>
+
+      <div class="case-card" onclick="copyCase('sentence')">
+        <div class="case-header">
+          <div class="case-name">Sentence case</div>
+          <button class="copy-btn" id="copy-sentence" onclick="event.stopPropagation();copyCase('sentence')">kopieer</button>
+        </div>
+        <div class="case-preview empty" id="prev-sentence">Eerste letter per zin</div>
+      </div>
+
+      <div class="case-card" onclick="copyCase('camel')">
+        <div class="case-header">
+          <div class="case-name">camelCase</div>
+          <button class="copy-btn" id="copy-camel" onclick="event.stopPropagation();copyCase('camel')">kopieer</button>
+        </div>
+        <div class="case-preview empty" id="prev-camel">eersteKleinRestHoofdletter</div>
+      </div>
+
+      <div class="case-card" onclick="copyCase('pascal')">
+        <div class="case-header">
+          <div class="case-name">PascalCase</div>
+          <button class="copy-btn" id="copy-pascal" onclick="event.stopPropagation();copyCase('pascal')">kopieer</button>
+        </div>
+        <div class="case-preview empty" id="prev-pascal">ElkWoordHoofdletter</div>
+      </div>
+
+      <div class="case-card" onclick="copyCase('snake')">
+        <div class="case-header">
+          <div class="case-name">snake_case</div>
+          <button class="copy-btn" id="copy-snake" onclick="event.stopPropagation();copyCase('snake')">kopieer</button>
+        </div>
+        <div class="case-preview empty" id="prev-snake">woorden_gescheiden_door_underscore</div>
+      </div>
+
+      <div class="case-card" onclick="copyCase('kebab')">
+        <div class="case-header">
+          <div class="case-name">kebab-case</div>
+          <button class="copy-btn" id="copy-kebab" onclick="event.stopPropagation();copyCase('kebab')">kopieer</button>
+        </div>
+        <div class="case-preview empty" id="prev-kebab">woorden-gescheiden-door-streepje</div>
+      </div>
+
+      <div class="case-card wide" onclick="copyCase('alternate')">
+        <div class="case-header">
+          <div class="case-name">aLtErNaTiNg CaSe</div>
+          <button class="copy-btn" id="copy-alternate" onclick="event.stopPropagation();copyCase('alternate')">kopieer</button>
+        </div>
+        <div class="case-preview empty" id="prev-alternate">aBwIsSeLeNd HoOfDlEtTeR</div>
+      </div>
+
+    </div>
+
+    <div class="note">
+      Klik op een resultaat om het direct te kopiëren.<br>
+      camelCase, PascalCase, snake_case en kebab-case zijn handig voor code en variabelenamen.
+    </div>
+  </div>
+
+  <script>
+    const results = {};
+
+    function convert() {
+      const raw = document.getElementById('inputArea').value;
+
+      // Stats
+      const chars     = raw.length;
+      const words     = raw.trim() ? raw.trim().split(/\s+/).length : 0;
+      const sentences = raw.trim() ? (raw.match(/[^.!?]*[.!?]+/g) || [raw.trim()]).filter(s => s.trim()).length : 0;
+      const lines     = raw.trim() ? raw.split('\n').filter(l => l.trim()).length : 0;
+
+      document.getElementById('statChars').textContent     = chars;
+      document.getElementById('statWords').textContent     = words;
+      document.getElementById('statSentences').textContent = sentences;
+      document.getElementById('statLines').textContent     = lines;
+
+      if (!raw.trim()) {
+        resetPreviews();
+        return;
+      }
+
+      // Compute all cases
+      results.lower    = raw.toLowerCase();
+      results.upper    = raw.toUpperCase();
+      results.title    = toTitleCase(raw);
+      results.sentence = toSentenceCase(raw);
+      results.camel    = toCamelCase(raw);
+      results.pascal   = toPascalCase(raw);
+      results.snake    = toSnakeCase(raw);
+      results.kebab    = toKebabCase(raw);
+      results.alternate = toAlternatingCase(raw);
+
+      // Update previews
+      const keys = ['lower','upper','title','sentence','camel','pascal','snake','kebab','alternate'];
+      keys.forEach(k => {
+        const el = document.getElementById('prev-' + k);
+        el.textContent = truncate(results[k], 120);
+        el.classList.remove('empty');
+      });
+    }
+
+    function truncate(str, max) {
+      return str.length > max ? str.substring(0, max) + '…' : str;
+    }
+
+    function resetPreviews() {
+      const defaults = {
+        lower: 'alles in kleine letters',
+        upper: 'ALLES IN HOOFDLETTERS',
+        title: 'Elk Woord Met Hoofdletter',
+        sentence: 'Eerste letter per zin',
+        camel: 'eersteKleinRestHoofdletter',
+        pascal: 'ElkWoordHoofdletter',
+        snake: 'woorden_gescheiden_door_underscore',
+        kebab: 'woorden-gescheiden-door-streepje',
+        alternate: 'aBwIsSeLeNd HoOfDlEtTeR',
+      };
+      Object.entries(defaults).forEach(([k, v]) => {
+        const el = document.getElementById('prev-' + k);
+        el.textContent = v;
+        el.classList.add('empty');
+      });
+    }
+
+    // ── Case functions ────────────────────────────────────────────────────────
+    function toTitleCase(str) {
+      const minors = new Set(['de','het','een','en','of','maar','want','dus','nog','voor','van','aan','met','op','uit','bij','over','door','om','als','te','dat','die','dit','zijn']);
+      return str.toLowerCase().replace(/\S+/g, (word, offset) => {
+        if (offset === 0 || !minors.has(word)) {
+          return word.charAt(0).toUpperCase() + word.slice(1);
+        }
+        return word;
+      });
+    }
+
+    function toSentenceCase(str) {
+      return str.toLowerCase().replace(/(^\s*\w|[.!?]\s*\w)/g, c => c.toUpperCase());
+    }
+
+    function toCamelCase(str) {
+      return str
+        .toLowerCase()
+        .replace(/[^a-z0-9]+(.)/gi, (_, c) => c.toUpperCase())
+        .replace(/^[A-Z]/, c => c.toLowerCase());
+    }
+
+    function toPascalCase(str) {
+      return str
+        .toLowerCase()
+        .replace(/(^\w|[^a-z0-9]+(\w))/gi, (_, a, b) => (b || a).toUpperCase());
+    }
+
+    function toSnakeCase(str) {
+      return str
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_|_$/g, '');
+    }
+
+    function toKebabCase(str) {
+      return str
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '');
+    }
+
+    function toAlternatingCase(str) {
+      let upper = false;
+      return str.split('').map(c => {
+        if (c.match(/[a-zA-Z]/)) {
+          const result = upper ? c.toUpperCase() : c.toLowerCase();
+          upper = !upper;
+          return result;
+        }
+        return c;
+      }).join('');
+    }
+
+    // ── Copy ─────────────────────────────────────────────────────────────────
+    function copyCase(key) {
+      const text = results[key];
+      if (!text) return;
+
+      const btn = document.getElementById('copy-' + key);
+
+      const fallback = () => {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); document.body.removeChild(ta);
+      };
+
+      try {
+        navigator.clipboard.writeText(text).catch(fallback);
+      } catch { fallback(); }
+
+      btn.textContent = '✓ gekopieerd';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = 'kopieer';
+        btn.classList.remove('copied');
+      }, 2000);
+    }
+
+    function clearInput() {
+      document.getElementById('inputArea').value = '';
+      document.getElementById('statChars').textContent     = '0';
+      document.getElementById('statWords').textContent     = '0';
+      document.getElementById('statSentences').textContent = '0';
+      document.getElementById('statLines').textContent     = '0';
+      resetPreviews();
+    }
+  </script>
+</body>
+</html>

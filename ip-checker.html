@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IP Checker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --surface: #111118;
+      --accent: #00ff88;
+      --accent2: #0088ff;
+      --text: #e8e8f0;
+      --muted: #555566;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    /* Grid background */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,255,136,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,136,0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+    }
+
+    .container {
+      position: relative;
+      text-align: center;
+      padding: 2rem;
+    }
+
+    .label {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 1.5rem;
+    }
+
+    .title {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(2.5rem, 8vw, 5rem);
+      font-weight: 800;
+      line-height: 0.9;
+      margin-bottom: 3rem;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .ip-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 4px;
+      padding: 3rem 4rem;
+      position: relative;
+      max-width: 540px;
+      margin: 0 auto 2rem;
+      box-shadow: 0 0 60px rgba(0,255,136,0.05), inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+
+    .ip-card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .ip-display {
+      font-family: 'Space Mono', monospace;
+      font-size: clamp(1.8rem, 5vw, 2.8rem);
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: var(--text);
+      min-height: 3.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .ip-display.loading {
+      color: var(--muted);
+      font-size: 1rem;
+      letter-spacing: 0.2em;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    .ip-display.error { color: #ff4455; font-size: 1rem; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 1; }
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: rgba(0,255,136,0.08);
+      border: 1px solid rgba(0,255,136,0.08);
+      border-radius: 3px;
+      overflow: hidden;
+      max-width: 540px;
+      margin: 0 auto 2rem;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+
+    .meta-grid.visible { opacity: 1; }
+
+    .meta-item {
+      background: var(--surface);
+      padding: 1.2rem 1.5rem;
+    }
+
+    .meta-key {
+      font-size: 0.6rem;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 0.4rem;
+    }
+
+    .meta-val {
+      font-size: 0.85rem;
+      color: var(--text);
+    }
+
+    .refresh-btn {
+      background: transparent;
+      border: 1px solid rgba(0,255,136,0.3);
+      color: var(--accent);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      padding: 0.8rem 2rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.2s;
+    }
+
+    .refresh-btn:hover {
+      background: rgba(0,255,136,0.08);
+      border-color: var(--accent);
+      box-shadow: 0 0 20px rgba(0,255,136,0.15);
+    }
+
+    .copy-btn {
+      background: rgba(0,255,136,0.1);
+      border: 1px solid rgba(0,255,136,0.4);
+      color: var(--accent);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 0.5rem 1.2rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.2s;
+      display: block;
+      margin: 1.5rem auto 0;
+      opacity: 0;
+      transition: opacity 0.3s, background 0.2s;
+    }
+
+    .copy-btn.visible { opacity: 1; }
+    .copy-btn:hover { background: rgba(0,255,136,0.2); }
+
+    .dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      margin-right: 8px;
+      animation: blink 2s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.2; }
+    }
+
+    .fade-in {
+      animation: fadeIn 0.6s ease forwards;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container fade-in">
+    <div class="label">netwerk diagnostiek</div>
+    <div class="title">JOUW<br>IP-ADRES</div>
+
+    <div class="ip-card">
+      <div class="ip-display loading" id="ipDisplay">
+        <span class="dot"></span> ophalen...
+      </div>
+      <button class="copy-btn" id="copyBtn" onclick="copyIP()">kopieer adres</button>
+    </div>
+
+    <div class="meta-grid" id="metaGrid">
+      <div class="meta-item">
+        <div class="meta-key">type</div>
+        <div class="meta-val" id="metaType">—</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">locatie</div>
+        <div class="meta-val" id="metaLoc">—</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">tijdzone</div>
+        <div class="meta-val" id="metaTz">—</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">provider (isp)</div>
+        <div class="meta-val" id="metaIsp">—</div>
+      </div>
+    </div>
+
+    <button class="refresh-btn" onclick="fetchIP()">↺ vernieuwen</button>
+  </div>
+
+  <script>
+    let currentIP = '';
+
+    async function fetchIP() {
+      const display = document.getElementById('ipDisplay');
+      const grid = document.getElementById('metaGrid');
+      const copyBtn = document.getElementById('copyBtn');
+
+      display.className = 'ip-display loading';
+      display.innerHTML = '<span class="dot"></span> ophalen...';
+      grid.classList.remove('visible');
+      copyBtn.classList.remove('visible');
+
+      try {
+        const res = await fetch('https://ipapi.co/json/');
+        const data = await res.json();
+
+        currentIP = data.ip;
+        const ipType = data.ip.includes(':') ? 'IPv6' : 'IPv4';
+
+        display.className = 'ip-display fade-in';
+        display.textContent = data.ip;
+
+        document.getElementById('metaType').textContent = ipType;
+        document.getElementById('metaLoc').textContent =
+          `${data.city || '?'}, ${data.country_name || '?'}`;
+        document.getElementById('metaTz').textContent = data.timezone || '?';
+        document.getElementById('metaIsp').textContent = data.org || '?';
+
+        grid.classList.add('visible');
+        copyBtn.classList.add('visible');
+
+      } catch (e) {
+        // fallback
+        try {
+          const res2 = await fetch('https://api.ipify.org?format=json');
+          const d2 = await res2.json();
+          currentIP = d2.ip;
+          display.className = 'ip-display fade-in';
+          display.textContent = d2.ip;
+          copyBtn.classList.add('visible');
+        } catch {
+          display.className = 'ip-display error';
+          display.textContent = '⚠ ophalen mislukt';
+        }
+      }
+    }
+
+    function copyIP() {
+      if (!currentIP) return;
+      navigator.clipboard.writeText(currentIP).then(() => {
+        const btn = document.getElementById('copyBtn');
+        btn.textContent = '✓ gekopieerd!';
+        setTimeout(() => btn.textContent = 'kopieer adres', 2000);
+      });
+    }
+
+    fetchIP();
+  </script>
+</body>
+</html>

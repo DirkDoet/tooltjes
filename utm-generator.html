@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UTM Generator</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --surface: #111118;
+      --accent: #00ff88;
+      --accent2: #0088ff;
+      --text: #e8e8f0;
+      --muted: #555566;
+      --warn: #ffcc00;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      overflow-x: hidden;
+      padding: 3rem 1rem;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,255,136,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,136,0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+    }
+
+    .container {
+      position: relative;
+      text-align: center;
+      width: 100%;
+      max-width: 620px;
+    }
+
+    .label {
+      font-size: 0.7rem;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 1.5rem;
+    }
+
+    .title {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(2.5rem, 8vw, 4.5rem);
+      font-weight: 800;
+      line-height: 0.9;
+      margin-bottom: 3rem;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* Form card */
+    .form-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 4px;
+      padding: 2rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+      box-shadow: 0 0 60px rgba(0,255,136,0.05), inset 0 1px 0 rgba(255,255,255,0.05);
+      text-align: left;
+    }
+
+    .form-card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .field {
+      margin-bottom: 1.2rem;
+    }
+
+    .field:last-child { margin-bottom: 0; }
+
+    .field-label {
+      display: flex;
+      align-items: baseline;
+      gap: 0.6rem;
+      font-size: 0.62rem;
+      letter-spacing: 0.25em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 0.5rem;
+    }
+
+    .field-required {
+      color: var(--accent);
+      font-size: 0.55rem;
+      letter-spacing: 0.1em;
+    }
+
+    .field-optional {
+      color: var(--muted);
+      font-size: 0.55rem;
+      letter-spacing: 0.1em;
+      opacity: 0.6;
+    }
+
+    .field-hint {
+      font-size: 0.58rem;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+      margin-top: 0.35rem;
+      opacity: 0.7;
+    }
+
+    input[type="text"], select {
+      width: 100%;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 2px;
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.85rem;
+      padding: 0.75rem 1rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      -webkit-appearance: none;
+    }
+
+    input[type="text"]::placeholder { color: var(--muted); }
+
+    input[type="text"]:focus, select:focus {
+      border-color: rgba(0,255,136,0.5);
+      box-shadow: 0 0 16px rgba(0,255,136,0.08);
+    }
+
+    input.has-value {
+      border-color: rgba(0,255,136,0.3);
+    }
+
+    input.invalid {
+      border-color: rgba(255,68,85,0.5);
+    }
+
+    select {
+      cursor: pointer;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23555566' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 1rem center;
+      padding-right: 2.5rem;
+    }
+
+    select option {
+      background: #111118;
+      color: var(--text);
+    }
+
+    .divider {
+      height: 1px;
+      background: rgba(0,255,136,0.07);
+      margin: 1.5rem 0;
+    }
+
+    .section-title {
+      font-size: 0.6rem;
+      letter-spacing: 0.3em;
+      color: rgba(0,255,136,0.5);
+      text-transform: uppercase;
+      margin-bottom: 1.2rem;
+    }
+
+    /* Output card */
+    .output-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 4px;
+      padding: 1.5rem 2rem;
+      margin-bottom: 1px;
+      position: relative;
+      display: none;
+    }
+
+    .output-card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent2), transparent);
+    }
+
+    .output-label {
+      font-size: 0.6rem;
+      letter-spacing: 0.3em;
+      color: var(--accent2);
+      text-transform: uppercase;
+      margin-bottom: 1rem;
+    }
+
+    .output-url {
+      font-size: 0.78rem;
+      color: var(--text);
+      word-break: break-all;
+      line-height: 1.8;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(0,255,136,0.1);
+      border-radius: 2px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      text-align: left;
+      min-height: 3.5rem;
+    }
+
+    .output-url .utm-base { color: rgba(232,232,240,0.5); }
+    .output-url .utm-source { color: #00ff88; }
+    .output-url .utm-medium { color: #0088ff; }
+    .output-url .utm-campaign { color: #ff88cc; }
+    .output-url .utm-term { color: #ffcc00; }
+    .output-url .utm-content { color: #ff8844; }
+
+    .btn-row {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    .btn {
+      flex: 1;
+      background: transparent;
+      border: 1px solid rgba(0,255,136,0.3);
+      color: var(--accent);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 0.75rem 1rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.2s;
+    }
+
+    .btn:hover {
+      background: rgba(0,255,136,0.08);
+      border-color: var(--accent);
+      box-shadow: 0 0 16px rgba(0,255,136,0.12);
+    }
+
+    .btn.btn-primary {
+      background: rgba(0,255,136,0.12);
+      border-color: rgba(0,255,136,0.45);
+    }
+
+    .btn.copied {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: rgba(0,255,136,0.15);
+    }
+
+    /* Params breakdown */
+    .params-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: rgba(0,255,136,0.06);
+      border: 1px solid rgba(0,255,136,0.08);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+      display: none;
+    }
+
+    .param-item {
+      background: var(--surface);
+      padding: 0.9rem 1.2rem;
+      text-align: left;
+    }
+
+    .param-key {
+      font-size: 0.58rem;
+      letter-spacing: 0.25em;
+      margin-bottom: 0.3rem;
+      text-transform: uppercase;
+    }
+
+    .param-val {
+      font-size: 0.78rem;
+      color: var(--text);
+    }
+
+    .param-empty { opacity: 0.3; font-style: italic; }
+
+    /* Validation warning */
+    .validation-msg {
+      background: rgba(255,204,0,0.07);
+      border: 1px solid rgba(255,204,0,0.2);
+      border-radius: 3px;
+      color: var(--warn);
+      font-size: 0.72rem;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+      text-align: left;
+      display: none;
+    }
+
+    .fade-in { animation: fadeIn 0.5s ease forwards; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .note {
+      font-size: 0.6rem;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      margin-top: 1rem;
+      line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+  <div class="container fade-in">
+    <div class="label">campagne tracking</div>
+    <div class="title">UTM<br>GENERATOR</div>
+
+    <!-- Form -->
+    <div class="form-card">
+      <div class="section-title">↳ basis url</div>
+
+      <div class="field">
+        <div class="field-label">
+          Website URL <span class="field-required">verplicht</span>
+        </div>
+        <input type="text" id="url" placeholder="https://example.com/pagina" oninput="generate()" />
+        <div class="field-hint">De volledige URL inclusief https://</div>
+      </div>
+
+      <div class="divider"></div>
+      <div class="section-title">↳ utm parameters</div>
+
+      <div class="field">
+        <div class="field-label">
+          utm_source <span class="field-required">verplicht</span>
+        </div>
+        <input type="text" id="source" placeholder="bijv. google, newsletter, facebook" oninput="generate()" />
+        <div class="field-hint">De verkeersbron — wie stuurt de bezoekers?</div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          utm_medium <span class="field-required">verplicht</span>
+        </div>
+        <select id="medium" onchange="generate()">
+          <option value="">— kies een medium —</option>
+          <option value="cpc">cpc — betaalde klik (Google Ads e.d.)</option>
+          <option value="email">email — e-mailcampagne</option>
+          <option value="social">social — organisch sociaal</option>
+          <option value="paidsocial">paidsocial — betaald sociaal</option>
+          <option value="banner">banner — display advertentie</option>
+          <option value="affiliate">affiliate — affiliate link</option>
+          <option value="referral">referral — verwijzing van site</option>
+          <option value="organic">organic — organisch zoekverkeer</option>
+          <option value="qr">qr — QR-code</option>
+          <option value="sms">sms — sms-campagne</option>
+          <option value="push">push — pushmelding</option>
+          <option value="video">video — videoadvertentie</option>
+          <option value="custom">custom — eigen waarde ↓</option>
+        </select>
+      </div>
+
+      <div class="field" id="mediumCustomField" style="display:none">
+        <input type="text" id="mediumCustom" placeholder="Eigen medium waarde" oninput="generate()" />
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          utm_campaign <span class="field-required">verplicht</span>
+        </div>
+        <input type="text" id="campaign" placeholder="bijv. zomer-sale-2025, brand-awareness" oninput="generate()" />
+        <div class="field-hint">Naam van de campagne of promotie</div>
+      </div>
+
+      <div class="divider"></div>
+      <div class="section-title">↳ optionele parameters</div>
+
+      <div class="field">
+        <div class="field-label">
+          utm_term <span class="field-optional">optioneel</span>
+        </div>
+        <input type="text" id="term" placeholder="bijv. hardlopen schoenen" oninput="generate()" />
+        <div class="field-hint">Betaald zoekwoord — meestal voor Google Ads</div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          utm_content <span class="field-optional">optioneel</span>
+        </div>
+        <input type="text" id="content" placeholder="bijv. logo-link, cta-knop-boven" oninput="generate()" />
+        <div class="field-hint">Onderscheid varianten binnen dezelfde campagne</div>
+      </div>
+    </div>
+
+    <!-- Validation -->
+    <div class="validation-msg" id="validationMsg"></div>
+
+    <!-- Output -->
+    <div class="output-card" id="outputCard">
+      <div class="output-label">↳ gegenereerde url</div>
+      <div class="output-url" id="outputUrl"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="copyUrl()">kopieer url</button>
+        <button class="btn" onclick="resetForm()">↺ leegmaken</button>
+      </div>
+    </div>
+
+    <!-- Params breakdown -->
+    <div class="params-grid" id="paramsGrid">
+      <div class="param-item">
+        <div class="param-key" style="color:#00ff88">utm_source</div>
+        <div class="param-val" id="pSource"><span class="param-empty">—</span></div>
+      </div>
+      <div class="param-item">
+        <div class="param-key" style="color:#0088ff">utm_medium</div>
+        <div class="param-val" id="pMedium"><span class="param-empty">—</span></div>
+      </div>
+      <div class="param-item">
+        <div class="param-key" style="color:#ff88cc">utm_campaign</div>
+        <div class="param-val" id="pCampaign"><span class="param-empty">—</span></div>
+      </div>
+      <div class="param-item">
+        <div class="param-key" style="color:#ffcc00">utm_term</div>
+        <div class="param-val" id="pTerm"><span class="param-empty">—</span></div>
+      </div>
+      <div class="param-item" style="grid-column: span 2">
+        <div class="param-key" style="color:#ff8844">utm_content</div>
+        <div class="param-val" id="pContent"><span class="param-empty">—</span></div>
+      </div>
+    </div>
+
+    <div class="note" id="noteText"></div>
+  </div>
+
+  <script>
+    // Show/hide custom medium field
+    document.getElementById('medium').addEventListener('change', function() {
+      const customField = document.getElementById('mediumCustomField');
+      customField.style.display = this.value === 'custom' ? 'block' : 'none';
+      generate();
+    });
+
+    function sanitize(val) {
+      // Replace spaces with hyphens, lowercase, strip special chars
+      return val.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9\-_.]/g, '');
+    }
+
+    function isValidUrl(str) {
+      try {
+        const u = new URL(str);
+        return u.protocol === 'http:' || u.protocol === 'https:';
+      } catch { return false; }
+    }
+
+    function generate() {
+      const rawUrl   = document.getElementById('url').value.trim();
+      const source   = sanitize(document.getElementById('source').value);
+      const medSel   = document.getElementById('medium').value;
+      const medium   = medSel === 'custom'
+        ? sanitize(document.getElementById('mediumCustom').value)
+        : medSel;
+      const campaign = sanitize(document.getElementById('campaign').value);
+      const term     = sanitize(document.getElementById('term').value);
+      const content  = sanitize(document.getElementById('content').value);
+
+      const outputCard  = document.getElementById('outputCard');
+      const paramsGrid  = document.getElementById('paramsGrid');
+      const validMsg    = document.getElementById('validationMsg');
+
+      // Update breakdown always
+      setParam('pSource',   source);
+      setParam('pMedium',   medium);
+      setParam('pCampaign', campaign);
+      setParam('pTerm',     term);
+      setParam('pContent',  content);
+
+      // Need at minimum url + source + medium + campaign
+      const hasRequired = rawUrl && source && medium && campaign;
+      if (!hasRequired) {
+        outputCard.style.display = 'none';
+        paramsGrid.style.display = source || medium || campaign ? 'grid' : 'none';
+        validMsg.style.display = 'none';
+        document.getElementById('noteText').textContent = '';
+        return;
+      }
+
+      // Validate URL
+      let baseUrl = rawUrl;
+      if (!/^https?:\/\//i.test(baseUrl)) baseUrl = 'https://' + baseUrl;
+
+      if (!isValidUrl(baseUrl)) {
+        validMsg.textContent = '⚠ De ingevulde URL lijkt niet geldig. Controleer of de URL correct is inclusief https://';
+        validMsg.style.display = 'block';
+        outputCard.style.display = 'none';
+        return;
+      }
+
+      validMsg.style.display = 'none';
+
+      // Build URL
+      const u = new URL(baseUrl);
+      u.searchParams.set('utm_source', source);
+      u.searchParams.set('utm_medium', medium);
+      u.searchParams.set('utm_campaign', campaign);
+      if (term)    u.searchParams.set('utm_term', term);
+      if (content) u.searchParams.set('utm_content', content);
+
+      const finalUrl = u.toString();
+
+      // Render highlighted output
+      renderUrl(finalUrl, baseUrl, source, medium, campaign, term, content);
+
+      outputCard.style.display = 'block';
+      paramsGrid.style.display = 'grid';
+      document.getElementById('noteText').textContent =
+        'Spaties zijn automatisch omgezet naar koppeltekens. Waarden zijn in kleine letters gezet voor consistentie.';
+    }
+
+    function setParam(id, val) {
+      const el = document.getElementById(id);
+      el.innerHTML = val
+        ? val
+        : '<span class="param-empty">—</span>';
+    }
+
+    function renderUrl(full, base, source, medium, campaign, term, content) {
+      const el = document.getElementById('outputUrl');
+
+      // Split into base and query
+      const qIndex = full.indexOf('?');
+      const baseStr = qIndex > -1 ? full.substring(0, qIndex) : full;
+      const queryStr = qIndex > -1 ? full.substring(qIndex) : '';
+
+      // Highlight each param
+      let highlighted = `<span class="utm-base">${escHtml(baseStr)}</span>`;
+      if (queryStr) {
+        let q = queryStr;
+        q = q.replace(new RegExp(`utm_source=${encodeParam(source)}`, 'g'),
+          `<span class="utm-source">utm_source=${encodeParam(source)}</span>`);
+        q = q.replace(new RegExp(`utm_medium=${encodeParam(medium)}`, 'g'),
+          `<span class="utm-medium">utm_medium=${encodeParam(medium)}</span>`);
+        q = q.replace(new RegExp(`utm_campaign=${encodeParam(campaign)}`, 'g'),
+          `<span class="utm-campaign">utm_campaign=${encodeParam(campaign)}</span>`);
+        if (term) q = q.replace(new RegExp(`utm_term=${encodeParam(term)}`, 'g'),
+          `<span class="utm-term">utm_term=${encodeParam(term)}</span>`);
+        if (content) q = q.replace(new RegExp(`utm_content=${encodeParam(content)}`, 'g'),
+          `<span class="utm-content">utm_content=${encodeParam(content)}</span>`);
+        highlighted += q;
+      }
+
+      el.innerHTML = highlighted;
+    }
+
+    function encodeParam(val) {
+      return encodeURIComponent(val).replace(/-/g, '%2D').replace(/-/g, '-');
+    }
+
+    function escHtml(str) {
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function getFullUrl() {
+      const rawUrl   = document.getElementById('url').value.trim();
+      const source   = sanitize(document.getElementById('source').value);
+      const medSel   = document.getElementById('medium').value;
+      const medium   = medSel === 'custom'
+        ? sanitize(document.getElementById('mediumCustom').value)
+        : medSel;
+      const campaign = sanitize(document.getElementById('campaign').value);
+      const term     = sanitize(document.getElementById('term').value);
+      const content  = sanitize(document.getElementById('content').value);
+
+      let baseUrl = rawUrl;
+      if (!/^https?:\/\//i.test(baseUrl)) baseUrl = 'https://' + baseUrl;
+
+      try {
+        const u = new URL(baseUrl);
+        u.searchParams.set('utm_source', source);
+        u.searchParams.set('utm_medium', medium);
+        u.searchParams.set('utm_campaign', campaign);
+        if (term)    u.searchParams.set('utm_term', term);
+        if (content) u.searchParams.set('utm_content', content);
+        return u.toString();
+      } catch { return ''; }
+    }
+
+    function copyUrl() {
+      const url = getFullUrl();
+      if (!url) return;
+      const btn = document.querySelector('.btn-primary');
+
+      // Fallback for local file
+      try {
+        navigator.clipboard.writeText(url).then(() => {
+          btn.textContent = '✓ gekopieerd!';
+          btn.classList.add('copied');
+          setTimeout(() => {
+            btn.textContent = 'kopieer url';
+            btn.classList.remove('copied');
+          }, 2000);
+        });
+      } catch {
+        // Manual fallback
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        btn.textContent = '✓ gekopieerd!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'kopieer url';
+          btn.classList.remove('copied');
+        }, 2000);
+      }
+    }
+
+    function resetForm() {
+      ['url','source','campaign','term','content','mediumCustom'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+      document.getElementById('medium').value = '';
+      document.getElementById('mediumCustomField').style.display = 'none';
+      document.getElementById('outputCard').style.display = 'none';
+      document.getElementById('paramsGrid').style.display = 'none';
+      document.getElementById('validationMsg').style.display = 'none';
+      document.getElementById('noteText').textContent = '';
+      ['pSource','pMedium','pCampaign','pTerm','pContent'].forEach(id => {
+        document.getElementById(id).innerHTML = '<span class="param-empty">—</span>';
+      });
+    }
+  </script>
+</body>
+</html>
