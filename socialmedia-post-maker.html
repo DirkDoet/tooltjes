@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <title>Social Post Generator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://fonts.googleapis.com/css2?family=Epilogue:wght@700&family=Montserrat&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Montserrat', sans-serif; background-color: #f5f5f5; margin: 0; padding: 0; color: #002f4b; }
+    .container { max-width: 1000px; margin: 2rem auto; padding: 2rem; background: #fff; border: 2px solid #ccc; border-radius: 12px; }
+    h2 { font-size: 1.8rem; font-weight: 700; font-family: 'Epilogue', sans-serif; color: #002f4b; margin-bottom: 1rem; }
+    label, p { font-size: 1rem; margin-bottom: 0.5rem; display: block; white-space: pre-wrap; }
+    textarea, input[type="text"], select { width: calc(100% - 2rem); padding: 0.6rem 1rem; border: 2px solid #ccc; border-radius: 8px; font-size: 1rem; margin-bottom: 1rem; margin-right: 1rem; }
+    select { max-width: 33%; }
+    @media (max-width: 992px) { select { max-width: 50%; } }
+    @media (max-width: 600px) { select { max-width: 100%; } }
+    .toggle-wrapper { display: flex; align-items: center; margin-bottom: 1rem; }
+    .toggle { position: relative; display: inline-block; width: 50px; height: 26px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 26px; }
+    .slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+    input:checked + .slider { background-color: #002f4b; }
+    input:checked + .slider:before { transform: translateX(24px); }
+    .toggle-label { margin-left: 10px; line-height: 26px; }
+    button { padding: 0.6rem 1.2rem; background-color: #002f4b; color: white; border: none; border-radius: 8px; font-size: 1rem; cursor: pointer; transition: background-color 0.3s ease; }
+    button:hover { background-color: #01456c; }
+    .spinner { display: inline-block; width: 18px; height: 18px; border: 3px solid #dff1fb; border-top: 3px solid #002f4b; border-radius: 50%; animation: spin 1s linear infinite; margin-left: 10px; vertical-align: middle; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .result-section { margin-top: 2rem; background-color: #dff1fb; padding: 1.5rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 2px solid #ccc; }
+    .result-buttons { margin-top: 1rem; display: flex; justify-content: space-between; align-items: center; }
+    .result-buttons-left { display: flex; gap: 0.5rem; }
+    .hidden { display: none; }
+    .toast-inline { background-color: #002f4b; color: white; padding: 0.6rem 1rem; border-radius: 8px; font-size: 0.9rem; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Maak een social media post</h2>
+    <label for="inputtekst">Plak een tekst of url waarop de post gebaseerd wordt</label>
+    <textarea id="inputtekst" rows="10" placeholder="Plak hier de tekst of url..."></textarea>
+    <label for="platform">Kies een platform</label>
+    <select id="platform">
+      <option value="facebook">Facebook</option>
+      <option value="instagram">Instagram</option>
+      <option value="linkedin">LinkedIn</option>
+      <option value="x">X</option>
+      <option value="pinterest">Pinterest</option>
+    </select>
+	<label for="stijl">Schrijfstijl</label>
+    <select id="stijl">
+      <option value="default">Standaard (platformspecifiek)</option>
+      <option value="beschrijvend">Beschrijvend schrijven</option>
+      <option value="overtuigend">Overtuigend schrijven</option>
+      <option value="verhalend">Verhalend schrijven</option>
+      <option value="creatief">Creatief schrijven</option>
+      <option value="technisch">Technisch schrijven</option>
+      <option value="academisch">Academisch schrijven</option>
+      <option value="humor">Humoristisch schrijven</option>
+    </select>
+    <div class="toggle-wrapper">
+      <label class="toggle">
+        <input type="checkbox" id="emoticons" checked>
+        <span class="slider"></span>
+      </label>
+      <span class="toggle-label">Wil je emoticons gebruiken?</span>
+    </div>
+    <div class="toggle-wrapper">
+      <label class="toggle">
+        <input type="checkbox" id="hashtags">
+        <span class="slider"></span>
+      </label>
+      <span class="toggle-label">Wil je hashtags gebruiken?</span>
+    </div>
+    <div class="toggle-wrapper">
+      <label class="toggle">
+        <input type="checkbox" id="titels">
+        <span class="slider"></span>
+      </label>
+      <span class="toggle-label">Dikgedrukte titels boven alinea's</span>
+    </div>
+    <button id="maakPostBtn">Maak post <span class="spinner hidden"></span></button>
+    <div class="result-section hidden" id="resultaat">
+      <p id="gegenereerdePost">Hier komt straks de post.</p>
+      <div class="result-buttons">
+        <div class="result-buttons-left">
+          <button id="kopieerBtn">Kopiëren</button>
+          <button id="nieuwePostBtn">Nieuwe post genereren</button>
+        </div>
+        <div id="toast" class="toast-inline hidden">Tekst gekopieerd!</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // -------- Event binding (betrouwbaarder dan inline onclick) --------
+    document.getElementById('maakPostBtn').addEventListener('click', () => genereerPost(true));
+    document.getElementById('nieuwePostBtn').addEventListener('click', () => genereerPost(false));
+    document.getElementById('kopieerBtn').addEventListener('click', kopieerPost);
+
+    // ------- Helpers -------
+    async function fetchPageText(url){
+      try{
+        const clean = url.trim().replace(/^https?:\/\//i,'');
+        const readerUrl = `https://r.jina.ai/http://${clean}`;
+        const res = await fetch(readerUrl, { method:'GET' });
+        if(!res.ok) throw new Error('fetch failed');
+        const txt = await res.text();
+        return txt.replace(/\s+/g,' ').trim().slice(0, 12000);
+      }catch(e){
+        console.warn('URL lezen mislukte', e);
+        return '';
+      }
+    }
+
+    function getPlatformDefault(platform){
+      const instructies = {
+        facebook: "Schrijf een toegankelijke, vriendelijke post. Begin met een pakkende zin. Houd het informeel, gebruik 2-3 emoticons. Sluit af met een lichte call-to-action. Tekstlengte: 40-80 tekens voor maximale impact. Langere posts zijn mogelijk, maar de kern moet in de eerste zinnen staan.",
+        instagram: "Schrijf een visueel sterke en korte post. Gebruik korte zinnen, emoticons en 4-6 hashtags onderaan. Focus op sfeer en emotie. Tekstlengte: 125-150 tekens (zodat de hele tekst zonder de knop Meer lezen klik zichtbaar is). Maximaal 2.200 tekens mogelijk.",
+        linkedin: "Schrijf een professionele, informatieve post. Gebruik zakelijke toon, voeg 1-2 feiten toe, geen overdreven emoticons, eindig met een call-to-action voor interactie. tekstlengte: 150-300 woorden. Korte, pakkende posts werken ook, maar er is ruimte voor diepgang.",
+        x: "Schrijf een korte post, pakkend, nieuws delend, informerend, actueel, krachtig, scherp, humor. Zeer kort: idealiter ongeveer 140 tekens, ook al is de limiet 280 tekens.",
+        pinterest: "Inspireren, ontdekken, plannen, aanzetten tot actie 'aankoop/bezoek', maak de post Beschrijvend, behulpzaam, inspirerend, SEO-gericht, 100-200 tekens. De beschrijving mag tot 500 tekens lang zijn."
+      };
+      return instructies[platform] || "Schrijf een pakkende social media post.";
+    }
+
+    // ===== Bold titel utilities =====
+    const BOLD_MAP={A:"𝗔",B:"𝗕",C:"𝗖",D:"𝗗",E:"𝗘",F:"𝗙",G:"𝗚",H:"𝗛",I:"𝗜",J:"𝗝",K:"𝗞",L:"𝗟",M:"𝗠",N:"𝗡",O:"𝗢",P:"𝗣",Q:"𝗤",R:"𝗥",S:"𝗦",T:"𝗧",U:"𝗨",V:"𝗩",W:"𝗪",X:"𝗫",Y:"𝗬",Z:"𝗭",a:"𝗮",b:"𝗯",c:"𝗰",d:"𝗱",e:"𝗲",f:"𝗳",g:"𝗴",h:"𝗵",i:"𝗶",j:"𝗷",k:"𝗸",l:"𝗹",m:"𝗺",n:"𝗻",o:"𝗼",p:"𝗽",q:"𝗾",r:"𝗿",s:"𝘀",t:"𝘁",u:"𝘂",v:"𝘃",w:"𝘄",x:"𝘅",y:"𝘆",z:"𝘇"};
+    const REVERSE_BOLD_MAP=Object.fromEntries(Object.entries(BOLD_MAP).map(([k,v])=>[v,k]));
+    function toUnicodeBold(s){return s.split("").map(ch=>BOLD_MAP[ch]||ch).join("");}
+    function stripUnicodeBold(s){return s.split("").map(ch=>REVERSE_BOLD_MAP[ch]||ch).join("");}
+
+    function normalizeTitles(text,useBoldTitles){
+      if(!text) return text;
+      const blocks=text.split(/\n{2,}/);
+      return blocks.map(b=>{
+        const lines=b.split(/\r?\n/);
+        if(!lines.length) return b;
+        const m=lines[0].match(/^\s*\*\*(.+?)\*\*\s*$/); // **Titel**
+        if(m){
+          let title=m[1].trim().replace(/\*+/g,"");
+          // Alleen eerste letter hoofdletter, rest ongemoeid (zodat eigennamen blijven staan)
+          title=title.charAt(0).toUpperCase()+title.slice(1);
+          lines[0]=useBoldTitles?toUnicodeBold(title):title;
+          return lines.join("\n");
+        }
+        return b;
+      }).join("\n\n");
+    }
+
+    // ------- Generator -------
+    async function genereerPost(isMainButton) {
+      const input = document.getElementById("inputtekst").value.trim();
+      const platform = document.getElementById("platform").value;
+      const emoticons = document.getElementById("emoticons").checked;
+      const hashtags = document.getElementById("hashtags").checked;
+      const stijl = document.getElementById("stijl").value;
+      const titels = document.getElementById("titels").checked;
+
+      let stijlLabel;
+      if(stijl === "default"){
+        stijlLabel = getPlatformDefault(platform);
+      } else {
+        stijlLabel = {
+          "beschrijvend": "Beschrijvend schrijven draait om het tot leven brengen van beelden en het prikkelen van de zintuigen. Het is de kunst om de lezer mee te nemen naar een andere plek, tijd of sfeer, alsof ze het zelf beleven. Denk aan de warme, uitnodigende geur van versgebakken brood, of een zonsondergang die de horizon omtovert tot een schilderij van gouden en roze tinten. Met details schets je een wereld die de lezer kan zien, voelen, ruiken, horen of proeven. Met zorgvuldig gekozen woorden kun je een ervaring creëren die de lezer niet alleen begrijpt, maar ook voelt. Beeldspraak, zoals metaforen en vergelijkingen, versterkt deze boodschap. Beschrijvend schrijven in marketing is meer dan alleen woorden; het is een beleving die de lezer verleidt om actie te ondernemen.",
+          "overtuigend": "Overtuigend schrijven draait om het beïnvloeden van je lezer door een combinatie van geloofwaardigheid, emotie en sterke argumenten (ethos, pathos, logos). Feiten, emotie en een duidelijke oproep tot actie komen samen in een verhaal dat raakt.",
+          "verhalend": "Verhalend schrijven: boeiend plot, geloofwaardige personages, spanning en een pakkende opening met memorabele afsluiting.",
+          "creatief": "Creatief schrijven: originele invalshoeken, verbeeldingskracht en vrijheid in vorm om emoties en ideeën tot leven te brengen.",
+          "technisch": "Technisch schrijven: helder, precies en logisch gestructureerd om complexe informatie toegankelijk te maken.",
+          "academisch": "Academisch schrijven: objectief, analytisch, goed onderbouwd en met correcte bronvermelding.",
+          "humor": "Humoristisch schrijven: speelt met ironie, overdrijving en timing om luchtig te informeren en te amuseren."
+        }[stijl];
+      }
+
+      const mainSpinner = document.querySelector('#maakPostBtn .spinner');
+      mainSpinner.classList.remove('hidden');
+
+      let basisTekst = '';
+      let origineleUrl = '';
+      if (/^https?:\/\//i.test(input)) {
+        origineleUrl = input;
+        basisTekst = await fetchPageText(input);
+        if(!basisTekst){
+          basisTekst = `Gebruik de belangrijkste informatie van deze pagina: ${input}`;
+        }
+      } else {
+        basisTekst = input;
+      }
+
+      const titelInstructie = titels
+        ? "Zet boven elke alinea een korte, verzonnen titel die de kern samenvat. Gebruik GEEN markdown ** ** maar unicode-bold (yaytext-achtige tekens). Alleen de titel is bold; de alinea-tekst niet."
+        : "Gebruik geen titels/headers en geen bold in de tekst.";
+
+      const prompt = `Schrijf een socialmediapost. Bronmateriaal:\n\n"""\n${basisTekst}\n"""\nPlatform: ${platform}. Schrijfstijl: ${stijlLabel}. ${titelInstructie} Belangrijk: gebruik ${emoticons ? 'wel' : 'geen'} emoticons. Belangrijk: gebruik ${hashtags ? 'wel' : 'geen'} hashtags.`;
+
+      try {
+        const res = await fetch('https://tooltjes-api.antonenmonique.workers.dev/ai', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system: "Jij bent een creatieve marketeer die platformspecifieke socialmediaposts schrijft. Als emoticons=false zijn, gebruik dan absoluut GEEN emoticons/emoji/symbolen (ook niet in titels). Vervang ze niet door ASCII-smileys. Als titels=false zijn, schrijf dan zonder koppen en zonder bold/unicode-bold. Gebruik op logische plekken een lege regel tussen alinea's en onderwerpen, een alinea is nooit langer dan 3 of 4 zinnen voor de leesbaarheid. Als er hashtags wordt gebruikt voeg dan een lege regel boven de hashtags.",
+            messages: [{ role: 'user', content: prompt }]
+          })
+        });
+
+        const data = await res.json();
+        if(data.error){
+          console.error('OpenAI error:', data.error);
+          throw new Error(data.error.message || 'API-fout');
+        }
+        let tekst = data.choices?.[0]?.message?.content || 'Er ging iets mis bij het genereren van de post.';
+        if(!emoticons){ tekst = stripEmojis(tekst); }
+        tekst = normalizeTitles(tekst, titels);
+        if(!titels){ tekst = stripUnicodeBold(tekst); }
+        document.getElementById("gegenereerdePost").innerText = tekst;
+        document.getElementById("resultaat").classList.remove("hidden");
+
+      } catch (e) {
+        console.error(e);
+        document.getElementById("gegenereerdePost").innerText = 'Er ging iets mis bij het genereren van de post.';
+        document.getElementById("resultaat").classList.remove("hidden");
+      } finally {
+        mainSpinner.classList.add('hidden');
+      }
+    }
+
+    // ------- Clipboard -------
+    function kopieerPost() {
+      const tekst = document.getElementById("gegenereerdePost").innerText;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(tekst).then(showToast).catch(() => fallbackCopy(tekst));
+      } else {
+        fallbackCopy(tekst);
+      }
+    }
+
+    function fallbackCopy(tekst) {
+      const ta = document.createElement('textarea');
+      ta.value = tekst;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'absolute';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta);
+      showToast();
+    }
+
+    function showToast() {
+      const toast = document.getElementById('toast');
+      toast.classList.remove('hidden');
+      setTimeout(() => toast.classList.add('hidden'), 1600);
+    }
+
+    // Verwijder emoji en ASCII-emoticons wanneer uitgeschakeld
+    function stripEmojis(str){
+      if(!str) return str;
+      const emojiRegex = /[\u{1F300}-\u{1F6FF}\u{1F900}-\u{1FAFF}\u2600-\u27BF\u{1F1E6}-\u{1F1FF}\uFE0F]/gu;
+      let out = str.replace(emojiRegex, '');
+      out = out.replace(/(:\)|;-?\)|:-?\(|;\)|:D|;D|:\*|<3|:\/|:\\|:'\(|:-?P|;-?P|:p|;p|:o|:-o|:\^-?\^)/g, '');
+      out = out.replace(/\s{2,}/g,' ').replace(/\s+([,.;:!?])/g,'$1');
+      return out.trim();
+    }
+  </script>
+</body>
+</html>

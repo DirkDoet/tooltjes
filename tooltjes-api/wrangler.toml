@@ -1,0 +1,6 @@
+name = "tooltjes-api"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Geheim (eenmalig zetten): npx wrangler secret put ANTHROPIC_API_KEY --name tooltjes-api

@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crawler Check</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --surface: #111118;
+      --accent: #00ff88;
+      --accent2: #0088ff;
+      --warn: #ffcc00;
+      --danger: #ff4455;
+      --text: #e8e8f0;
+      --muted: #555566;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      overflow-x: hidden;
+      padding: 3rem 1rem;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,255,136,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,136,0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+    }
+
+    .container {
+      position: relative;
+      text-align: center;
+      width: 100%;
+      max-width: 620px;
+    }
+
+    .label {
+      font-size: 0.7rem;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 1.5rem;
+    }
+
+    .title {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(2.5rem, 8vw, 4.5rem);
+      font-weight: 800;
+      line-height: 0.9;
+      margin-bottom: 3rem;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* Search card */
+    .search-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 4px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+      box-shadow: 0 0 60px rgba(0,255,136,0.05), inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+
+    .search-card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .input-row {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    .url-input {
+      flex: 1;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(0,255,136,0.2);
+      border-radius: 2px;
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.9rem;
+      padding: 0.8rem 1rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .url-input::placeholder { color: var(--muted); }
+    .url-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 20px rgba(0,255,136,0.1);
+    }
+
+    .search-btn {
+      background: rgba(0,255,136,0.12);
+      border: 1px solid rgba(0,255,136,0.4);
+      color: var(--accent);
+      font-family: 'Space Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 0.8rem 1.2rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .search-btn:hover {
+      background: rgba(0,255,136,0.2);
+      box-shadow: 0 0 20px rgba(0,255,136,0.15);
+    }
+
+    /* Status message */
+    .status-msg {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.1);
+      border-radius: 4px;
+      padding: 2rem;
+      font-size: 0.8rem;
+      letter-spacing: 0.1em;
+      display: none;
+      margin-bottom: 1.5rem;
+    }
+
+    .status-msg.loading {
+      color: var(--muted);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    .status-msg.error { color: var(--danger); }
+
+    /* Score card */
+    .score-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: 4px;
+      padding: 2.5rem 2rem 2rem;
+      margin-bottom: 1px;
+      position: relative;
+      display: none;
+    }
+
+    .score-card::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: 20px; right: 20px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .score-url {
+      font-size: 0.7rem;
+      color: var(--muted);
+      letter-spacing: 0.1em;
+      margin-bottom: 1.5rem;
+      word-break: break-all;
+    }
+
+    /* Score gauge */
+    .gauge-wrap {
+      position: relative;
+      width: 160px;
+      height: 160px;
+      margin: 0 auto 1.5rem;
+    }
+
+    .gauge-svg {
+      width: 100%;
+      height: 100%;
+      transform: rotate(-90deg);
+    }
+
+    .gauge-bg {
+      fill: none;
+      stroke: rgba(255,255,255,0.06);
+      stroke-width: 10;
+    }
+
+    .gauge-fill {
+      fill: none;
+      stroke-width: 10;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 1.2s cubic-bezier(0.4,0,0.2,1), stroke 0.5s;
+    }
+
+    .gauge-text-wrap {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .gauge-score {
+      font-family: 'Syne', sans-serif;
+      font-size: 2.8rem;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .gauge-max {
+      font-size: 0.6rem;
+      color: var(--muted);
+      letter-spacing: 0.2em;
+      margin-top: 0.2rem;
+    }
+
+    .score-label {
+      font-family: 'Syne', sans-serif;
+      font-size: 1.2rem;
+      font-weight: 800;
+      margin-bottom: 0.8rem;
+    }
+
+    .score-desc {
+      font-size: 0.75rem;
+      color: rgba(232,232,240,0.7);
+      line-height: 1.8;
+      max-width: 420px;
+      margin: 0 auto;
+    }
+
+    /* Checks grid */
+    .checks-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1px;
+      background: rgba(0,255,136,0.06);
+      border: 1px solid rgba(0,255,136,0.08);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 1px;
+      display: none;
+    }
+
+    .check-item {
+      background: var(--surface);
+      padding: 1rem 1.5rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 1rem;
+      text-align: left;
+    }
+
+    .check-icon {
+      font-size: 0.75rem;
+      flex-shrink: 0;
+      margin-top: 0.1rem;
+      width: 18px;
+      text-align: center;
+    }
+
+    .check-content {}
+
+    .check-name {
+      font-size: 0.7rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      margin-bottom: 0.25rem;
+    }
+
+    .check-detail {
+      font-size: 0.72rem;
+      color: rgba(232,232,240,0.55);
+      line-height: 1.6;
+    }
+
+    .check-ok .check-name { color: var(--accent); }
+    .check-warn .check-name { color: var(--warn); }
+    .check-fail .check-name { color: var(--danger); }
+
+    .fade-in { animation: fadeIn 0.5s ease forwards; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 1; }
+    }
+
+    .dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      margin-right: 8px;
+      animation: blink 2s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.2; }
+    }
+
+    .note {
+      font-size: 0.6rem;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      margin-top: 1rem;
+      line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+  <div class="container fade-in">
+    <div class="label">seo & toegankelijkheid</div>
+    <div class="title">CRAWLER<br>CHECK</div>
+
+    <div class="search-card">
+      <div class="input-row">
+        <input
+          class="url-input"
+          id="urlInput"
+          type="text"
+          placeholder="https://example.com"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+        />
+        <button class="search-btn" onclick="runCheck()">↳ analyseer</button>
+      </div>
+    </div>
+
+    <div class="status-msg" id="statusMsg"></div>
+
+    <!-- Score -->
+    <div class="score-card" id="scoreCard">
+      <div class="score-url" id="scoreUrl"></div>
+      <div class="gauge-wrap">
+        <svg class="gauge-svg" viewBox="0 0 120 120">
+          <circle class="gauge-bg" cx="60" cy="60" r="50"/>
+          <circle class="gauge-fill" id="gaugeFill" cx="60" cy="60" r="50"
+            stroke-dasharray="314"
+            stroke-dashoffset="314"
+          />
+        </svg>
+        <div class="gauge-text-wrap">
+          <div class="gauge-score" id="gaugeScore">0</div>
+          <div class="gauge-max">/100</div>
+        </div>
+      </div>
+      <div class="score-label" id="scoreLabel"></div>
+      <div class="score-desc" id="scoreDesc"></div>
+    </div>
+
+    <!-- Checks -->
+    <div class="checks-grid" id="checksGrid"></div>
+
+    <div class="note" id="noteText"></div>
+  </div>
+
+  <script>
+    document.getElementById('urlInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') runCheck();
+    });
+
+    function showStatus(msg, type) {
+      const el = document.getElementById('statusMsg');
+      el.className = 'status-msg ' + type;
+      el.innerHTML = type === 'loading'
+        ? `<span class="dot"></span>${msg}`
+        : msg;
+      el.style.display = 'block';
+    }
+
+    function hideStatus() {
+      document.getElementById('statusMsg').style.display = 'none';
+    }
+
+    function reset() {
+      document.getElementById('scoreCard').style.display = 'none';
+      document.getElementById('checksGrid').style.display = 'none';
+
+      document.getElementById('checksGrid').innerHTML = '';
+      document.getElementById('noteText').textContent = '';
+    }
+
+    async function runCheck() {
+      let raw = document.getElementById('urlInput').value.trim();
+      if (!raw) return;
+      if (!/^https?:\/\//i.test(raw)) raw = 'https://' + raw;
+
+      reset();
+      showStatus('HTML ophalen zonder JavaScript...', 'loading');
+
+      let html = '';
+      let fetchError = false;
+
+      // Try multiple CORS proxies
+      const proxies = [
+        u => `https://tooltjes-api.antonenmonique.workers.dev/fetch?url=${encodeURIComponent(u)}`,
+      ];
+
+      for (const makeProxy of proxies) {
+        try {
+          const res = await fetch(makeProxy(raw), { signal: AbortSignal.timeout(20000) });
+          if (res.ok) {
+            html = await res.text();
+            break;
+          }
+        } catch(e) { /* try next */ }
+      }
+
+      hideStatus();
+
+      if (!html) {
+        showStatus(`⚠ Kon de URL niet ophalen. Controleer de URL of probeer later opnieuw.<br><small style="opacity:.5;font-size:.7rem">Sommige websites blokkeren externe verzoeken.</small>`, 'error');
+        return;
+      }
+
+      const result = analyze(html, raw);
+      render(result, raw);
+    }
+
+    // ─── Analyzer ──────────────────────────────────────────────────────────────
+    function analyze(html, url) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+
+      const checks = [];
+      let score = 0;
+
+      // ── 1. Body text content
+      const bodyText = (doc.body?.innerText || doc.body?.textContent || '').trim();
+      const wordCount = bodyText.split(/\s+/).filter(w => w.length > 1).length;
+      if (wordCount > 200) {
+        checks.push({ key: 'body-text', status: 'ok', name: 'Body tekst aanwezig', detail: `${wordCount} woorden gevonden in de HTML — goed leesbaar voor crawlers.`, points: 25 }); score += 25;
+      } else if (wordCount > 50) {
+        checks.push({ key: 'body-text', status: 'warn', name: 'Weinig body tekst', detail: `Slechts ${wordCount} woorden gevonden. Mogelijk wordt veel content via JavaScript geladen.`, points: 10 }); score += 10;
+      } else {
+        checks.push({ key: 'body-text', status: 'fail', name: 'Nauwelijks body tekst', detail: `Slechts ${wordCount} woorden. De pagina is waarschijnlijk sterk afhankelijk van JavaScript voor content.`, points: 0 });
+      }
+
+      // ── 2. Title tag
+      const title = doc.querySelector('title')?.textContent?.trim() || '';
+      if (title.length >= 10) {
+        checks.push({ key: 'title', status: 'ok', name: 'Title tag aanwezig', detail: `"${title.substring(0, 70)}${title.length > 70 ? '...' : ''}"`, points: 10 }); score += 10;
+      } else if (title.length > 0) {
+        checks.push({ key: 'title', status: 'warn', name: 'Title tag te kort', detail: `"${title}" — dit is erg kort voor SEO.`, points: 5 }); score += 5;
+      } else {
+        checks.push({ key: 'title', status: 'fail', name: 'Geen title tag', detail: 'Geen <title> gevonden in de HTML. Dit is slecht voor SEO.', points: 0 });
+      }
+
+      // ── 3. Meta description
+      const metaDesc = doc.querySelector('meta[name="description"]')?.getAttribute('content')?.trim() || '';
+      if (metaDesc.length >= 50) {
+        checks.push({ key: 'meta-desc', status: 'ok', name: 'Meta description aanwezig', detail: `${metaDesc.length} tekens — goed formaat.`, points: 10 }); score += 10;
+      } else if (metaDesc.length > 0) {
+        checks.push({ key: 'meta-desc', status: 'warn', name: 'Meta description te kort', detail: `Slechts ${metaDesc.length} tekens. Streef naar 120–160 tekens.`, points: 5 }); score += 5;
+      } else {
+        checks.push({ key: 'meta-desc', status: 'fail', name: 'Geen meta description', detail: 'Geen meta description gevonden. Zoekmachines genereren dan zelf een snippet.', points: 0 });
+      }
+
+      // ── 4. H1 heading
+      const h1s = doc.querySelectorAll('h1');
+      if (h1s.length === 1) {
+        checks.push({ key: 'h1', status: 'ok', name: 'H1 aanwezig', detail: `"${h1s[0].textContent.trim().substring(0, 80)}"`, points: 10 }); score += 10;
+      } else if (h1s.length > 1) {
+        checks.push({ key: 'h1', status: 'warn', name: 'Meerdere H1 tags', detail: `${h1s.length} H1 tags gevonden — gebruik er idealiter slechts één per pagina.`, points: 5 }); score += 5;
+      } else {
+        checks.push({ key: 'h1', status: 'fail', name: 'Geen H1 tag', detail: 'Geen H1 gevonden in de HTML. Dit is een basisfout voor SEO.', points: 0 });
+      }
+
+      // ── 5. Headings structuur
+      const headings = doc.querySelectorAll('h1,h2,h3,h4');
+      if (headings.length >= 3) {
+        checks.push({ key: 'headings', status: 'ok', name: 'Heading structuur', detail: `${headings.length} headings gevonden (h1–h4). Goede inhoudsstructuur voor crawlers.`, points: 10 }); score += 10;
+      } else if (headings.length > 0) {
+        checks.push({ key: 'headings', status: 'warn', name: 'Beperkte heading structuur', detail: `Slechts ${headings.length} heading(s). Meer structuur verbetert de leesbaarheid voor crawlers.`, points: 5 }); score += 5;
+      } else {
+        checks.push({ key: 'headings', status: 'fail', name: 'Geen headings', detail: 'Geen enkele heading gevonden. Structuur ontbreekt volledig.', points: 0 });
+      }
+
+      // ── 6. Links
+      const links = doc.querySelectorAll('a[href]');
+      const internalLinks = [...links].filter(a => {
+        const h = a.getAttribute('href') || '';
+        return h.startsWith('/') || h.includes(new URL(url).hostname);
+      });
+      if (links.length >= 5) {
+        checks.push({ key: 'links', status: 'ok', name: 'Links aanwezig', detail: `${links.length} links gevonden (${internalLinks.length} intern). Crawlers kunnen de site navigeren.`, points: 10 }); score += 10;
+      } else if (links.length > 0) {
+        checks.push({ key: 'links', status: 'warn', name: 'Weinig links', detail: `Slechts ${links.length} link(s) gevonden. Mogelijk worden menus via JavaScript geladen.`, points: 5 }); score += 5;
+      } else {
+        checks.push({ key: 'links', status: 'fail', name: 'Geen links gevonden', detail: 'Geen <a href> links in de HTML. Navigatie is volledig JS-afhankelijk.', points: 0 });
+      }
+
+      // ── 7. Afbeeldingen alt-tekst
+      const imgs = doc.querySelectorAll('img');
+      const imgsWithAlt = [...imgs].filter(i => i.getAttribute('alt') !== null);
+      if (imgs.length === 0) {
+        checks.push({ key: 'img-alt', status: 'ok', name: 'Geen afbeeldingen (alt n.v.t.)', detail: 'Geen afbeeldingen gevonden in de raw HTML.', points: 5 }); score += 5;
+      } else if (imgsWithAlt.length === imgs.length) {
+        checks.push({ key: 'img-alt', status: 'ok', name: 'Alle afbeeldingen hebben alt-tekst', detail: `${imgs.length} afbeelding(en), allemaal voorzien van alt-attribuut.`, points: 5 }); score += 5;
+      } else {
+        const missing = imgs.length - imgsWithAlt.length;
+        checks.push({ key: 'img-alt', status: 'warn', name: 'Ontbrekende alt-tekst', detail: `${missing} van ${imgs.length} afbeeldingen missen een alt-attribuut.`, points: 2 }); score += 2;
+      }
+
+      // ── 8. Structured data (JSON-LD / microdata)
+      const jsonLd = doc.querySelectorAll('script[type="application/ld+json"]');
+      const microdata = doc.querySelectorAll('[itemscope]');
+      if (jsonLd.length > 0) {
+        checks.push({ key: 'structured', status: 'ok', name: 'Gestructureerde data (JSON-LD)', detail: `${jsonLd.length} JSON-LD blok(ken) gevonden. Uitstekend voor rich results.`, points: 10 }); score += 10;
+      } else if (microdata.length > 0) {
+        checks.push({ key: 'structured', status: 'ok', name: 'Gestructureerde data (Microdata)', detail: `Microdata schema gevonden. Goed voor zoekmachines.`, points: 8 }); score += 8;
+      } else {
+        checks.push({ key: 'structured', status: 'warn', name: 'Geen gestructureerde data', detail: 'Geen JSON-LD of Microdata gevonden. Gemiste kans voor rich results in Google.', points: 0 });
+      }
+
+      // ── 9. Canonical tag
+      const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '';
+      if (canonical) {
+        checks.push({ key: 'canonical', status: 'ok', name: 'Canonical tag aanwezig', detail: `→ ${canonical.substring(0, 80)}`, points: 5 }); score += 5;
+      } else {
+        checks.push({ key: 'canonical', status: 'warn', name: 'Geen canonical tag', detail: 'Geen canonical URL gedeclareerd. Dit kan duplicate content problemen geven.', points: 0 });
+      }
+
+      // ── 10. Robots meta
+      const robots = doc.querySelector('meta[name="robots"]')?.getAttribute('content') || '';
+      if (robots.includes('noindex')) {
+        checks.push({ key: 'robots', status: 'fail', name: 'Noindex aanwezig!', detail: `robots meta: "${robots}" — deze pagina wordt actief uitgesloten van indexering!`, points: -15 }); score = Math.max(0, score - 15);
+      } else if (robots) {
+        checks.push({ key: 'robots', status: 'ok', name: 'Robots meta tag', detail: `"${robots}"`, points: 0 });
+      } else {
+        checks.push({ key: 'robots', status: 'ok', name: 'Geen robots blokkering', detail: 'Geen noindex of nofollow gevonden — pagina is indexeerbaar.', points: 0 });
+      }
+
+      score = Math.min(100, Math.max(0, score));
+
+      return { score, checks, wordCount };
+    }
+
+    // ─── Render ────────────────────────────────────────────────────────────────
+    function scoreColor(s) {
+      if (s >= 75) return 'var(--accent)';
+      if (s >= 45) return 'var(--warn)';
+      return 'var(--danger)';
+    }
+
+    function scoreLabel(s) {
+      if (s >= 85) return 'Uitstekend';
+      if (s >= 70) return 'Goed';
+      if (s >= 50) return 'Matig';
+      if (s >= 30) return 'Slecht';
+      return 'Zeer slecht';
+    }
+
+    function scoreDesc(s, wordCount) {
+      if (s >= 85) return `De pagina bevat rijke, goed gestructureerde HTML-content. Zoekmachine crawlers kunnen de pagina uitstekend lezen zonder JavaScript.`;
+      if (s >= 70) return `De pagina heeft een goede basis, maar er zijn nog verbeterpunten. Enkele onderdelen zijn mogelijk afhankelijk van JavaScript.`;
+      if (s >= 50) return `De pagina is gedeeltelijk leesbaar voor crawlers, maar mist belangrijke elementen. Er is een significante kans dat content via JavaScript wordt geladen.`;
+      if (s >= 30) return `Slechte crawler-leesbaarheid. Weinig content gevonden in de raw HTML. Waarschijnlijk is de site zwaar afhankelijk van JavaScript voor het renderen van content.`;
+      return `Vrijwel geen bruikbare content gevonden in de HTML. De site is hoogstwaarschijnlijk volledig JavaScript-afhankelijk en onleesbaar voor crawlers zonder JS.`;
+    }
+
+    function animateScore(target, color) {
+      const circumference = 314;
+      const fill = document.getElementById('gaugeFill');
+      const scoreEl = document.getElementById('gaugeScore');
+
+      fill.style.stroke = color;
+      const offset = circumference - (target / 100) * circumference;
+
+      // Animate number
+      let current = 0;
+      const step = target / 60;
+      const timer = setInterval(() => {
+        current = Math.min(current + step, target);
+        scoreEl.textContent = Math.round(current);
+        if (current >= target) clearInterval(timer);
+      }, 16);
+
+      // Animate gauge
+      setTimeout(() => {
+        fill.style.strokeDashoffset = offset;
+      }, 50);
+
+      scoreEl.style.color = color;
+    }
+
+    function render(result, url) {
+      const { score, checks, wordCount } = result;
+      const color = scoreColor(score);
+
+      // Score card
+      const card = document.getElementById('scoreCard');
+      document.getElementById('scoreUrl').textContent = url;
+      document.getElementById('scoreLabel').textContent = scoreLabel(score);
+      document.getElementById('scoreLabel').style.color = color;
+      document.getElementById('scoreDesc').textContent = scoreDesc(score, wordCount);
+      card.style.display = 'block';
+
+      setTimeout(() => animateScore(score, color), 100);
+
+      // Checks
+      const grid = document.getElementById('checksGrid');
+      grid.innerHTML = checks.map(c => {
+        const icon = c.status === 'ok' ? '✓' : c.status === 'warn' ? '⚠' : '✕';
+        return `
+          <div class="check-item check-${c.status}">
+            <div class="check-icon">${icon}</div>
+            <div class="check-content">
+              <div class="check-name">${c.name}</div>
+              <div class="check-detail">${c.detail}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      grid.style.display = 'grid';
+
+      document.getElementById('noteText').textContent =
+        'Analyse gebaseerd op de raw HTML — zonder JavaScript uitvoering, zoals een Googlebot of basiscrawler dit zou zien.';
+    }
+  </script>
+</body>
+</html>
